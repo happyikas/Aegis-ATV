@@ -56,8 +56,34 @@ Or with the helper that does steps 4+5:
 docker compose up --build
 ```
 
-(Dockerfile + `docker-compose.yml` are provided. Build/run validation
-is deferred until Docker Desktop is installed locally.)
+Verified end-to-end with OrbStack on macOS — see `docker-compose.yml`.
+
+### Use as a Claude Code firewall
+
+`tools/aegis_hook.py` is a `PreToolUse` hook that fires before every
+tool call inside Claude Code, asks the running Aegis service for a
+verdict, and short-circuits the tool with stderr if blocked.
+
+```bash
+# 1. Service running
+docker compose up -d
+
+# 2. Add to ~/.claude/settings.json:
+#    {
+#      "hooks": { "PreToolUse": [{
+#        "matcher": "*",
+#        "hooks": [{
+#          "type": "command",
+#          "command": "python3 /ABS/PATH/MVP/tools/aegis_hook.py"
+#        }]
+#      }] }
+#    }
+
+# 3. Smoke test (10 cases: ALLOW, BLOCK, APPROVAL, FAIL_OPEN, ...)
+bash tools/test_hook.sh
+```
+
+Full install + env vars + tool mapping table: see [`tools/README.md`](tools/README.md).
 
 ---
 
