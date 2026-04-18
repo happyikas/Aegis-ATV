@@ -49,6 +49,7 @@ def default_steps() -> list[StepFn]:
         step320_blast,
         step330_human,
         step335_cost,
+        step340_policy,
     )
 
     return [
@@ -56,6 +57,7 @@ def default_steps() -> list[StepFn]:
         step320_blast.run,
         step330_human.run,
         step335_cost.run,
+        step340_policy.run,
     ]
 
 
