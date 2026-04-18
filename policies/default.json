@@ -1,0 +1,10 @@
+{
+  "deny": [
+    {"name": "no-etc-shadow", "arg_pattern": "/etc/shadow"},
+    {"name": "no-drop-table", "arg_pattern": "DROP\\s+TABLE", "tool_name": "db_query"}
+  ],
+  "allow": [
+    {"name": "safe-read", "tool_name": "read_file", "arg_pattern": "^\\./data/"},
+    {"name": "safe-list", "tool_name": "list_directory"}
+  ]
+}

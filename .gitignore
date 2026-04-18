@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# Virtualenv (uv)
+.venv/
+
+# Secrets & runtime data
+.env
+keys/*.pem
+keys/*.pub
+data/*.sqlite
+data/*.jsonl
+
+# OS
+.DS_Store

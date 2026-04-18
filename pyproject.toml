@@ -1,0 +1,63 @@
+[project]
+name = "aegis-mvp"
+version = "0.1.0"
+description = "AegisData T2 MVP — 2080-D ATV signing & audit sidecar for AI agent tool calls"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "anthropic>=0.25",
+    "openai>=1.14",
+    "cryptography>=42.0",
+    "numpy>=1.26",
+    "httpx>=0.27",
+    "python-multipart>=0.0.9",
+    "orjson>=3.9",
+    "structlog>=24.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=4.1",
+    "respx>=0.21",
+    "ruff>=0.4",
+    "mypy>=1.10",
+    "types-requests>=2.31",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aegis"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests", "demo"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "SIM"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+mypy_path = "src"
+packages = ["aegis"]
+explicit_package_bases = true
+namespace_packages = true
+
+[[tool.mypy.overrides]]
+module = ["anthropic.*", "openai.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers"

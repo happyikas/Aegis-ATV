@@ -1,0 +1,24 @@
+services:
+  aegis:
+    build: .
+    image: aegis-mvp:dev
+    container_name: aegis-mvp
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      AEGIS_AUDIT_DB: /app/data/audit.sqlite
+      AEGIS_AUDIT_JSONL: /app/data/audit.jsonl
+      AEGIS_SIGNING_KEY_PATH: /app/keys/ed25519.pem
+      AEGIS_PUBLIC_KEY_PATH: /app/keys/ed25519.pub
+      AEGIS_POLICY_DIR: /app/policies
+    volumes:
+      - ./data:/app/data
+      - ./keys:/app/keys
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
