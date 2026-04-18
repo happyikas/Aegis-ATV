@@ -70,6 +70,10 @@ def create_app(
         def index() -> FileResponse:
             return FileResponse(_STATIC_DIR / "index.html")
 
+        @app.get("/theater", include_in_schema=False)
+        def theater() -> FileResponse:
+            return FileResponse(_STATIC_DIR / "theater.html")
+
     @app.get("/healthz")
     def healthz() -> dict[str, object]:
         return {
