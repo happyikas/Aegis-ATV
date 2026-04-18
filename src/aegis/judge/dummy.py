@@ -20,12 +20,15 @@ _APPROVAL_TOOLS = ("transfer_funds", "execute_shell", "send_email")
 
 class DummyJudge(Judge):
     def evaluate(self, summary: str) -> JudgeVerdict:
-        lower = summary.lower()
+        # Restrict keyword scan to Tool/Args lines so unrelated free-text in
+        # the Plan field doesn't trip the block.
+        lines = summary.lower().splitlines()
+        action_text = " ".join(line for line in lines if line.startswith(("tool:", "args:")))
         for kw in _BLOCK_KEYWORDS:
-            if kw in lower:
+            if kw in action_text:
                 return JudgeVerdict("BLOCK", 0.6, f"dummy judge: matched keyword '{kw}'")
         for tool in _APPROVAL_TOOLS:
-            if f"tool: {tool}" in lower:
+            if f"tool: {tool}" in action_text:
                 return JudgeVerdict(
                     "REQUIRE_APPROVAL",
                     0.6,

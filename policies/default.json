@@ -4,7 +4,8 @@
     {"name": "no-drop-table", "arg_pattern": "DROP\\s+TABLE", "tool_name": "db_query"}
   ],
   "allow": [
-    {"name": "safe-read", "tool_name": "read_file", "arg_pattern": "^\\./data/"},
+    {"name": "safe-read", "tool_name": "read_file", "arg_pattern": "\"path\":\"\\./data/"},
+    {"name": "safe-write", "tool_name": "write_file", "arg_pattern": "\"path\":\"\\./data/"},
     {"name": "safe-list", "tool_name": "list_directory"}
   ]
 }
