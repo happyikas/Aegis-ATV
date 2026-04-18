@@ -3,6 +3,7 @@ services:
     build: .
     image: aegis-mvp:dev
     container_name: aegis-mvp
+    restart: unless-stopped
     ports:
       - "8000:8000"
     env_file:
