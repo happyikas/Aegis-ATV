@@ -87,6 +87,104 @@ async function service_check() {
   }
 }
 
+// ---------- attestation ----------
+function _hex_to_bytes(h) {
+  const out = new Uint8Array(h.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(h.slice(2 * i, 2 * i + 2), 16);
+  return out;
+}
+
+function _pem_to_spki(pem) {
+  const b64 = pem.replace(/-----[^-]+-----/g, "").replace(/\s+/g, "");
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out.buffer;
+}
+
+async function verify_ed25519_in_browser(pubPem, sigHex, msgStr) {
+  if (!crypto?.subtle?.importKey) return null;
+  try {
+    const key = await crypto.subtle.importKey(
+      "spki", _pem_to_spki(pubPem), { name: "Ed25519" }, false, ["verify"]
+    );
+    return await crypto.subtle.verify(
+      "Ed25519", key, _hex_to_bytes(sigHex), new TextEncoder().encode(msgStr)
+    );
+  } catch (e) {
+    console.warn("browser Ed25519 verify unsupported:", e);
+    return null;
+  }
+}
+
+function render_layer_row(name, layer) {
+  const present = layer.present ?? true;
+  const dot = present ? "bg-green-500" : "bg-slate-300";
+  const noteOrHash = layer.hash
+    ? `<span class="mono text-xs text-slate-700 break-all">${layer.hash}</span>`
+    : `<span class="text-xs text-slate-400 italic">${layer.note ?? ""}</span>`;
+  let extras = "";
+  if (name === "L3_code" && layer.files_counted != null) {
+    extras = `<span class="text-xs text-slate-500">${layer.files_counted} .py files</span>`;
+  } else if (name === "L4_config") {
+    const polCount = Object.keys(layer.policies || {}).length;
+    extras = `<span class="text-xs text-slate-500">embed=<b>${layer.embedding_provider}</b> · judge=<b>${layer.judge_provider}</b> · ${polCount} policies</span>`;
+  } else if (name === "L5_key_binding" && layer.public_key_fingerprint) {
+    extras = `<span class="text-xs text-slate-500">pubkey-fp ${layer.public_key_fingerprint.slice(0,12)}…</span>`;
+  }
+  return `
+    <li class="flex items-start gap-3 px-3 py-2 rounded border border-slate-200 ${present ? 'bg-white' : 'bg-slate-50'}">
+      <span class="w-2.5 h-2.5 rounded-full ${dot} mt-1.5 shrink-0"></span>
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-3">
+          <span class="font-medium text-slate-700 mono text-sm">${name}</span>
+          ${extras}
+        </div>
+        <div class="mt-0.5">${noteOrHash}</div>
+      </div>
+    </li>
+  `;
+}
+
+async function load_attestation() {
+  const status = $("attest-status");
+  status.textContent = "loading…"; status.className = "text-xs mono ml-auto text-slate-400";
+  try {
+    const r = await fetch("/attestation");
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const a = await r.json();
+    $("attest-id").textContent = a.burn_in_id;
+    $("attest-aegis-ver").textContent = a.aegis_version;
+    $("attest-atv-ver").textContent = a.atv_version;
+    $("attest-sig").textContent = a.signed.signature;
+
+    const layers = $("attest-layers");
+    layers.innerHTML = "";
+    for (const name of ["L1_hardware_ek","L2_firmware","L3_code","L4_config","L5_key_binding"]) {
+      layers.insertAdjacentHTML("beforeend", render_layer_row(name, a.layers[name] || {}));
+    }
+
+    // Client-side Ed25519 verification
+    const verifyBadge = $("attest-verify");
+    const ok = await verify_ed25519_in_browser(a.public_key_pem, a.signed.signature, a.burn_in_id);
+    if (ok === true) {
+      verifyBadge.textContent = "✓ verified (browser Ed25519)";
+      verifyBadge.className = "text-xs px-2 py-0.5 rounded bg-green-100 text-green-800 font-medium";
+    } else if (ok === false) {
+      verifyBadge.textContent = "✗ signature INVALID";
+      verifyBadge.className = "text-xs px-2 py-0.5 rounded bg-red-100 text-red-800 font-bold";
+    } else {
+      verifyBadge.textContent = "verify unsupported in this browser";
+      verifyBadge.className = "text-xs px-2 py-0.5 rounded bg-slate-200 text-slate-600";
+    }
+    status.textContent = `burn_in ${a.burn_in_id.slice(0,16)}…`;
+    status.className = "text-xs mono ml-auto text-slate-500";
+  } catch (e) {
+    status.textContent = `error: ${e.message}`;
+    status.className = "text-xs mono ml-auto text-red-600";
+  }
+}
+
 // ---------- render the pipeline ----------
 function render_pipeline_idle() {
   const el = $("pipeline");
@@ -354,6 +452,7 @@ function wire() {
   $("btn-evaluate").addEventListener("click", evaluate);
   $("btn-demo").addEventListener("click", run_demo);
   $("btn-audit").addEventListener("click", load_chain);
+  $("btn-attest").addEventListener("click", load_attestation);
   for (const b of document.querySelectorAll(".preset")) {
     b.addEventListener("click", () => apply_preset(b.dataset.preset));
   }
@@ -366,4 +465,5 @@ document.addEventListener("DOMContentLoaded", () => {
   render_pipeline_idle();
   render_atv_strip(null);
   service_check();
+  load_attestation();
 });

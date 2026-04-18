@@ -203,6 +203,42 @@
     </div>
     <ol id="chain-list" class="space-y-2 text-sm"></ol>
   </section>
+
+  <!-- ========= Burn-in attestation ========= -->
+  <section class="col-span-12 bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+    <div class="flex items-center gap-4 mb-3">
+      <h2 class="font-semibold text-slate-700">Burn-in attestation
+        <span class="text-xs text-slate-400 font-normal">/attestation</span>
+      </h2>
+      <button id="btn-attest"
+        class="bg-slate-700 hover:bg-slate-800 text-white text-sm px-3 py-1.5 rounded">
+        Re-fetch
+      </button>
+      <span id="attest-status" class="text-xs mono ml-auto text-slate-400"></span>
+    </div>
+    <div class="grid grid-cols-12 gap-4">
+      <div class="col-span-4 bg-slate-50 border border-slate-200 rounded p-3 space-y-2">
+        <div>
+          <div class="text-xs text-slate-500 uppercase tracking-wide">burn_in_id</div>
+          <div class="mono text-xs text-slate-800 break-all" id="attest-id">—</div>
+        </div>
+        <div class="grid grid-cols-2 gap-2 text-xs">
+          <div><span class="text-slate-500">aegis</span> <span class="mono" id="attest-aegis-ver">—</span></div>
+          <div><span class="text-slate-500">atv</span> <span class="mono" id="attest-atv-ver">—</span></div>
+        </div>
+        <div>
+          <div class="text-xs text-slate-500 uppercase tracking-wide mt-2">signature (Ed25519)</div>
+          <div class="mono text-[11px] text-slate-700 break-all" id="attest-sig">—</div>
+          <div class="mt-1 flex items-center gap-2">
+            <span id="attest-verify" class="text-xs px-2 py-0.5 rounded bg-slate-200 text-slate-500">unverified</span>
+          </div>
+        </div>
+      </div>
+      <div class="col-span-8">
+        <ol id="attest-layers" class="space-y-1.5 text-sm"></ol>
+      </div>
+    </div>
+  </section>
 </main>
 
 <footer class="max-w-[1400px] mx-auto px-6 py-4 text-xs text-slate-400 text-center">

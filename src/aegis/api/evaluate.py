@@ -22,7 +22,15 @@ def _evaluate_impl(
     key: Any,
     db: AuditDB,
     log: JsonlStore,
+    burn_in_id: str | None = None,
 ) -> Verdict:
+    # Auto-fill the Burn-in id into the ATV header so every audit record
+    # carries the measurement of the software that produced it. Caller-
+    # supplied burn_in_id always wins (useful for cross-attesting a
+    # different deployment).
+    if burn_in_id and not inp.header.burn_in_id:
+        inp = inp.model_copy(update={"header": inp.header.model_copy(update={"burn_in_id": burn_in_id})})
+
     atv = build_atv(inp)
     atv_id = str(uuid.uuid4())
     verdict = run_firewall(atv, inp, atv_id=atv_id)
@@ -43,11 +51,17 @@ def _evaluate_impl(
     return verdict
 
 
-def make_router(*, key: Any, db: AuditDB, log: JsonlStore) -> APIRouter:
+def make_router(
+    *,
+    key: Any,
+    db: AuditDB,
+    log: JsonlStore,
+    burn_in_id: str | None = None,
+) -> APIRouter:
     r = APIRouter()
 
     @r.post("/evaluate", response_model=Verdict)
     def evaluate(inp: ATVInput) -> Verdict:
-        return _evaluate_impl(inp, key=key, db=db, log=log)
+        return _evaluate_impl(inp, key=key, db=db, log=log, burn_in_id=burn_in_id)
 
     return r
