@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>AegisData T2 — Live Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
+  .mono { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  /* ATV band strip */
+  .atv-strip { display: grid; grid-template-columns: repeat(2080, 1fr); height: 28px; border-radius: 4px; overflow: hidden; }
+  .atv-cell  { min-width: 0; }
+  /* pipeline node glow */
+  .pulse { animation: pulse 0.9s ease-out 1; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(59,130,246,.55);} 100% { box-shadow: 0 0 0 12px rgba(59,130,246,0);} }
+  details > summary { list-style: none; cursor: pointer; }
+  details > summary::-webkit-details-marker { display: none; }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen">
+<header class="border-b border-slate-200 bg-white">
+  <div class="max-w-[1400px] mx-auto px-6 py-4 flex items-center gap-4">
+    <div class="text-lg font-semibold tracking-tight">
+      <span class="text-blue-700">AegisData</span> T2 — Live Dashboard
+    </div>
+    <div class="flex items-center gap-2 text-sm text-slate-600">
+      <span id="service-dot" class="inline-block w-2 h-2 rounded-full bg-slate-300"></span>
+      <span id="service-status">checking service…</span>
+    </div>
+    <div class="ml-auto flex items-center gap-2 text-xs text-slate-500">
+      <span class="mono">v<span id="version">?</span></span>
+      <span>•</span>
+      <a href="/docs" target="_blank" class="text-blue-700 hover:underline">OpenAPI docs ↗</a>
+    </div>
+  </div>
+</header>
+
+<main class="max-w-[1400px] mx-auto px-6 py-6 grid grid-cols-12 gap-6">
+
+  <!-- ========= Left: input form ========= -->
+  <section class="col-span-4 bg-white rounded-xl shadow-sm border border-slate-200 p-5 space-y-4">
+    <h2 class="font-semibold text-slate-700">Craft a tool call</h2>
+
+    <div class="flex gap-2 text-xs">
+      <button data-preset="safe-read" class="preset px-2 py-1 rounded border border-slate-300 hover:bg-slate-100">safe read</button>
+      <button data-preset="sql-drop" class="preset px-2 py-1 rounded border border-slate-300 hover:bg-slate-100">DROP TABLE</button>
+      <button data-preset="big-write" class="preset px-2 py-1 rounded border border-slate-300 hover:bg-slate-100">5GB write</button>
+      <button data-preset="transfer" class="preset px-2 py-1 rounded border border-slate-300 hover:bg-slate-100">transfer $500</button>
+      <button data-preset="external-api" class="preset px-2 py-1 rounded border border-slate-300 hover:bg-slate-100">external api</button>
+    </div>
+
+    <div class="space-y-1">
+      <label class="text-xs text-slate-500 uppercase tracking-wide">Tool name</label>
+      <select id="tool-name" class="w-full border border-slate-300 rounded px-2 py-1.5 mono text-sm">
+        <option>read_file</option>
+        <option>write_file</option>
+        <option>execute_shell</option>
+        <option>db_query</option>
+        <option>db_mutation</option>
+        <option>call_external_api</option>
+        <option>send_email</option>
+        <option>delete_file</option>
+        <option>transfer_funds</option>
+        <option>list_directory</option>
+      </select>
+    </div>
+
+    <div class="space-y-1">
+      <label class="text-xs text-slate-500 uppercase tracking-wide">Tool args (JSON)</label>
+      <textarea id="tool-args" rows="3"
+        class="w-full border border-slate-300 rounded px-2 py-1.5 mono text-sm"
+        spellcheck="false">{"path":"./data/report.txt"}</textarea>
+    </div>
+
+    <div class="space-y-1">
+      <label class="text-xs text-slate-500 uppercase tracking-wide">Plan text</label>
+      <input id="plan-text"
+        class="w-full border border-slate-300 rounded px-2 py-1.5 text-sm"
+        value="read the Q3 report" />
+    </div>
+
+    <div class="grid grid-cols-2 gap-3">
+      <div class="space-y-1">
+        <label class="text-xs text-slate-500 uppercase tracking-wide flex justify-between">
+          <span>prompt injection</span>
+          <span id="inj-val" class="mono">0.05</span>
+        </label>
+        <input id="inj" type="range" min="0" max="1" step="0.01" value="0.05" class="w-full" />
+      </div>
+      <div class="space-y-1">
+        <label class="text-xs text-slate-500 uppercase tracking-wide flex justify-between">
+          <span>pii exposure</span>
+          <span id="pii-val" class="mono">0.02</span>
+        </label>
+        <input id="pii" type="range" min="0" max="1" step="0.01" value="0.02" class="w-full" />
+      </div>
+    </div>
+
+    <div class="grid grid-cols-3 gap-3">
+      <div class="space-y-1">
+        <label class="text-xs text-slate-500 uppercase tracking-wide">exp bytes write</label>
+        <input id="cost-bytes" type="number" min="0" value="1024"
+          class="w-full border border-slate-300 rounded px-2 py-1 mono text-sm" />
+      </div>
+      <div class="space-y-1">
+        <label class="text-xs text-slate-500 uppercase tracking-wide">exp $</label>
+        <input id="cost-dollars" type="number" min="0" step="0.0001" value="0.0001"
+          class="w-full border border-slate-300 rounded px-2 py-1 mono text-sm" />
+      </div>
+      <div class="space-y-1">
+        <label class="text-xs text-slate-500 uppercase tracking-wide">confidence</label>
+        <input id="cost-conf" type="number" min="0" max="1" step="0.05" value="0.9"
+          class="w-full border border-slate-300 rounded px-2 py-1 mono text-sm" />
+      </div>
+    </div>
+
+    <div class="space-y-1">
+      <label class="text-xs text-slate-500 uppercase tracking-wide">Agent id (aid)</label>
+      <input id="aid" class="w-full border border-slate-300 rounded px-2 py-1 mono text-sm"
+        value="web-ui-agent" />
+    </div>
+
+    <div class="flex gap-2">
+      <button id="btn-evaluate"
+        class="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-medium px-4 py-2 rounded">
+        Evaluate →
+      </button>
+      <button id="btn-demo"
+        class="bg-slate-800 hover:bg-slate-900 text-white font-medium px-3 py-2 rounded text-sm"
+        title="Run the 5-call canned demo scenario">
+        Run demo
+      </button>
+    </div>
+  </section>
+
+  <!-- ========= Center: pipeline + verdict ========= -->
+  <section class="col-span-5 space-y-5">
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="font-semibold text-slate-700">Action Firewall pipeline</h2>
+        <span id="latency" class="text-xs text-slate-400 mono"></span>
+      </div>
+      <div id="pipeline" class="space-y-2">
+        <!-- step rows injected -->
+      </div>
+    </div>
+
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="font-semibold text-slate-700">Verdict</h2>
+        <span id="verdict-badge"
+          class="px-2 py-0.5 rounded text-xs font-bold tracking-wide bg-slate-200 text-slate-500">—</span>
+      </div>
+      <div id="verdict-reason" class="text-sm text-slate-600 mb-3">no evaluation yet</div>
+      <div class="grid grid-cols-2 gap-3 text-xs">
+        <div>
+          <div class="text-slate-500 uppercase tracking-wide">atv_id</div>
+          <div class="mono text-slate-700 truncate" id="verdict-atvid">—</div>
+        </div>
+        <div>
+          <div class="text-slate-500 uppercase tracking-wide">signature (Ed25519)</div>
+          <div class="mono text-slate-700 truncate" id="verdict-sig">—</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========= Right: ATV band strip ========= -->
+  <section class="col-span-3 bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+    <h2 class="font-semibold text-slate-700 mb-3">ATV-2080-v1 bands</h2>
+    <div id="atv-strip" class="atv-strip bg-slate-100 mb-3"></div>
+    <div id="atv-legend" class="text-xs space-y-1">
+      <!-- legend rows injected -->
+    </div>
+    <details class="mt-4">
+      <summary class="text-xs text-slate-500 hover:text-slate-700">Index layout (2080-D)</summary>
+      <div class="mono text-[11px] text-slate-600 leading-5 mt-1">
+        header           0..63<br>
+        agent_state     64..575<br>
+        plan           576..1087<br>
+        tool_call     1088..1471<br>
+        safety_flags  1472..1727<br>
+        memory_fp     1728..1863<br>
+        cost_eff      1864..1879<br>
+        hw band       1880..2079 <span class="text-slate-400">(T2 zero)</span>
+      </div>
+    </details>
+  </section>
+
+  <!-- ========= Bottom: audit chain ========= -->
+  <section class="col-span-12 bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+    <div class="flex items-center gap-4 mb-3">
+      <h2 class="font-semibold text-slate-700">Audit chain</h2>
+      <input id="audit-aid"
+        class="flex-1 max-w-xs border border-slate-300 rounded px-2 py-1 mono text-sm"
+        placeholder="aid" value="web-ui-agent" />
+      <button id="btn-audit"
+        class="bg-slate-700 hover:bg-slate-800 text-white text-sm px-3 py-1.5 rounded">
+        Load
+      </button>
+      <span id="chain-status" class="text-xs text-slate-400 mono ml-auto"></span>
+    </div>
+    <ol id="chain-list" class="space-y-2 text-sm"></ol>
+  </section>
+</main>
+
+<footer class="max-w-[1400px] mx-auto px-6 py-4 text-xs text-slate-400 text-center">
+  T2 tier MVP · 2080-D ATV · Ed25519 + Merkle SHA3-256 audit chain
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
