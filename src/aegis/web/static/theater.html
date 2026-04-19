@@ -239,8 +239,42 @@
       <div class="px-4 py-3 text-sm flex items-center gap-2">
         <span>📍</span>
         <span class="font-semibold text-slate-900">Source-code paths</span>
-        <span class="text-slate-500">— where this evaluation actually happened in the codebase</span>
+        <span class="text-slate-500">— who calls Aegis, and where the verdict is computed</span>
       </div>
+
+      <!-- sequence diagram: host → aegis → host -->
+      <div class="px-4 pb-3">
+        <div class="bg-white rounded-lg border border-slate-200 p-3">
+          <div class="grid grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-2 text-xs">
+            <div class="text-center px-2 py-2 rounded bg-indigo-50 border border-indigo-200">
+              <div class="font-semibold text-indigo-900">YOUR AGENT HOST</div>
+              <div class="text-[11px] text-slate-600 leading-4 mt-0.5">post-LLM, pre-tool</div>
+              <div class="text-[10px] mono text-indigo-700 mt-1">ask_aegis() / hook</div>
+            </div>
+            <div class="text-center text-slate-500">
+              <div class="text-[11px] leading-3">POST</div>
+              <div class="text-base">→</div>
+              <div class="text-[10px] mono leading-3">/evaluate</div>
+            </div>
+            <div class="text-center px-2 py-2 rounded bg-amber-50 border border-amber-200">
+              <div class="font-semibold text-amber-900">AEGIS</div>
+              <div class="text-[11px] text-slate-600 leading-4 mt-0.5">build → 5 checks → sign</div>
+              <div class="text-[10px] mono text-amber-700 mt-1">① ② ③</div>
+            </div>
+            <div class="text-center text-slate-500">
+              <div class="text-[11px] leading-3">JSON</div>
+              <div class="text-base">→</div>
+              <div class="text-[10px] mono leading-3">verdict</div>
+            </div>
+            <div class="text-center px-2 py-2 rounded bg-emerald-50 border border-emerald-200">
+              <div class="font-semibold text-emerald-900">YOUR AGENT HOST</div>
+              <div class="text-[11px] text-slate-600 leading-4 mt-0.5">acts on verdict</div>
+              <div class="text-[10px] mono text-emerald-700 mt-1">run / block / approve</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div id="codepaths" class="px-4 pb-4 space-y-2"></div>
     </div>
   </article>

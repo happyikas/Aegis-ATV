@@ -54,6 +54,94 @@ const SRC_BY_STEP = {
                     why: "Iterates deny rules → allow rules → falls through to sLLM judge." },
 };
 
+// ---------- host integration snippets ----------
+// These are the actual functions in YOUR AGENT HOST (or our demo / hook
+// shim) that decide to call /evaluate. Baked here as static strings
+// because demo/ and tools/ live OUTSIDE the served aegis package.
+const HOST_SNIPPETS = {
+  ask_aegis: {
+    label: "Python agent loop",
+    file: "demo/agent_demo.py",
+    function: "ask_aegis",
+    why: "Called from inside the agent's tool-handling loop — AFTER the LLM (Claude Sonnet 4.6) returns a tool_use block, BEFORE the host actually executes the tool. The Verdict drives the next branch: run, return blocked tool_result, or pause for human.",
+    snippet: `def ask_aegis(*, tool_name, tool_args, plan_text, trace_id,
+              aid, cost_estimate=None):
+    """POST /evaluate from the agent loop, post-LLM and pre-tool."""
+    payload = {
+        "header": {
+            "trace_id": trace_id,
+            "span_id":  str(uuid.uuid4()),
+            "tenant_id": "demo-tenant",
+            "aid": aid,
+            "ats": "ATV-2080-v1",
+            "timestamp_ns": time.time_ns(),
+        },
+        "agent_state_text": "demo agent running scenario",
+        "plan_text": plan_text,
+        "tool_name": tool_name,
+        "tool_args_json": json.dumps(tool_args),
+        "safety_flags": {},
+        "cost_estimate": cost_estimate or {
+            "exp_bytes_write": len(json.dumps(tool_args)) * 100,
+            "exp_dollars": 0.001, "confidence": 0.8,
+        },
+    }
+    r = httpx.post(f"{AEGIS_URL}/evaluate", json=payload, timeout=30.0)
+    r.raise_for_status()
+    return r.json()
+
+
+# ---- elsewhere in the loop, after the LLM emits a tool_use block ----
+for block in tool_uses:
+    verdict = ask_aegis(
+        tool_name=block.name,
+        tool_args=dict(block.input),
+        plan_text=plan_text, trace_id=trace_id, aid=aid,
+    )
+    if verdict["decision"] == "ALLOW":
+        result = run_tool(block.name, block.input)     # actually execute
+    elif verdict["decision"] == "BLOCK":
+        result = f"[Aegis blocked: {verdict['reason']}]"
+    else:  # REQUIRE_APPROVAL
+        result = ask_human_then_proceed_or_skip(verdict)
+    feed_tool_result_back_to_llm(result)
+`,
+  },
+  aegis_hook: {
+    label: "Claude Code PreToolUse hook",
+    file: "tools/aegis_hook.py",
+    function: "main",
+    why: "Claude Code fires this BEFORE any built-in tool (Bash, Edit, WebFetch, …). The hook reads the proposed tool call from stdin, sends it to /evaluate, and exits 2 (with stderr) on BLOCK so Claude doesn't run the tool. ALLOW → exit 0, silent.",
+    snippet: `def main() -> int:
+    # Claude Code → stdin: the PreToolUse event JSON
+    raw = sys.stdin.read()
+    event = json.loads(raw)              # tool_name, tool_input, ...
+
+    payload = _build_payload(event)      # build ATVInput shape
+    req = urllib.request.Request(
+        f"{AEGIS_URL}/evaluate",
+        data=json.dumps(payload).encode(),
+        headers={"content-type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+        verdict = json.loads(resp.read())
+
+    decision = verdict.get("decision", "BLOCK")
+
+    if decision == "ALLOW":
+        return 0   # tool proceeds, silently
+
+    print(
+        f"[aegis-hook] {decision}  {tool_name}  atv={atv_id}\\n"
+        f"           reason: {verdict.get('reason', '')}",
+        file=sys.stderr,
+    )
+    return 2       # exit 2 = blocking error → Claude Code stops the tool
+`,
+  },
+};
+
 // Map each verdict's terminating step to which ATV band Aegis 'examined'.
 // (Some checks like step320 don't really 'examine the vector' — they're
 // table lookups — but we display them on the closest band for clarity.)
@@ -564,6 +652,44 @@ function _src_fetch(path, fn) {
   return p;
 }
 
+function _cp_card_html({ tag, label, color, fileLabel, fn, why, id, badge }) {
+  const colorMap = {
+    indigo:  "bg-indigo-50 border-indigo-200 text-indigo-900",
+    amber:   "bg-amber-50 border-amber-200 text-amber-900",
+    emerald: "bg-emerald-50 border-emerald-200 text-emerald-900",
+    violet:  "bg-violet-50 border-violet-200 text-violet-900",
+    sky:     "bg-sky-50 border-sky-200 text-sky-900",
+  };
+  return `
+    <div class="border rounded-lg ${colorMap[color]} p-3" data-cp="${id}">
+      <div class="flex items-center gap-3 flex-wrap">
+        <span class="font-bold text-base">${tag}</span>
+        <span class="text-xs uppercase tracking-wider font-semibold opacity-70">${label}</span>
+        ${badge ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-white/80 border border-current/20 mono">${badge}</span>` : ""}
+        <span class="mono text-sm">${fileLabel}</span>
+        <span class="text-slate-500">·</span>
+        <span class="mono text-sm font-bold">${fn}()</span>
+        <button class="ml-auto text-xs px-2 py-0.5 rounded border border-current opacity-80 hover:opacity-100" data-toggle="${id}">
+          show code ▾
+        </button>
+      </div>
+      <div class="text-xs leading-5 mt-1 opacity-90">${why}</div>
+      <div class="hidden mt-3 bg-white border border-slate-200 rounded p-3" data-snippet="${id}">
+        <div class="text-[11px] mono text-slate-400 mb-1" data-snippet-head>loading…</div>
+        <pre class="mono text-[12px] leading-5 text-slate-800 whitespace-pre overflow-x-auto" data-snippet-body></pre>
+      </div>
+    </div>
+  `;
+}
+
+function _section_header(text) {
+  return `
+    <div class="text-[10px] uppercase tracking-widest text-slate-400 font-bold pt-3 pb-1 px-1">
+      ── ${text} ──
+    </div>
+  `;
+}
+
 function render_codepaths(verdict) {
   const wrap = $("codepaths");
   wrap.innerHTML = "";
@@ -572,56 +698,56 @@ function render_codepaths(verdict) {
     return;
   }
   const cls = classify_trace(verdict);
-  // pick the EXAMINE entry: the terminating step's run() if any,
-  // otherwise the orchestrator (means all 5 passed).
   const examine = cls.terminator ? SRC_BY_STEP[cls.terminator] : SRC_FW_OK;
 
-  const items = [
-    { tag: "①", label: "CAPTURE", color: "indigo", entry: SRC_CAPTURE },
-    { tag: "②", label: "EXAMINE", color: "amber",  entry: examine },
-    { tag: "③", label: "SIGN",    color: "emerald", entry: SRC_SIGN },
+  // ── HOST integration cards ── (post-LLM, pre-tool)
+  wrap.insertAdjacentHTML("beforeend", _section_header("In your agent host (post-LLM, pre-tool)"));
+  const hostCards = [
+    { id: "cp-host-loop", tag: "ⓞ", label: "ASK_AEGIS", color: "indigo", badge: "Python loop",
+      fileLabel: HOST_SNIPPETS.ask_aegis.file, fn: HOST_SNIPPETS.ask_aegis.function,
+      why: HOST_SNIPPETS.ask_aegis.why, snippet: HOST_SNIPPETS.ask_aegis.snippet },
+    { id: "cp-host-hook", tag: "ⓞ", label: "PreToolUse HOOK", color: "violet", badge: "Claude Code",
+      fileLabel: HOST_SNIPPETS.aegis_hook.file, fn: HOST_SNIPPETS.aegis_hook.function,
+      why: HOST_SNIPPETS.aegis_hook.why, snippet: HOST_SNIPPETS.aegis_hook.snippet },
   ];
+  for (const c of hostCards) wrap.insertAdjacentHTML("beforeend", _cp_card_html(c));
 
-  for (const item of items) {
-    const id = `cp-${item.label.toLowerCase()}`;
-    const colorMap = {
-      indigo:  "bg-indigo-50 border-indigo-200 text-indigo-900",
-      amber:   "bg-amber-50 border-amber-200 text-amber-900",
-      emerald: "bg-emerald-50 border-emerald-200 text-emerald-900",
-    };
-    wrap.insertAdjacentHTML("beforeend", `
-      <div class="border rounded-lg ${colorMap[item.color]} p-3" data-cp="${id}">
-        <div class="flex items-center gap-3">
-          <span class="font-bold text-base">${item.tag}</span>
-          <span class="text-xs uppercase tracking-wider font-semibold opacity-70">${item.label}</span>
-          <span class="mono text-sm">src/aegis/${item.entry.path}</span>
-          <span class="text-slate-500">·</span>
-          <span class="mono text-sm font-bold">${item.entry.function}()</span>
-          <button class="ml-auto text-xs px-2 py-0.5 rounded border border-current opacity-80 hover:opacity-100" data-toggle="${id}">
-            show code ▾
-          </button>
-        </div>
-        <div class="text-xs leading-5 mt-1 opacity-90">${item.entry.why}</div>
-        <div class="hidden mt-3 bg-white border border-slate-200 rounded p-3" data-snippet="${id}">
-          <div class="text-[11px] mono text-slate-400 mb-1" data-snippet-head>loading…</div>
-          <pre class="mono text-[12px] leading-5 text-slate-800 whitespace-pre overflow-x-auto" data-snippet-body></pre>
-        </div>
-      </div>
-    `);
-  }
+  // ── AEGIS internal cards ── (CAPTURE / EXAMINE / SIGN)
+  wrap.insertAdjacentHTML("beforeend", _section_header("Inside Aegis (where the verdict is computed)"));
+  const aegisCards = [
+    { id: "cp-aegis-capture", tag: "①", label: "CAPTURE", color: "sky",
+      fileLabel: `src/aegis/${SRC_CAPTURE.path}`, fn: SRC_CAPTURE.function,
+      why: SRC_CAPTURE.why, fetch: SRC_CAPTURE },
+    { id: "cp-aegis-examine", tag: "②", label: "EXAMINE", color: "amber",
+      fileLabel: `src/aegis/${examine.path}`, fn: examine.function,
+      why: examine.why, fetch: examine },
+    { id: "cp-aegis-sign", tag: "③", label: "SIGN", color: "emerald",
+      fileLabel: `src/aegis/${SRC_SIGN.path}`, fn: SRC_SIGN.function,
+      why: SRC_SIGN.why, fetch: SRC_SIGN },
+  ];
+  for (const c of aegisCards) wrap.insertAdjacentHTML("beforeend", _cp_card_html(c));
 
-  // wire toggles
+  // wire toggles — host cards use baked snippets; aegis cards use lazy /source fetch
+  const allCards = [...hostCards, ...aegisCards];
   for (const btn of wrap.querySelectorAll("[data-toggle]")) {
     btn.addEventListener("click", async () => {
       const id = btn.dataset.toggle;
       const panel = wrap.querySelector(`[data-snippet="${id}"]`);
-      const item  = items.find(it => `cp-${it.label.toLowerCase()}` === id);
-      const open  = !panel.classList.contains("hidden");
+      const card = allCards.find(c => c.id === id);
+      const open = !panel.classList.contains("hidden");
       panel.classList.toggle("hidden", open);
       btn.textContent = open ? "show code ▾" : "hide code ▴";
-      if (!open) {
+      if (open) return;
+
+      if (card.snippet !== undefined) {
+        // baked
+        panel.querySelector("[data-snippet-head]").textContent =
+          `${card.fileLabel} · ${card.fn}()  (baked snippet — see file for full code)`;
+        panel.querySelector("[data-snippet-body]").textContent = card.snippet;
+      } else {
+        // lazy fetch from /source
         try {
-          const data = await _src_fetch(item.entry.path, item.entry.function);
+          const data = await _src_fetch(card.fetch.path, card.fetch.function);
           panel.querySelector("[data-snippet-head]").textContent =
             `${data.path} · lines ${data.start_line}–${data.end_line} of ${data.total_lines}`;
           panel.querySelector("[data-snippet-body]").textContent = data.snippet;
