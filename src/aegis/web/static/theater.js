@@ -690,6 +690,87 @@ function _section_header(text) {
   `;
 }
 
+function _render_instrumentation_map(wrap) {
+  // A 1-card architectural map: which ATVInput field comes from which
+  // host-lifecycle stage. Answers the precise question: "where in the
+  // host is the ATV captured?". Honest answer: it's not — the host
+  // assembles ingredients across multiple stages and POSTs once.
+  wrap.insertAdjacentHTML("beforeend", `
+    <div class="border rounded-lg bg-cyan-50 border-cyan-200 text-cyan-900 p-3">
+      <div class="flex items-center gap-3 flex-wrap">
+        <span class="font-bold text-base">🧭</span>
+        <span class="text-xs uppercase tracking-wider font-semibold opacity-80">Host-side instrumentation map</span>
+        <span class="text-[10px] px-1.5 py-0.5 rounded bg-white/80 border border-current/20 mono">architectural</span>
+        <span class="ml-auto text-[11px] opacity-70">(no code fetch — diagram only)</span>
+      </div>
+      <div class="text-xs leading-5 mt-2 opacity-90">
+        Each row maps an <span class="mono">ATVInput</span> field to <b>where in the host
+        it gets captured</b>. The host doesn't build the vector — it assembles these
+        ingredients across pre-LLM / post-LLM / pre-tool stages, then a single
+        <span class="mono">ask_aegis()</span> (or hook) POSTs them.
+      </div>
+      <div class="mt-3 bg-white border border-cyan-200 rounded overflow-hidden text-xs">
+        <table class="w-full">
+          <thead class="bg-cyan-50 text-[10px] uppercase tracking-wider text-cyan-800">
+            <tr>
+              <th class="text-left px-3 py-1.5 font-semibold">stage</th>
+              <th class="text-left px-3 py-1.5 font-semibold">ATVInput field</th>
+              <th class="text-left px-3 py-1.5 font-semibold">where it comes from in the host</th>
+            </tr>
+          </thead>
+          <tbody class="text-slate-700">
+            <tr class="border-t border-cyan-100">
+              <td class="px-3 py-1.5 align-top"><span class="px-1.5 py-0.5 rounded bg-violet-100 text-violet-800 text-[10px] font-bold">PRE-LLM</span></td>
+              <td class="px-3 py-1.5 align-top mono text-[11px]">safety_flags.<br/>prompt_injection,<br/>pii_exposure, …</td>
+              <td class="px-3 py-1.5 align-top">classifier on the raw user input (e.g. Llama Guard, your own model). Scores are recorded once, then carried into every downstream <span class="mono">/evaluate</span>.</td>
+            </tr>
+            <tr class="border-t border-cyan-100">
+              <td class="px-3 py-1.5 align-top"><span class="px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 text-[10px] font-bold">REQUEST-START</span></td>
+              <td class="px-3 py-1.5 align-top mono text-[11px]">header.aid,<br/>header.tenant_id,<br/>header.trace_id, …</td>
+              <td class="px-3 py-1.5 align-top">session identity established when the request enters your agent — same for every tool call inside that session/trace.</td>
+            </tr>
+            <tr class="border-t border-cyan-100">
+              <td class="px-3 py-1.5 align-top"><span class="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-bold">POST-LLM</span></td>
+              <td class="px-3 py-1.5 align-top mono text-[11px]">tool_name,<br/>tool_args_json</td>
+              <td class="px-3 py-1.5 align-top">extracted directly from the LLM's <span class="mono">tool_use</span> block. The act of the LLM emitting a tool_use is what triggers an evaluation.</td>
+            </tr>
+            <tr class="border-t border-cyan-100">
+              <td class="px-3 py-1.5 align-top"><span class="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-bold">POST-LLM</span></td>
+              <td class="px-3 py-1.5 align-top mono text-[11px]">plan_text</td>
+              <td class="px-3 py-1.5 align-top">most recent assistant text block (the "I'll do X" narration), or fall back to the original user request. In our demo this is the per-step blurb above the call.</td>
+            </tr>
+            <tr class="border-t border-cyan-100">
+              <td class="px-3 py-1.5 align-top"><span class="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[10px] font-bold">PRE-TOOL</span></td>
+              <td class="px-3 py-1.5 align-top mono text-[11px]">agent_state_text</td>
+              <td class="px-3 py-1.5 align-top">snapshot of your app's working state (last N actions, active goals, current scratch). Application-defined.</td>
+            </tr>
+            <tr class="border-t border-cyan-100">
+              <td class="px-3 py-1.5 align-top"><span class="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[10px] font-bold">PRE-TOOL</span></td>
+              <td class="px-3 py-1.5 align-top mono text-[11px]">cost_estimate.<br/>exp_bytes, exp_dollars,<br/>exp_tokens, …</td>
+              <td class="px-3 py-1.5 align-top">a forecaster — usually derived from the tool's metadata (a 5GB write tool returns 5e9 here) or a learned cost model.</td>
+            </tr>
+            <tr class="border-t border-cyan-100">
+              <td class="px-3 py-1.5 align-top"><span class="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[10px] font-bold">PRE-TOOL</span></td>
+              <td class="px-3 py-1.5 align-top mono text-[11px]">memory_fingerprint</td>
+              <td class="px-3 py-1.5 align-top">SHA3 hash of your agent's persistent memory store. Lets the firewall reason about continuity ("did this agent suddenly switch contexts?").</td>
+            </tr>
+            <tr class="border-t border-cyan-100 bg-cyan-50/40">
+              <td class="px-3 py-1.5 align-top"><span class="px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-800 text-[10px] font-bold">SEAM</span></td>
+              <td class="px-3 py-1.5 align-top mono text-[11px]">— assembly + POST —</td>
+              <td class="px-3 py-1.5 align-top"><span class="mono">ask_aegis()</span> in the Python loop, <span class="mono">_build_payload()</span> in the Claude Code hook. Single HTTP POST hands the bundle to Aegis.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="text-[11px] leading-5 mt-2 opacity-80">
+        In our demo scenarios these ingredients are simulated by the per-step
+        data; in production each row corresponds to a real piece of glue code
+        in your agent host.
+      </div>
+    </div>
+  `);
+}
+
 function render_codepaths(verdict) {
   const wrap = $("codepaths");
   wrap.innerHTML = "";
@@ -699,6 +780,9 @@ function render_codepaths(verdict) {
   }
   const cls = classify_trace(verdict);
   const examine = cls.terminator ? SRC_BY_STEP[cls.terminator] : SRC_FW_OK;
+
+  // ── 0. Architectural instrumentation map (always shown first) ──
+  _render_instrumentation_map(wrap);
 
   // ── HOST integration cards ── (post-LLM, pre-tool)
   wrap.insertAdjacentHTML("beforeend", _section_header("In your agent host (post-LLM, pre-tool)"));
