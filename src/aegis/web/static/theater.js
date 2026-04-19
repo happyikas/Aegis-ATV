@@ -25,6 +25,35 @@ const STEP_LANG = {
   step340_policy: { plain: "matches your policy file; otherwise asks an LLM judge" },
 };
 
+// ---------- source-code path map ----------
+// For each terminating firewall step, the file:function we want to show
+// in the "Source-code paths" panel. The CAPTURE and SIGN entries are
+// constant across steps; EXAMINE depends on the verdict.
+const SRC_CAPTURE = {
+  path: "atv/builder.py", function: "build_atv",
+  why: "Builds the 2080-D ATV by encoding each band (header, agent_state, plan, tool_call, safety_flags, memory_fp, cost_efficiency).",
+};
+const SRC_SIGN = {
+  path: "api/evaluate.py", function: "_evaluate_impl",
+  why: "Calls run_firewall, then signs the ATV with Ed25519 and appends the record to the Merkle-chained audit log.",
+};
+const SRC_FW_OK = {
+  path: "firewall/core.py", function: "run_firewall",
+  why: "Walks the 5 firewall steps in order; first BLOCK / REQUIRE_APPROVAL short-circuits.",
+};
+const SRC_BY_STEP = {
+  step310_args:   { path: "firewall/step310_args.py",   function: "run",
+                    why: "Static regex deny-list (rm -rf /, DROP TABLE, /etc/shadow, sudo, exec()) + safety_flags injection threshold." },
+  step320_blast:  { path: "firewall/step320_blast.py",  function: "run",
+                    why: "Looks up tool_name in TOOL_BLAST_TABLE; publishes blast for downstream — never blocks itself." },
+  step330_human:  { path: "firewall/step330_human.py",  function: "run",
+                    why: "Escalates to REQUIRE_APPROVAL when blast >= HIGH_BLAST_THRESHOLD (=7)." },
+  step335_cost:   { path: "firewall/step335_cost.py",   function: "run",
+                    why: "Per-tenant byte/dollar/confidence budget; over-limit → REQUIRE_APPROVAL." },
+  step340_policy: { path: "firewall/step340_policy.py", function: "run",
+                    why: "Iterates deny rules → allow rules → falls through to sLLM judge." },
+};
+
 // Map each verdict's terminating step to which ATV band Aegis 'examined'.
 // (Some checks like step320 don't really 'examine the vector' — they're
 // table lookups — but we display them on the closest band for clarity.)
@@ -514,6 +543,95 @@ function render_step(step, verdict /* may be null */) {
 
   // 5. ATV bandbar
   render_bandbar(cls?.examinedBand || null);
+
+  // 6. Source-code paths (lazy snippet fetch on click)
+  render_codepaths(verdict);
+}
+
+// ---------- source code path rendering ----------
+const _SRC_CACHE = new Map(); // key: "path::function" → fetch promise
+
+function _src_fetch(path, fn) {
+  const key = `${path}::${fn || ""}`;
+  if (_SRC_CACHE.has(key)) return _SRC_CACHE.get(key);
+  const params = new URLSearchParams({ path });
+  if (fn) params.set("function", fn);
+  const p = fetch(`/source?${params}`).then(async r => {
+    if (!r.ok) throw new Error(`HTTP ${r.status}: ${(await r.text()).slice(0, 100)}`);
+    return r.json();
+  });
+  _SRC_CACHE.set(key, p);
+  return p;
+}
+
+function render_codepaths(verdict) {
+  const wrap = $("codepaths");
+  wrap.innerHTML = "";
+  if (!verdict) {
+    wrap.innerHTML = '<div class="text-xs text-slate-400 py-3">(waiting for verdict…)</div>';
+    return;
+  }
+  const cls = classify_trace(verdict);
+  // pick the EXAMINE entry: the terminating step's run() if any,
+  // otherwise the orchestrator (means all 5 passed).
+  const examine = cls.terminator ? SRC_BY_STEP[cls.terminator] : SRC_FW_OK;
+
+  const items = [
+    { tag: "①", label: "CAPTURE", color: "indigo", entry: SRC_CAPTURE },
+    { tag: "②", label: "EXAMINE", color: "amber",  entry: examine },
+    { tag: "③", label: "SIGN",    color: "emerald", entry: SRC_SIGN },
+  ];
+
+  for (const item of items) {
+    const id = `cp-${item.label.toLowerCase()}`;
+    const colorMap = {
+      indigo:  "bg-indigo-50 border-indigo-200 text-indigo-900",
+      amber:   "bg-amber-50 border-amber-200 text-amber-900",
+      emerald: "bg-emerald-50 border-emerald-200 text-emerald-900",
+    };
+    wrap.insertAdjacentHTML("beforeend", `
+      <div class="border rounded-lg ${colorMap[item.color]} p-3" data-cp="${id}">
+        <div class="flex items-center gap-3">
+          <span class="font-bold text-base">${item.tag}</span>
+          <span class="text-xs uppercase tracking-wider font-semibold opacity-70">${item.label}</span>
+          <span class="mono text-sm">src/aegis/${item.entry.path}</span>
+          <span class="text-slate-500">·</span>
+          <span class="mono text-sm font-bold">${item.entry.function}()</span>
+          <button class="ml-auto text-xs px-2 py-0.5 rounded border border-current opacity-80 hover:opacity-100" data-toggle="${id}">
+            show code ▾
+          </button>
+        </div>
+        <div class="text-xs leading-5 mt-1 opacity-90">${item.entry.why}</div>
+        <div class="hidden mt-3 bg-white border border-slate-200 rounded p-3" data-snippet="${id}">
+          <div class="text-[11px] mono text-slate-400 mb-1" data-snippet-head>loading…</div>
+          <pre class="mono text-[12px] leading-5 text-slate-800 whitespace-pre overflow-x-auto" data-snippet-body></pre>
+        </div>
+      </div>
+    `);
+  }
+
+  // wire toggles
+  for (const btn of wrap.querySelectorAll("[data-toggle]")) {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.toggle;
+      const panel = wrap.querySelector(`[data-snippet="${id}"]`);
+      const item  = items.find(it => `cp-${it.label.toLowerCase()}` === id);
+      const open  = !panel.classList.contains("hidden");
+      panel.classList.toggle("hidden", open);
+      btn.textContent = open ? "show code ▾" : "hide code ▴";
+      if (!open) {
+        try {
+          const data = await _src_fetch(item.entry.path, item.entry.function);
+          panel.querySelector("[data-snippet-head]").textContent =
+            `${data.path} · lines ${data.start_line}–${data.end_line} of ${data.total_lines}`;
+          panel.querySelector("[data-snippet-body]").textContent = data.snippet;
+        } catch (e) {
+          panel.querySelector("[data-snippet-head]").textContent = "error";
+          panel.querySelector("[data-snippet-body]").textContent = String(e.message);
+        }
+      }
+    });
+  }
 }
 
 function render_bandbar(activeBand) {

@@ -207,7 +207,7 @@
     </div>
 
     <!-- 5. ATV bands strip -->
-    <div>
+    <div class="mb-5">
       <div class="text-xs uppercase tracking-wide text-slate-500 mb-2 flex items-center gap-3">
         ATV-2080-v1 (which band Aegis examined)
         <span id="examined-label" class="ml-auto text-slate-700 mono normal-case"></span>
@@ -215,6 +215,16 @@
       <div id="bandbar" class="bandbar"></div>
       <div id="bandlegend" class="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-[11px] text-slate-500"></div>
     </div>
+
+    <!-- 6. Source-code paths -->
+    <details class="border border-slate-200 rounded-xl bg-slate-50">
+      <summary class="px-4 py-3 cursor-pointer text-sm text-slate-700 font-medium select-none flex items-center gap-2">
+        <span>📍</span>
+        <span class="font-semibold text-slate-900">Source-code paths</span>
+        <span class="text-slate-500">— where this evaluation actually happened in the codebase</span>
+      </summary>
+      <div id="codepaths" class="px-4 pb-4 space-y-2"></div>
+    </details>
   </article>
 </main>
 

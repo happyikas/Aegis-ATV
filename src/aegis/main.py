@@ -24,6 +24,7 @@ from aegis.api.approve import make_router as _approve_router
 from aegis.api.attestation import make_router as _attestation_router
 from aegis.api.audit_query import make_router as _audit_router
 from aegis.api.evaluate import make_router as _evaluate_router
+from aegis.api.source import make_router as _source_router
 from aegis.attest.burn_in import BurnInMeasurement, compute_burn_in
 from aegis.audit.jsonl_store import JsonlStore
 from aegis.audit.sqlite_store import AuditDB
@@ -62,6 +63,7 @@ def create_app(
     app.include_router(_approve_router(key=real_key, db=real_db, log=real_log))
     app.include_router(_audit_router(db=real_db))
     app.include_router(_attestation_router(measurement=real_measurement))
+    app.include_router(_source_router(package_root=_PACKAGE_ROOT))
 
     if _STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
