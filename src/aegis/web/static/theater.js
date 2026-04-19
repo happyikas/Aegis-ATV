@@ -541,8 +541,8 @@ function render_step(step, verdict /* may be null */) {
     $("outcome-note").textContent = o.note || "";
   }
 
-  // 5. ATV bandbar
-  render_bandbar(cls?.examinedBand || null);
+  // 5. ATV bandbar — pass the call so per-band intensity reflects actual data
+  render_bandbar(step.call, cls?.examinedBand || null);
 
   // 6. Source-code paths (lazy snippet fetch on click)
   render_codepaths(verdict);
@@ -634,22 +634,71 @@ function render_codepaths(verdict) {
   }
 }
 
-function render_bandbar(activeBand) {
+// per-band intensity (0..1) derived from the call's actual inputs.
+// Drives the bar segment's opacity so bands carrying meaningful data
+// "light up" relative to bands that are baseline / zero.
+function _band_intensity(key, call) {
+  if (!call) return 0.10;
+  switch (key) {
+    case "header":          return 0.85;
+    case "agent_state":     return Math.min(1.0, 0.20 + (call.state || "").length / 200);
+    case "plan":            return Math.min(1.0, 0.20 + (call.plan  || "").length / 80);
+    case "tool_call":       return Math.min(1.0, 0.30 + (call.args  || "").length / 120);
+    case "safety_flags":    return Math.max(call.inj || 0, call.pii || 0, 0.10);
+    case "memory_fp":       return 0.10; // we never set memory_fingerprint in scenarios
+    case "cost_efficiency": return Math.max(
+                              Math.min(1.0, (call.bytes   || 0) / 1e9),
+                              Math.min(1.0, (call.dollars || 0) / 1.0),
+                              0.15
+                            );
+    case "hw":              return 0.05; // T2 zero-fill
+  }
+  return 0.10;
+}
+
+function render_bandbar(call, examinedBand /* nullable */) {
   const bar = $("bandbar");
+  // Save previous intensities to detect "what changed" → pulse animate the changed bands
+  const prev = bar._lastIntensities || {};
+  const next = {};
   bar.innerHTML = "";
+
   for (const b of BANDS) {
     const seg = document.createElement("div");
     seg.className = "bandseg";
-    if (activeBand === b.key) seg.classList.add("examine");
-    seg.style.background = b.color + (b.key === "hw" ? "33" : "55");
+
+    const intensity = _band_intensity(b.key, call);
+    next[b.key] = intensity;
+
+    // Opacity-encoded background (intensity → alpha)
+    const a = Math.round(60 + intensity * 195); // 60..255
+    const aHex = a.toString(16).padStart(2, "0");
+    seg.style.background = b.color + aHex;
     seg.style.flex = String(b.dim);
-    seg.title = `${b.label} · ${b.dim}-D`;
+
+    if (intensity > 0.25) seg.classList.add("active");
+    if (examinedBand === b.key) seg.classList.add("examine");
+
+    // Pulse if intensity rose meaningfully vs previous step
+    const prevI = prev[b.key] ?? 0;
+    if (call && intensity > prevI + 0.10) seg.classList.add("update");
+
+    seg.title = `${b.label} · ${b.dim}-D · intensity ${(intensity * 100 | 0)}%`;
     bar.appendChild(seg);
   }
+  bar._lastIntensities = next;
+
   const lab = $("examined-label");
-  if (activeBand) {
-    const b = BANDS.find(x => x.key === activeBand);
-    lab.innerHTML = `examined band: <b style="color:${b.color}">${b.label}</b> (${b.dim}-D)`;
+  if (examinedBand) {
+    const b = BANDS.find(x => x.key === examinedBand);
+    lab.innerHTML = `Aegis examined: <b style="color:${b.color}">${b.label}</b> (${b.dim}-D)`;
+  } else if (call) {
+    // Show which bands are "lit" this step (not just examined)
+    const lit = BANDS.filter(b => next[b.key] > 0.25 && b.key !== "header" && b.key !== "hw")
+                     .map(b => b.label).join(", ");
+    lab.innerHTML = lit
+      ? `bands updated: <b class="text-slate-700">${lit}</b>`
+      : "";
   } else {
     lab.textContent = "";
   }
