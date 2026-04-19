@@ -244,6 +244,80 @@ const SCENARIO_CODING = [
   },
 ];
 
+const SCENARIO_ROLLBACK = [
+  // === phase 1: apply a fix that turns out to be buggy ===
+  {
+    voice: "Reading the payments module to fix the discount bug.",
+    call: { tool: "read_file", args: '{"path":"./data/src/payments.py"}',
+            plan: "investigate discount bug", state: "starting fix",
+            inj: .02, pii: 0, bytes: 0, dollars: 0.0001, conf: .95 },
+    outcome: { icon: "📄", title: "Returns payments.py source (~2.4 KB)" },
+  },
+  {
+    voice: "Applying the discount calculation patch.",
+    call: { tool: "write_file",
+            args: '{"path":"./data/src/payments.py","content":"def discount(p, u):\\n    return p * (0.9 if u.is_premium else 1.0)\\n"}',
+            plan: "patch discount logic", state: "implementing fix",
+            inj: .02, pii: 0, bytes: 256, dollars: 0.0001, conf: .9 },
+    outcome: { icon: "📝", title: "Writes 67 bytes (patched discount function)",
+               note: "Aegis can't catch this — the code is syntactically valid and looks safe. Runtime bugs are NOT in scope for a pre-execution firewall. But the audit log records it." },
+  },
+  {
+    voice: "Running the test suite to verify the fix.",
+    call: { tool: "execute_shell", args: '{"command":"pytest tests/test_payments.py -x"}',
+            plan: "verify discount fix", state: "running tests",
+            inj: .02, pii: 0, bytes: 0, dollars: 0.001, conf: .9 },
+    outcome: { icon: "⏸️", title: "Held: shell command needs human approval",
+               note: "(In our story, the human approves; tests run; agent reads the result next.)" },
+  },
+  {
+    voice: "Reading the test output to see what passed.",
+    call: { tool: "read_file", args: '{"path":"./data/test_results.log"}',
+            plan: "read test results", state: "discovering failures",
+            inj: .02, pii: 0, bytes: 0, dollars: 0.0001, conf: .9 },
+    outcome: { icon: "📄", title: "Tests CRASHED: AttributeError: 'NoneType' has no 'is_premium'",
+               note: "The fix didn't handle anonymous users. Production-mirror tests are now red." },
+  },
+
+  // === phase 2: agent panics — destructive 'recovery' attempt ===
+  {
+    voice: "The transactions table looks corrupted, let me wipe and restart.",
+    call: { tool: "db_query", args: '{"sql":"DROP TABLE transactions"}',
+            plan: "panic 'recovery'", state: "panicking",
+            inj: .02, pii: 0, bytes: 0, dollars: 0.0001, conf: .85 },
+    outcome: { icon: "💥", title: "Would have ERASED EVERY CUSTOMER TRANSACTION",
+               note: "The agent misdiagnosed the symptom as data corruption. Without Aegis, this would have wiped years of payment history — a regulatory disaster on top of a runtime bug. Aegis records the attempt in the audit chain even though it's blocked, so the operator can see exactly what the agent panicked into." },
+  },
+
+  // === phase 3: proper rollback ===
+  {
+    voice: "OK, breathe. Reverting the patch and going back to the known-good version.",
+    call: { tool: "write_file",
+            args: '{"path":"./data/src/payments.py","content":"def discount(p, u):\\n    return p * (0.9 if u and u.is_premium else 1.0)\\n"}',
+            plan: "rollback to safe version", state: "rolling back",
+            inj: .02, pii: 0, bytes: 256, dollars: 0.0001, conf: .9 },
+    outcome: { icon: "↩️", title: "Writes 79 bytes — rolled-back version (handles None user)",
+               note: "The rollback ITSELF goes through the firewall — Aegis treats it like any other write. The audit chain now contains: (1) the original patch, (2) the failed test result, (3) the panic DROP TABLE attempt (blocked), (4) THIS rollback. A perfect forensic timeline." },
+  },
+  {
+    voice: "Re-running the tests to confirm the rollback restored things.",
+    call: { tool: "execute_shell", args: '{"command":"pytest tests/test_payments.py"}',
+            plan: "verify rollback", state: "verifying",
+            inj: .02, pii: 0, bytes: 0, dollars: 0.001, conf: .9 },
+    outcome: { icon: "⏸️", title: "Held: human approves; tests now pass",
+               note: "Same shell command, same blast radius — every shell call is gated, including the rollback verification. Consistency is the point." },
+  },
+  {
+    voice: "Documenting what happened in the CHANGELOG.",
+    call: { tool: "write_file",
+            args: '{"path":"./data/CHANGELOG.md","content":"## reverted\\n- discount() patch rolled back; reapply with None-user handling next sprint"}',
+            plan: "document rollback", state: "done",
+            inj: .02, pii: 0, bytes: 256, dollars: 0.0001, conf: .9 },
+    outcome: { icon: "📝", title: "Appends 92 bytes to CHANGELOG.md",
+               note: "The audit chain + the CHANGELOG together form a tamper-evident record of: what was tried, what failed, what was rolled back, what's planned. Auditors love this." },
+  },
+];
+
 const SCENARIOS = {
   general: {
     label: "General agent",
@@ -254,6 +328,11 @@ const SCENARIOS = {
     label: "Coding agent",
     blurb: "An AI dev fixing <span class='mono'>validate_email</span> in <span class='mono'>user.py</span>, adding a regression test, updating the CHANGELOG. Realistic mistakes/hacks woven in: shell-typo disaster, credential exfil disguised as debugging, SQL migration mishap, token-budget runaway, prompt-injected user input.",
     steps: SCENARIO_CODING,
+  },
+  rollback: {
+    label: "Rollback agent",
+    blurb: "An AI dev applies a fix → discovers it's buggy in tests → panics and tries a destructive 'recovery' → settles down and properly reverts. The audit chain captures the original change, the panic attempt (blocked), the rollback, and the verification. <b>Forensic timeline as a feature.</b>",
+    steps: SCENARIO_ROLLBACK,
   },
 };
 

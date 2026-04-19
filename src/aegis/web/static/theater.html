@@ -104,8 +104,9 @@
     <div class="flex items-center gap-2">
       <span class="text-xs text-slate-500 uppercase tracking-wide">scenario</span>
       <select id="scenario-pick" class="text-sm border border-slate-300 rounded px-2 py-1 bg-white">
-        <option value="general">General agent (10 steps)</option>
+        <option value="general">General agent (9 steps)</option>
         <option value="coding" selected>Coding agent (13 steps)</option>
+        <option value="rollback">Rollback agent (8 steps)</option>
       </select>
     </div>
     <div class="flex items-center gap-2 text-sm text-slate-600">
@@ -154,27 +155,27 @@
     <div class="mb-5">
       <div class="text-xs uppercase tracking-wide text-slate-500 mb-2">Aegis runs 5 checks</div>
       <div class="flex items-stretch gap-2">
-        <div class="fwnode skip" data-step="step310">
+        <div class="fwnode skip" data-step="step310_args">
           <div class="text-lg" data-icon>○</div>
           <div class="text-xs font-bold mt-1">310</div>
           <div class="text-[10px] text-slate-600 leading-tight">pattern check</div>
         </div>
-        <div class="fwnode skip" data-step="step320">
+        <div class="fwnode skip" data-step="step320_blast">
           <div class="text-lg" data-icon>○</div>
           <div class="text-xs font-bold mt-1">320</div>
           <div class="text-[10px] text-slate-600 leading-tight">blast radius</div>
         </div>
-        <div class="fwnode skip" data-step="step330">
+        <div class="fwnode skip" data-step="step330_human">
           <div class="text-lg" data-icon>○</div>
           <div class="text-xs font-bold mt-1">330</div>
           <div class="text-[10px] text-slate-600 leading-tight">human approval</div>
         </div>
-        <div class="fwnode skip" data-step="step335">
+        <div class="fwnode skip" data-step="step335_cost">
           <div class="text-lg" data-icon>○</div>
           <div class="text-xs font-bold mt-1">335</div>
           <div class="text-[10px] text-slate-600 leading-tight">cost forecast</div>
         </div>
-        <div class="fwnode skip" data-step="step340">
+        <div class="fwnode skip" data-step="step340_policy">
           <div class="text-lg" data-icon>○</div>
           <div class="text-xs font-bold mt-1">340</div>
           <div class="text-[10px] text-slate-600 leading-tight">policy + AI</div>
