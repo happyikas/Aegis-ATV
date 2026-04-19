@@ -3,170 +3,222 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>AegisData Theater — Live ATV Visualization</title>
+<title>AegisData Theater — see how the firewall thinks</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
   body { font-family: ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
   .mono { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
 
-  /* per-band card flash on anomaly */
-  .band-card { transition: box-shadow .25s, border-color .25s, background .25s; }
-  .band-card.flag {
-    border-color: rgb(239 68 68);
-    box-shadow: 0 0 0 4px rgba(239,68,68,.18), 0 0 24px rgba(239,68,68,.45);
-    background: linear-gradient(180deg, rgba(254,226,226,.55), rgba(255,255,255,1));
-    animation: flagpulse 1.4s ease-out 1;
-  }
-  @keyframes flagpulse {
-    0%   { box-shadow: 0 0 0 0 rgba(239,68,68,.55); }
-    100% { box-shadow: 0 0 0 24px rgba(239,68,68,0), 0 0 24px rgba(239,68,68,.45); }
+  /* big card transitions */
+  .stage { transition: opacity .35s, transform .35s; }
+  .stage.entering { opacity: 0; transform: translateY(8px); }
+
+  /* smoking-gun highlight inside args */
+  mark.gun {
+    background: #fee2e2; color: #991b1b; padding: 0 4px; border-radius: 4px;
+    font-weight: 700; box-shadow: 0 0 0 2px rgba(239,68,68,.25);
   }
 
-  /* intensity strip (per-band cells) */
-  .strip { display: grid; gap: 1px; height: 14px; grid-auto-flow: column; grid-auto-columns: 1fr; }
-  .strip > div { background: rgba(99,102,241,0.0); border-radius: 1px; transition: background .3s; }
-
-  /* feed item enter */
-  .feed-item { transition: transform .35s ease-out, opacity .35s; }
-  .feed-item.entering { transform: translateY(-6px); opacity: 0; }
-
-  /* inline explanation panel — collapses to zero height when hidden */
-  .explain {
-    max-height: 0; opacity: 0; padding-top: 0; padding-bottom: 0;
-    border-width: 0;
-    transition: max-height .35s ease, opacity .25s, padding .25s, border-width .25s;
-    overflow: hidden;
+  /* pipeline node */
+  .fwnode {
+    flex: 1; min-width: 0;
+    border: 2px solid #e2e8f0; background: #f8fafc;
+    border-radius: 10px; padding: 10px 8px; text-align: center;
+    transition: all .25s;
   }
-  .explain.open {
-    max-height: 600px; opacity: 1;
-    padding-top: 1.25rem; padding-bottom: 1.25rem;
-    border-width: 1px;
+  .fwnode.pass    { border-color: #86efac; background: #dcfce7; }
+  .fwnode.skip    { border-color: #e2e8f0; background: #f1f5f9; opacity: .55; }
+  .fwnode.examine { border-color: #93c5fd; background: #dbeafe; }
+  .fwnode.block   { border-color: #fca5a5; background: #fee2e2; }
+  .fwnode.approval{ border-color: #fcd34d; background: #fef3c7; }
+
+  /* verdict / consequence cards */
+  .vcard { border-radius: 12px; padding: 16px 18px; }
+  .vcard.allow    { background: #ecfdf5; border: 2px solid #86efac; color: #064e3b; }
+  .vcard.block    { background: #fef2f2; border: 2px solid #fca5a5; color: #7f1d1d; }
+  .vcard.approval { background: #fffbeb; border: 2px solid #fcd34d; color: #78350f; }
+
+  /* ATV strip */
+  .bandbar { display: flex; height: 24px; border-radius: 6px; overflow: hidden; box-shadow: inset 0 0 0 1px #e2e8f0; }
+  .bandseg { transition: filter .25s, transform .25s; min-width: 0; }
+  .bandseg.examine { filter: brightness(1.1) saturate(1.3); transform: scaleY(1.4); transform-origin: center; }
+  .bandseg.flag    { background: #ef4444 !important; transform: scaleY(1.6); }
+
+  /* progress dots */
+  .dot { width: 14px; height: 14px; border-radius: 50%; transition: all .25s; }
+  .dot.pending  { background: #e2e8f0; }
+  .dot.current  { background: #3b82f6; transform: scale(1.3); box-shadow: 0 0 0 3px rgba(59,130,246,.25); }
+  .dot.allow    { background: #22c55e; }
+  .dot.block    { background: #ef4444; }
+  .dot.approval { background: #f59e0b; }
+
+  /* "Continue" button breath */
+  .breath { animation: breath 1.6s ease-in-out infinite; }
+  @keyframes breath {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(59,130,246,.5); }
+    50%      { box-shadow: 0 0 0 10px rgba(59,130,246,0); }
   }
 
-  /* fixed-height ASCII-ish columns */
-  .col-h { height: 460px; overflow-y: auto; scrollbar-width: thin; }
-
-  /* gradient header */
-  .hero-grad {
-    background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 60%, #4338ca 100%);
-  }
+  /* hero gradient header */
+  .hero-grad { background: linear-gradient(135deg,#0f172a 0%,#1e3a8a 60%,#4338ca 100%); }
 </style>
 </head>
 <body class="bg-slate-50 text-slate-900 min-h-screen">
 
 <header class="hero-grad text-white">
-  <div class="max-w-[1500px] mx-auto px-6 py-5 flex items-center gap-4">
+  <div class="max-w-[1200px] mx-auto px-6 py-5 flex items-center gap-4">
     <div class="text-lg font-semibold tracking-tight">
-      <span class="opacity-70">AegisData</span> · <span class="font-bold">ATV Theater</span>
+      <span class="opacity-70">AegisData</span> · <span class="font-bold">Theater</span>
     </div>
-    <span class="text-xs opacity-70">a live walk-through of how Agent Trace Vectors catch anomalies</span>
+    <span class="text-xs opacity-70">see how the firewall thinks, one tool call at a time</span>
     <nav class="ml-auto flex items-center gap-3 text-sm">
       <a href="/" class="opacity-80 hover:opacity-100 hover:underline">← Operator dashboard</a>
-      <a href="/docs" target="_blank" class="opacity-80 hover:opacity-100 hover:underline">OpenAPI ↗</a>
     </nav>
   </div>
 </header>
 
-<!-- ATV concept blurb -->
-<section class="max-w-[1500px] mx-auto px-6 py-5">
-  <div class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm flex items-start gap-5">
-    <div class="text-3xl">🛡️</div>
-    <div class="flex-1 text-sm leading-6 text-slate-700">
-      <span class="font-semibold text-slate-900">What's an ATV?</span>
-      Every action an AI agent attempts is captured as a fixed
-      <span class="mono text-slate-900">2,080-dimensional</span> vector — the
-      <span class="font-medium">Agent Trace Vector</span>. Each band of the
-      vector encodes a different facet of the action (who, what, how risky,
-      how expensive). The Action Firewall reads specific bands to decide
+<!-- ─────────── Concept blurb (collapsible) ─────────── -->
+<section class="max-w-[1200px] mx-auto px-6 py-4">
+  <details class="bg-white rounded-xl border border-slate-200 shadow-sm">
+    <summary class="px-5 py-3 cursor-pointer text-sm text-slate-700 font-medium select-none">
+      🛡️ <span class="text-slate-900 font-semibold">What's an ATV?</span>
+      <span class="text-slate-500 ml-1">(click to expand the 30-second concept)</span>
+    </summary>
+    <div class="px-5 pb-5 text-sm leading-6 text-slate-700">
+      Every action an AI agent attempts (read a file, run a shell command, query a DB) is captured as a
+      fixed <span class="mono text-slate-900">2,080-dimensional</span> vector — the
+      <span class="font-medium">Agent Trace Vector</span>. The firewall has 5 cheap checks (300-340) that
+      look at different parts of that vector and decide
       <span class="text-green-700 font-medium">ALLOW</span> /
       <span class="text-amber-700 font-medium">REQUIRE_APPROVAL</span> /
-      <span class="text-red-700 font-medium">BLOCK</span>. Watch the agent on
-      the left; watch the vector on the right; watch which band lights up red
-      when the firewall fires.
+      <span class="text-red-700 font-medium">BLOCK</span>. Below, you'll watch a simulated agent take
+      one step at a time. When something goes wrong you'll see <em>which</em> check caught it and what
+      would have happened without the firewall.
     </div>
-  </div>
+  </details>
 </section>
 
-<main class="max-w-[1500px] mx-auto px-6 pb-8 grid grid-cols-12 gap-6">
+<!-- ─────────── Top control bar ─────────── -->
+<section class="max-w-[1200px] mx-auto px-6">
+  <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 flex items-center gap-4 flex-wrap">
+    <div class="flex items-center gap-2">
+      <span class="text-xs text-slate-500 uppercase tracking-wide">scenario</span>
+      <select id="scenario-pick" class="text-sm border border-slate-300 rounded px-2 py-1 bg-white">
+        <option value="general">General agent (10 steps)</option>
+        <option value="coding" selected>Coding agent (13 steps)</option>
+      </select>
+    </div>
+    <div class="flex items-center gap-2 text-sm text-slate-600">
+      <span class="mono"><span id="step-counter">1</span> / <span id="step-total">13</span></span>
+    </div>
+    <div id="dots" class="flex items-center gap-1.5"></div>
+    <div class="ml-auto flex items-center gap-2">
+      <button id="btn-prev"  class="bg-slate-200 hover:bg-slate-300 text-slate-800 text-sm font-medium px-3 py-1.5 rounded">← Prev</button>
+      <button id="btn-next"  class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-4 py-1.5 rounded">Next →</button>
+      <button id="btn-play"  class="bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium px-3 py-1.5 rounded">▶ Auto-play</button>
+      <button id="btn-pause" class="bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium px-3 py-1.5 rounded hidden">⏸ Pause</button>
+      <button id="btn-reset" class="bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium px-3 py-1.5 rounded">↺ Reset</button>
+    </div>
+  </div>
+  <div id="scenario-blurb" class="text-xs text-slate-500 leading-5 mt-2 px-1"></div>
+</section>
 
-  <!-- ===== Left: agent activity feed ===== -->
-  <section class="col-span-5 bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col">
-    <div class="p-5 border-b border-slate-200 space-y-3">
+<!-- ─────────── Main story stage ─────────── -->
+<main class="max-w-[1200px] mx-auto px-6 py-6">
+  <article id="stage" class="stage bg-white rounded-2xl shadow-sm border border-slate-200 p-7">
+
+    <!-- 1. Agent voice -->
+    <div class="flex items-start gap-3 mb-5">
+      <div class="text-3xl">🤖</div>
+      <div>
+        <div class="text-xs uppercase tracking-wide text-slate-500 mb-0.5">Agent says</div>
+        <div id="agent-voice" class="text-base text-slate-900 leading-6">"…"</div>
+      </div>
+    </div>
+
+    <!-- 2. About-to-call -->
+    <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-5">
+      <div class="flex items-center gap-2 text-xs uppercase tracking-wide text-slate-500 mb-2">
+        about to call
+      </div>
       <div class="flex items-center gap-3">
-        <h2 class="font-semibold text-slate-700 flex-1">Agent activity</h2>
-        <select id="scenario-pick"
-          class="text-xs border border-slate-300 rounded px-2 py-1 bg-white"
-          title="Switch the simulated agent persona">
-          <option value="general">General agent</option>
-          <option value="coding">Coding agent</option>
-        </select>
-        <span id="step-counter" class="text-xs mono text-slate-400">0 / 0</span>
-      </div>
-      <div id="scenario-blurb" class="text-xs text-slate-500 leading-5">
-        <!-- per-scenario one-liner injected -->
+        <div id="tool-icon" class="text-3xl">📄</div>
+        <div class="flex-1 min-w-0">
+          <div id="tool-name" class="font-semibold text-slate-900 mono text-base">tool</div>
+          <pre id="tool-args" class="mono text-sm text-slate-700 whitespace-pre-wrap break-words mt-1">{}</pre>
+        </div>
       </div>
     </div>
 
-    <div id="feed" class="p-5 space-y-3 col-h"></div>
-
-    <div class="p-4 border-t border-slate-200 flex items-center gap-2 bg-slate-50 rounded-b-xl">
-      <button id="btn-play"  class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-3 py-1.5 rounded">▶ Play</button>
-      <button id="btn-pause" class="bg-slate-300 hover:bg-slate-400 text-slate-800 text-sm font-medium px-3 py-1.5 rounded hidden">⏸ Pause</button>
-      <button id="btn-step"  class="bg-slate-200 hover:bg-slate-300 text-slate-800 text-sm font-medium px-3 py-1.5 rounded">⏭ Step</button>
-      <button id="btn-reset" class="bg-slate-200 hover:bg-slate-300 text-slate-800 text-sm font-medium px-3 py-1.5 rounded">↺ Reset</button>
-      <div class="ml-auto flex items-center gap-2 text-xs text-slate-500">
-        <span>speed</span>
-        <select id="speed" class="border border-slate-300 rounded px-1 py-0.5 text-xs bg-white">
-          <option value="2400">slow</option>
-          <option value="1400" selected>medium</option>
-          <option value="700">fast</option>
-        </select>
+    <!-- 3. Firewall pipeline (horizontal flow) -->
+    <div class="mb-5">
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-2">Aegis runs 5 checks</div>
+      <div class="flex items-stretch gap-2">
+        <div class="fwnode skip" data-step="step310">
+          <div class="text-lg" data-icon>○</div>
+          <div class="text-xs font-bold mt-1">310</div>
+          <div class="text-[10px] text-slate-600 leading-tight">pattern check</div>
+        </div>
+        <div class="fwnode skip" data-step="step320">
+          <div class="text-lg" data-icon>○</div>
+          <div class="text-xs font-bold mt-1">320</div>
+          <div class="text-[10px] text-slate-600 leading-tight">blast radius</div>
+        </div>
+        <div class="fwnode skip" data-step="step330">
+          <div class="text-lg" data-icon>○</div>
+          <div class="text-xs font-bold mt-1">330</div>
+          <div class="text-[10px] text-slate-600 leading-tight">human approval</div>
+        </div>
+        <div class="fwnode skip" data-step="step335">
+          <div class="text-lg" data-icon>○</div>
+          <div class="text-xs font-bold mt-1">335</div>
+          <div class="text-[10px] text-slate-600 leading-tight">cost forecast</div>
+        </div>
+        <div class="fwnode skip" data-step="step340">
+          <div class="text-lg" data-icon>○</div>
+          <div class="text-xs font-bold mt-1">340</div>
+          <div class="text-[10px] text-slate-600 leading-tight">policy + AI</div>
+        </div>
       </div>
     </div>
-  </section>
 
-  <!-- ===== Right: ATV dashboard ===== -->
-  <section class="col-span-7 space-y-3">
-    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-      <div class="flex items-center justify-between mb-4">
-        <h2 class="font-semibold text-slate-700">ATV-2080-v1 — band-by-band</h2>
-        <div id="last-verdict" class="px-2 py-0.5 rounded text-xs font-bold tracking-wide bg-slate-200 text-slate-500">idle</div>
+    <!-- 4. Verdict + consequence side by side -->
+    <div class="grid grid-cols-2 gap-4 mb-5">
+      <div id="verdict-card" class="vcard allow">
+        <div class="text-xs uppercase tracking-wide opacity-80 mb-1">Verdict</div>
+        <div class="flex items-center gap-2 mb-2">
+          <span id="verdict-icon" class="text-2xl">🛡️</span>
+          <span id="verdict-text" class="text-2xl font-bold">…</span>
+          <span id="verdict-latency" class="text-xs opacity-70 mono ml-auto"></span>
+        </div>
+        <div id="verdict-detail" class="text-sm leading-5"></div>
       </div>
-
-      <div id="bands" class="grid grid-cols-2 gap-3">
-        <!-- band cards injected -->
-      </div>
-    </div>
-
-    <!-- Inline explanation panel — fades in when an anomaly fires -->
-    <div id="drawer"
-         class="explain bg-white rounded-xl shadow-sm border-red-500 px-5">
-      <div class="flex items-start gap-4">
-        <div id="drawer-icon" class="text-3xl">⚠️</div>
-        <div class="flex-1">
-          <div class="text-xs uppercase tracking-wide text-red-700 font-bold mb-1" id="drawer-tag">Anomaly</div>
-          <h3 class="text-lg font-semibold text-slate-900 mb-2" id="drawer-title">…</h3>
-          <p class="text-sm leading-6 text-slate-700" id="drawer-body">…</p>
-          <div class="mt-3 flex items-center gap-2 text-xs flex-wrap">
-            <span class="text-slate-500">verdict:</span>
-            <span id="drawer-verdict" class="px-2 py-0.5 rounded font-semibold">—</span>
-            <span class="text-slate-500 ml-3">trace:</span>
-            <span id="drawer-trace" class="mono text-slate-700">—</span>
+      <div id="outcome-card" class="vcard allow">
+        <div class="text-xs uppercase tracking-wide opacity-80 mb-1" id="outcome-tag">If allowed, would have…</div>
+        <div class="flex items-start gap-2">
+          <span id="outcome-icon" class="text-2xl">📄</span>
+          <div>
+            <div id="outcome-title" class="font-semibold text-base">…</div>
+            <div id="outcome-note"  class="text-sm leading-5 opacity-90 mt-1"></div>
           </div>
         </div>
-        <button id="drawer-close" class="text-slate-400 hover:text-slate-700 text-2xl leading-none">×</button>
       </div>
     </div>
 
-    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-      <div class="text-xs text-slate-500 uppercase tracking-wide mb-2">verdict timeline</div>
-      <div id="timeline" class="flex items-end gap-1 h-12"></div>
+    <!-- 5. ATV bands strip -->
+    <div>
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-2 flex items-center gap-3">
+        ATV-2080-v1 (which band Aegis examined)
+        <span id="examined-label" class="ml-auto text-slate-700 mono normal-case"></span>
+      </div>
+      <div id="bandbar" class="bandbar"></div>
+      <div id="bandlegend" class="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-[11px] text-slate-500"></div>
     </div>
-  </section>
+  </article>
 </main>
 
-<footer class="max-w-[1500px] mx-auto px-6 py-6 text-xs text-slate-400 text-center">
-  <a href="/" class="hover:underline">Open the operator dashboard</a> · /attestation · 2080-D ATV · Ed25519 + Merkle SHA3-256
+<footer class="max-w-[1200px] mx-auto px-6 py-6 text-xs text-slate-400 text-center">
+  <a href="/" class="hover:underline">Operator dashboard</a> · /attestation · 2080-D ATV · Ed25519 + Merkle SHA3-256
 </footer>
 
 <script src="/static/theater.js"></script>
