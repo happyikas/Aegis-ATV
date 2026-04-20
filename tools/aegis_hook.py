@@ -47,6 +47,10 @@ import urllib.error
 import urllib.request
 import uuid
 
+# Sibling module — when this script runs as `python3 /abs/path/aegis_hook.py`,
+# Python puts /abs/path/ on sys.path[0], so the unqualified import works.
+from aegis_safety import classify_call
+
 AEGIS_URL = os.environ.get("AEGIS_URL", "http://localhost:8000").rstrip("/")
 TIMEOUT = float(os.environ.get("AEGIS_HOOK_TIMEOUT", "5"))
 TENANT = os.environ.get("AEGIS_TENANT_ID", "claude-code")
@@ -103,6 +107,14 @@ def _build_payload(event: dict) -> dict:
         cost["exp_bytes_write"] = 0.0
         cost["exp_dollars"] = 0.001  # shell side-effects unbounded — bias slightly higher
 
+    args_json = json.dumps(tool_input)[:4000]
+    plan_text = f"execute Claude Code tool: {tool_name}"
+
+    # PRE-LLM safety classifier — populates safety_flags from real text.
+    # Provider chosen by AEGIS_SAFETY_PROVIDER env (dummy / openai / haiku);
+    # default 'dummy' is offline regex, no API key needed.
+    safety_flags = classify_call(tool_args_json=args_json, plan_text=plan_text)
+
     return {
         "header": {
             "trace_id": session_id,
@@ -113,11 +125,11 @@ def _build_payload(event: dict) -> dict:
             "timestamp_ns": time.time_ns(),
         },
         "agent_state_text": f"claude-code session {session_id}",
-        "plan_text": f"execute Claude Code tool: {tool_name}",
+        "plan_text": plan_text,
         "tool_name": aegis_tool,
         # Cap arg JSON to keep the embedding call cheap & avoid token blowup.
-        "tool_args_json": json.dumps(tool_input)[:4000],
-        "safety_flags": {},
+        "tool_args_json": args_json,
+        "safety_flags": safety_flags,
         "cost_estimate": cost,
     }
 

@@ -19,11 +19,17 @@ import os
 import sys
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 import httpx
 
 from demo.tools import TOOLS
+
+# Make tools/aegis_safety.py importable so the demo and the Claude Code
+# hook share the same classifier code.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+from aegis_safety import classify_call  # noqa: E402
 
 AEGIS_URL = os.environ.get("AEGIS_URL", "http://localhost:8000")
 TENANT = os.environ.get("AEGIS_TENANT", "demo-tenant")
@@ -53,6 +59,12 @@ def ask_aegis(
     aid: str,
     cost_estimate: dict[str, float] | None = None,
 ) -> dict[str, Any]:
+    args_json = json.dumps(tool_args)
+    # PRE-LLM safety classifier — picks up prompt-injection / SQL-injection
+    # / path-traversal / data-exfil / PII signals from the actual text.
+    # Defaults to offline regex (provider=dummy); set AEGIS_SAFETY_PROVIDER
+    # to 'openai' or 'haiku' for hosted classifiers.
+    safety_flags = classify_call(tool_args_json=args_json, plan_text=plan_text)
     payload = {
         "header": {
             "trace_id": trace_id,
@@ -65,8 +77,8 @@ def ask_aegis(
         "agent_state_text": "demo agent running scenario",
         "plan_text": plan_text,
         "tool_name": tool_name,
-        "tool_args_json": json.dumps(tool_args),
-        "safety_flags": {},
+        "tool_args_json": args_json,
+        "safety_flags": safety_flags,
         "cost_estimate": cost_estimate
         or {"exp_bytes_write": 1024, "exp_dollars": 0.001, "confidence": 0.85},
     }

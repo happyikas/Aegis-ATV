@@ -88,6 +88,7 @@ let it through with just a warning, set `AEGIS_APPROVE_AS_BLOCK=0`.
 | `AEGIS_FAIL_OPEN` | `0` | If `1`, allow the tool when Aegis is unreachable. Default fails closed. |
 | `AEGIS_APPROVE_AS_BLOCK` | `1` | If `0`, REQUIRE_APPROVAL → exit 0 with stderr warning instead of blocking. CLI hooks can't show interactive approval, so the default treats APPROVAL like BLOCK for safety. |
 | `AEGIS_HOOK_VERBOSE` | `0` | If `1`, also log ALLOW verdicts (useful for debugging). |
+| `AEGIS_SAFETY_PROVIDER` | `dummy` | PRE-LLM safety classifier backend (`dummy` regex / `openai` Moderations / `haiku` Claude classifier). Read by `tools/aegis_safety.py`. The classifier scans tool args + plan text and fills `safety_flags` (prompt_injection, sql_injection, path_traversal, data_exfiltration, pii_exposure) BEFORE POSTing to /evaluate. With this, step 310's prompt-injection threshold actually fires on real traffic — until this module existed, every `safety_flags` was an empty `{}`. |
 
 You can put these in `~/.claude/settings.json` per-hook:
 
