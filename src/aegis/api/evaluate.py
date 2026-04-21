@@ -29,6 +29,7 @@ from aegis.atmu import (
 from aegis.atv.builder import build_atv
 from aegis.audit.jsonl_store import JsonlStore
 from aegis.audit.sqlite_store import AuditDB
+from aegis.burnin import BurnInController
 from aegis.firewall import step350_approval, step360_audit, step370_exec
 from aegis.firewall.core import run_firewall
 from aegis.firewall.step320_blast import TOOL_BLAST_TABLE, UNKNOWN_TOOL_BLAST
@@ -42,6 +43,7 @@ def _evaluate_impl(
     db: AuditDB,
     log: JsonlStore,
     intent_log: IntentLog | None = None,
+    burnin_controller: BurnInController | None = None,
     burn_in_id: str | None = None,
 ) -> Verdict:
     # Auto-fill the Burn-in id into the ATV header so every audit record
@@ -128,6 +130,15 @@ def _evaluate_impl(
             f"intent_record_id={intent_record_id}"
         )
 
+    # M11: feed every observation into the Burn-in controller so its
+    # per-(L1..L5) sample counts and the composite anomaly score reflect
+    # live traffic.
+    if burnin_controller is not None:
+        burnin_controller.observe(inp, verdict)
+        verdict.step_traces["aegis.burnin.composite_score"] = (
+            f"composite={burnin_controller.composite_score(inp):.3f}"
+        )
+
     return verdict
 
 
@@ -137,6 +148,7 @@ def make_router(
     db: AuditDB,
     log: JsonlStore,
     intent_log: IntentLog | None = None,
+    burnin_controller: BurnInController | None = None,
     burn_in_id: str | None = None,
 ) -> APIRouter:
     r = APIRouter()
@@ -145,7 +157,8 @@ def make_router(
     def evaluate(inp: ATVInput) -> Verdict:
         return _evaluate_impl(
             inp, key=key, db=db, log=log,
-            intent_log=intent_log, burn_in_id=burn_in_id,
+            intent_log=intent_log, burnin_controller=burnin_controller,
+            burn_in_id=burn_in_id,
         )
 
     return r

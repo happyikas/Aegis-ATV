@@ -24,6 +24,7 @@ from aegis import __version__
 from aegis.api.approve import make_router as _approve_router
 from aegis.api.attestation import make_router as _attestation_router
 from aegis.api.audit_query import make_router as _audit_router
+from aegis.api.burnin_status import make_router as _burnin_router
 from aegis.api.evaluate import make_router as _evaluate_router
 from aegis.api.source import make_router as _source_router
 from aegis.api.tool_outcome import make_router as _tool_outcome_router
@@ -31,6 +32,7 @@ from aegis.atmu import IntentLog
 from aegis.attest.burn_in import BurnInMeasurement, compute_burn_in
 from aegis.audit.jsonl_store import JsonlStore
 from aegis.audit.sqlite_store import AuditDB
+from aegis.burnin import BurnInController
 from aegis.config import settings
 from aegis.sign.ed25519 import load_or_create_key
 
@@ -44,6 +46,7 @@ def create_app(
     db: AuditDB | None = None,
     log: JsonlStore | None = None,
     intent_log: IntentLog | None = None,
+    burnin_controller: BurnInController | None = None,
     measurement: BurnInMeasurement | None = None,
 ) -> FastAPI:
     """Build a FastAPI app. Override key/db/log/intent_log/measurement for tests."""
@@ -55,6 +58,7 @@ def create_app(
     real_intent_log = (
         intent_log if intent_log is not None else IntentLog(settings.aegis_intent_log_db)
     )
+    real_burnin = burnin_controller if burnin_controller is not None else BurnInController()
     real_measurement = measurement if measurement is not None else compute_burn_in(
         code_root=_PACKAGE_ROOT,
         policy_dir=Path(settings.aegis_policy_dir),
@@ -67,7 +71,8 @@ def create_app(
     app.include_router(
         _evaluate_router(
             key=real_key, db=real_db, log=real_log,
-            intent_log=real_intent_log, burn_in_id=real_measurement.burn_in_id,
+            intent_log=real_intent_log, burnin_controller=real_burnin,
+            burn_in_id=real_measurement.burn_in_id,
         )
     )
     app.include_router(_approve_router(key=real_key, db=real_db, log=real_log))
@@ -75,6 +80,7 @@ def create_app(
     app.include_router(_attestation_router(measurement=real_measurement))
     app.include_router(_source_router(package_root=_PACKAGE_ROOT))
     app.include_router(_tool_outcome_router(intent_log=real_intent_log))
+    app.include_router(_burnin_router(controller=real_burnin))
 
     if _STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
