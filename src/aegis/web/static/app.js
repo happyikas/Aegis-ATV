@@ -342,6 +342,7 @@ async function evaluate() {
     render_atv_strip({ atv_id: v.atv_id, decision: v.decision });
     $("audit-aid").value = $("aid").value;
     await load_chain();
+    load_burnin();    // refresh M11 sample counts after each evaluate
   } catch (e) {
     $("verdict-reason").textContent = `error: ${e.message}`;
     $("verdict-badge").textContent = "ERR";
@@ -448,11 +449,60 @@ function apply_preset(name) {
   $("cost-conf").value = p.conf;
 }
 
+// ---------- Burn-in baseline (M11) ----------
+const PHASE_BADGE = {
+  observation: "bg-slate-200 text-slate-700",
+  shadow:      "bg-blue-100 text-blue-800",
+  assisted:    "bg-amber-100 text-amber-800",
+  production:  "bg-green-100 text-green-800",
+};
+
+async function load_burnin() {
+  const status = $("burnin-status");
+  const tbody = $("burnin-rows");
+  status.textContent = "loading…";
+  status.className = "text-xs text-slate-400 mono ml-auto";
+  try {
+    const r = await fetch("/burnin-status");
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const body = await r.json();
+    tbody.innerHTML = "";
+    if (!body.layers || body.layers.length === 0) {
+      tbody.innerHTML = `
+        <tr><td colspan="8" class="py-4 text-center text-slate-400 italic">
+          no observations yet — run a /evaluate to populate layer slots
+        </td></tr>`;
+      status.textContent = "0 slots";
+      return;
+    }
+    for (const layer of body.layers) {
+      const badge = PHASE_BADGE[layer.phase] || "bg-slate-200 text-slate-700";
+      tbody.insertAdjacentHTML("beforeend", `
+        <tr class="border-b border-slate-100 hover:bg-slate-50">
+          <td class="py-1.5 pr-3 mono font-bold text-slate-700">${layer.layer}</td>
+          <td class="py-1.5 pr-3 mono text-slate-600 truncate max-w-xs" title="${layer.key}">${layer.key}</td>
+          <td class="py-1.5 pr-3"><span class="px-2 py-0.5 rounded text-[11px] font-semibold ${badge}">${layer.phase}</span></td>
+          <td class="py-1.5 pr-3 mono text-right">${layer.samples}</td>
+          <td class="py-1.5 pr-3 mono text-right text-slate-500">${layer.tpr.toFixed(3)}</td>
+          <td class="py-1.5 pr-3 mono text-right text-slate-500">${layer.fpr.toFixed(3)}</td>
+          <td class="py-1.5 pr-3 mono text-right text-slate-500">${layer.precision.toFixed(3)}</td>
+          <td class="py-1.5 mono text-right text-slate-500">${layer.override_rate.toFixed(3)}</td>
+        </tr>
+      `);
+    }
+    status.textContent = `${body.layers.length} layer slots`;
+  } catch (e) {
+    status.textContent = `error: ${e.message}`;
+    status.className = "text-xs ml-auto text-red-600 mono";
+  }
+}
+
 function wire() {
   $("btn-evaluate").addEventListener("click", evaluate);
   $("btn-demo").addEventListener("click", run_demo);
   $("btn-audit").addEventListener("click", load_chain);
   $("btn-attest").addEventListener("click", load_attestation);
+  $("btn-burnin").addEventListener("click", load_burnin);
   for (const b of document.querySelectorAll(".preset")) {
     b.addEventListener("click", () => apply_preset(b.dataset.preset));
   }
@@ -466,4 +516,5 @@ document.addEventListener("DOMContentLoaded", () => {
   render_atv_strip(null);
   service_check();
   load_attestation();
+  load_burnin();
 });

@@ -6,6 +6,30 @@
 
 ---
 
+## 진행 상태 (2026‑04‑21 업데이트)
+
+| Milestone | 상태 | 주요 성과 | 신규 테스트 |
+|---|---|---|---|
+| **M8** ATV‑2080‑v1 30 subfield 스키마 | ✅ 완료 | `schema.py` + `atv/builder.py` 전면 재작성. 19 SW encoder + HW band zero‑fill. `CostEfficiencyMetrics` 16 slot. ATVHeader에 schema_version/tier_profile/cost_attestation_profile/atv_hash 추가. **Breaking change** (cost_estimate shape) | +12 (177 → 176 total) |
+| **M9** Firewall 350/360/370 분리 | ✅ 완료 | `step350_approval` (notification dispatch), `step360_audit` (sign+append+cost_attestation_hint), `step370_exec` (PROCEED/SUPPRESS/DEFER 주석). `api/evaluate.py` 슬림화 | +9 (185) |
+| **M10** ATMU + Write‑Ahead Intent Log + Tool Outcome | ✅ 완료 | `atmu/{state_machine,intent_log,checkpoint,compensating}` + `POST /tool-outcome`. 2PC tentative→prepared→committed 흐름. 7 transaction states (APPENDIX B) + 합법 transition만 허용. 100‑record 동시성 안전 | +37 (222) |
+| **M11** 5‑layer Burn‑in + 4‑phase graduation | ✅ 완료 | `burnin/{phases,controller}` + `GET /burnin-status` + `POST /burnin/graduate` + `POST /burnin/label`. L1..L5 자동 슬롯 생성, ¶[0075] threshold (1000 samples / TPR≥0.95 FPR≤0.02 precision≥0.90 / override≤5%) | +21 (243) |
+| **M12** Cost Attestation Ledger + 3 divergence | 🔜 다음 | — | — |
+| **M13** sLLM attribution head | 🔜 | — | — |
+| **M14** AID auth table + circuit breaker | 🔜 | — | — |
+| **M15** 암호화 ATV 저널 + forensic replay | 🔜 | — | — |
+| **M16** HAM‑lite (stretch) | 🔜 | — | — |
+
+**현재 도커 컨테이너에 살아있는 새 endpoint**:
+`POST /tool-outcome` · `GET /burnin-status` · `POST /burnin/graduate` · `POST /burnin/label`
+
+**`/evaluate` step_traces 추가 항목**:
+`step350_approval.dispatch` (REQUIRE_APPROVAL 시) · `step360_audit.sign_and_append` (`cost_attestation_hint` boolean 포함) · `step370_exec.annotate` (PROCEED/SUPPRESS/DEFER) · `aegis.atmu.intent_log` (record_id 노출) · `aegis.burnin.composite_score` (composite anomaly score)
+
+**테스트**: pytest 243 passed · ruff clean · mypy strict 46 src files · 도커 e2e 모든 신규 path 통과
+
+---
+
 ## 0. Diff — 한 페이지 요약
 
 | 영역 | 현재 MVP | 특허 v7.10 | 조치 |
