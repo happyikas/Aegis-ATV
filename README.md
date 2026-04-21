@@ -1,11 +1,18 @@
 # AegisData T2 MVP
 
 A Python sidecar that wraps every AI-agent tool call in a 2,080-dimensional
-**Agent Trace Vector (ATV)**, runs it through a 5-step Action Firewall,
-asks an sLLM judge if the static rules don't decide it, then **Ed25519-signs**
-the result and chains it into a **Merkle-linked SQLite + JSONL audit log**.
+**Agent Trace Vector (ATV-2080-v1)**, runs it through a 7-stage Action
+Firewall, brackets the call in an **Agent Transaction Management Unit
+(ATMU)** Write-Ahead Intent Log, asks an sLLM judge when needed,
+**Ed25519-signs** every record, chains it into a **Merkle-linked
+audit log**, and feeds every observation into a **5-layer Burn-in
+controller** that progresses through Observation → Shadow → Assisted →
+Production.
 
-Implementation of the T2 tier described in `PLAN.md`.
+Implements the T2 (software-only) tier of AegisData provisional patent
+v7.10. The original 7-day MVP design is in [`PLAN.md`](PLAN.md); the
+patent-aligned re-plan and milestone status is in
+[`PLAN_v2.md`](PLAN_v2.md).
 
 ---
 
@@ -13,15 +20,36 @@ Implementation of the T2 tier described in `PLAN.md`.
 
 | Layer | Module | Notes |
 |---|---|---|
-| Schema | `aegis.schema` | `ATV-2080-v1` slice constants, Pydantic v2 models |
-| Vector | `aegis.atv.builder` + `embeddings` | 2080-D ATV; OpenAI / dummy / BGE backends |
-| Firewall | `aegis.firewall.{core, step310..step340}` | 5 steps + sLLM fallback |
+| Schema | `aegis.schema` | ATV-2080-v1, **30 subfields** per patent Appendix A; pydantic v2 models |
+| Vector | `aegis.atv.{builder, embeddings}` | OpenAI / dummy embedding backends; 19 SW encoders + HW zero-fill (T2) |
+| Firewall (310..340) | `aegis.firewall.{core, step310..step340}` | regex deny-list / blast / human / cost / policy+sLLM |
+| Firewall (350..370) | `aegis.firewall.{step350_approval, step360_audit, step370_exec}` | approval dispatch / sign+append / exec annotation |
+| ATMU | `aegis.atmu.{state_machine, intent_log, checkpoint, compensating}` | Write-Ahead Intent Log + 2-phase commit + 7 transaction states + compensation plans |
+| Burn-in | `aegis.burnin.{phases, controller}` | 5 layers (HW/tenant/topology/role/instance) × 4 phases with patent ¶[0075] graduation gates |
 | Judge | `aegis.judge.{base, haiku, dummy}` | Claude Haiku 4.5; dummy fallback when no key |
-| Sign | `aegis.sign.{ed25519, merkle}` | PEM PKCS8, canonical-JSON Merkle chain |
+| Sign | `aegis.sign.{ed25519, merkle}` | PEM PKCS8, canonical-JSON SHA3-256 + Merkle chain |
 | Audit | `aegis.audit.{sqlite_store, jsonl_store}` | WAL + lock + `BEGIN IMMEDIATE` |
-| API | `aegis.main`, `aegis.api.*` | `/healthz`, `/evaluate`, `/approve`, `/audit/{aid}` |
+| Code attestation | `aegis.attest.code_attestation` | L3/L4/L5 code+config+key hash signed at startup; surfaced via `/attestation` |
+| Pre-LLM safety | `tools/aegis_safety.py` (stdlib) | regex / OpenAI Moderations / Haiku classifier |
+| API | `aegis.main`, `aegis.api.*` | see endpoint table below |
 
-Hardware band (200-D, indices 1880..2080) is intentionally zero-filled — that's the T3 work.
+Hardware band (200-D, indices 1880..2079) is intentionally zero-filled in
+T2 per patent ¶[0042] — that's the T3 work.
+
+### Endpoints
+
+| Method | Path | Returns | Notes |
+|---|---|---|---|
+| GET | `/healthz` | `{ok, version, burn_in_id}` | liveness + current code-attestation hash |
+| POST | `/evaluate` | `Verdict` (decision/reason/atv_id/signature/step_traces) | full firewall + ATMU intent + audit append in one call |
+| POST | `/approve` | `{ok, atv_id, head}` | record human approval as a chained signed record |
+| POST | `/tool-outcome` | `{ok, record_id, current_state, tool_outcome}` | post-release outcome for an ATMU intent (M10) |
+| GET | `/audit/{aid}` | `{aid, head, length, chain_valid, chain_error, chain}` | full Merkle-chained signed records for one agent |
+| GET | `/attestation` | code-attestation measurement (L3/L4/L5 hashes + Ed25519 sig) | server software identity |
+| GET | `/burnin-status` | `{layers[…], expected_samples, weights}` | live Burn-in baseline maturity (M11) |
+| POST | `/burnin/graduate` | `{ok, layer_key, reason}` | manual phase advancement (409 if gates fail) |
+| POST | `/burnin/label` | `{ok}` | feed labelled ground-truth into TPR/FPR/precision counters |
+| GET | `/source/list` + `/source/peek` | code snippets | dashboard-only — used by Theater "Source-code paths" panel |
 
 ---
 
@@ -135,6 +163,15 @@ Audit chain for agent-demo-XXXX:
 
 ### `POST /evaluate`
 
+> **Breaking change in M8 (patent v7.10 alignment):** the `cost_estimate`
+> field switched from the legacy `{exp_bytes_write, exp_dollars,
+> confidence}` trio to the patent's 16-named-slot
+> `CostEfficiencyMetrics` shape (`input_token_count`,
+> `output_token_count`, `cumulative_dollars`,
+> `forecasted_cost_to_completion`, `budget_burn_rate`, `cache_hit_rate`,
+> `task_progress_score`, …). All fields default to 0; populate what you
+> can measure on the host.
+
 Request body (`ATVInput`):
 
 ```json
@@ -145,6 +182,9 @@ Request body (`ATVInput`):
     "tenant_id": "demo-tenant",
     "aid": "agent-42",
     "ats": "ATV-2080-v1",
+    "schema_version": "ATV-2080-v1",
+    "tier_profile": "T2",
+    "cost_attestation_profile": "software",
     "timestamp_ns": 1737172800000000000
   },
   "agent_state_text": "User asked for a file summary...",
@@ -154,9 +194,11 @@ Request body (`ATVInput`):
   "safety_flags": {"prompt_injection": 0.02},
   "memory_fingerprint": "sha3_256:abcdef01234567...",
   "cost_estimate": {
-    "exp_bytes_write": 1024,
-    "exp_dollars": 0.0001,
-    "confidence": 0.9
+    "input_token_count": 200,
+    "output_token_count": 80,
+    "cumulative_dollars": 0.001,
+    "forecasted_cost_to_completion": 0.01,
+    "budget_burn_rate": 0.05
   }
 }
 ```
@@ -171,14 +213,20 @@ Response (`Verdict`):
   "signature": "7a2c...",
   "confidence": 1.0,
   "step_traces": {
-    "aegis.firewall.step310_args.run":   "step310: ok (inj=0.02)",
-    "aegis.firewall.step320_blast.run":  "step320: blast=1 (tool=read_file)",
-    "aegis.firewall.step330_human.run":  "step330: ok (blast=1)",
-    "aegis.firewall.step335_cost.run":   "step335: ok (...)",
-    "aegis.firewall.step340_policy.run": "step340: allow match safe-read"
+    "aegis.firewall.step310_args.run":     "step310: ok (inj=0.02)",
+    "aegis.firewall.step320_blast.run":    "step320: blast=1 (tool=read_file)",
+    "aegis.firewall.step330_human.run":    "step330: ok (blast=1)",
+    "aegis.firewall.step335_cost.run":     "step335: ok (cum=0.001, forecast=0.01, ceiling=1.0)",
+    "aegis.firewall.step340_policy.run":   "step340: allow match safe-read",
+    "aegis.firewall.step370_exec.annotate":"step370: exec-recommendation=PROCEED",
+    "aegis.atmu.intent_log":               "intent_record_id=e4a09dae-7c44-...",
+    "aegis.burnin.composite_score":        "composite=0.000"
   }
 }
 ```
+
+The host SHOULD use the `intent_record_id` value from `step_traces` to
+post a follow-up `/tool-outcome` after running (or skipping) the tool.
 
 ### `POST /approve`
 
@@ -196,10 +244,56 @@ following a previous `REQUIRE_APPROVAL`):
 }
 ```
 
+### `POST /tool-outcome` (M10)
+
+After executing or skipping a tool, the host informs Aegis of the
+outcome so the ATMU intent record transitions out of `prepared` /
+`committed`:
+
+```json
+{
+  "record_id": "e4a09dae-7c44-...",
+  "status": "success",
+  "result_hash": "sha3-256-of-tool-output",
+  "side_effect_receipt": "txn-confirmation-id",
+  "follow_up_state": "committed",
+  "follow_up_reason": "human approved"
+}
+```
+
+Status ∈ `{success, failure, timeout, partial, compensated}`.
+`follow_up_state` ∈ `{prepared, committed, aborted, rolled-back, compensated, quarantined}`
+and is validated by the state machine — illegal transitions return 409.
+
 ### `GET /audit/{aid}`
 
 Returns the full Merkle-chained signed record list for one agent, plus a
-`chain_valid` flag (server re-runs `verify_chain` so callers don't have to).
+`chain_valid` flag (server re-runs `verify_chain` so callers don't have
+to). Each record carries the M11 `cost_attestation_hint` boolean so a
+future Cost Attestation Ledger can index cost-influenced records.
+
+### `GET /burnin-status` (M11)
+
+Returns the per-layer slot table for the 5-layer Burn-in controller:
+
+```json
+{
+  "layers": [
+    {"key":"L1","layer":"L1","tenant_id":null,"role_id":null,"aid":null,
+     "phase":"observation","samples":3,"tpr":0.0,"fpr":0.0,
+     "precision":0.0,"override_rate":0.0,"transitions":[]},
+    {"key":"L2:demo-tenant","layer":"L2","tenant_id":"demo-tenant",...},
+    ...
+  ],
+  "expected_samples":{"L1":1000,"L2":5000,"L3":2000,"L4":1000,"L5":500},
+  "weights":{"L1":0.20,"L2":0.20,"L3":0.20,"L4":0.20,"L5":0.20}
+}
+```
+
+`POST /burnin/graduate {layer_key}` advances one slot if its phase gates
+are met (409 with reason otherwise). `POST /burnin/label {inp, verdict,
+ground_truth, was_human_override?}` feeds labelled outcomes into
+TPR/FPR/precision so Shadow → Assisted graduation can be evaluated.
 
 ---
 
@@ -209,10 +303,10 @@ Returns the full Merkle-chained signed record list for one agent, plus a
 uv run pytest --cov=aegis
 ```
 
-* **101 tests** (90 unit + 11 integration)
-* **Coverage 95%** (PLAN DoD: ≥70%)
-* No network: respx mocks `api.anthropic.com`; OpenAI is unused under `dummy` provider
-* Concurrency tests cover 100-record SQLite chain and 200-line JSONL appends
+* **243 tests** (M8: +12 ATV builder · M9: +9 firewall split · M10: +37 ATMU · M11: +21 burn-in, on top of the original 164)
+* **Strict mypy** over 46 source files
+* **Concurrency**: 100-record SQLite audit chain, 200-line JSONL, 100-intent ATMU WAL all pass under thread contention
+* **No network in tests**: respx mocks `api.anthropic.com`; OpenAI is unused under `dummy` provider
 
 ---
 

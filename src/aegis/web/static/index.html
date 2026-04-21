@@ -206,6 +206,44 @@
     <ol id="chain-list" class="space-y-2 text-sm"></ol>
   </section>
 
+  <!-- ========= Burn-in baseline (M11 statistical 5-layer / 4-phase) ========= -->
+  <section class="col-span-12 bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+    <div class="flex items-center gap-4 mb-3">
+      <h2 class="font-semibold text-slate-700">Burn-in baseline
+        <span class="text-xs text-slate-400 font-normal">/burnin-status</span>
+      </h2>
+      <button id="btn-burnin"
+        class="bg-slate-700 hover:bg-slate-800 text-white text-sm px-3 py-1.5 rounded">
+        Re-fetch
+      </button>
+      <span id="burnin-status" class="text-xs text-slate-400 mono ml-auto"></span>
+    </div>
+    <div class="text-xs text-slate-600 mb-3 leading-5">
+      Patent §7 5-layer × 4-phase controller. Each layer slot graduates
+      <span class="mono">observation → shadow → assisted → production</span>
+      gated by <span class="mono">samples ≥ 1000</span>, then
+      <span class="mono">TPR≥0.95 / FPR≤0.02 / precision≥0.90</span>, then
+      <span class="mono">override-rate ≤ 5%</span>.
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-xs">
+        <thead class="text-slate-500 uppercase tracking-wide text-[10px]">
+          <tr class="text-left border-b border-slate-200">
+            <th class="py-1.5 pr-3">layer</th>
+            <th class="py-1.5 pr-3">key</th>
+            <th class="py-1.5 pr-3">phase</th>
+            <th class="py-1.5 pr-3 text-right">samples</th>
+            <th class="py-1.5 pr-3 text-right">TPR</th>
+            <th class="py-1.5 pr-3 text-right">FPR</th>
+            <th class="py-1.5 pr-3 text-right">precision</th>
+            <th class="py-1.5 text-right">override</th>
+          </tr>
+        </thead>
+        <tbody id="burnin-rows"></tbody>
+      </table>
+    </div>
+  </section>
+
   <!-- ========= Burn-in attestation ========= -->
   <section class="col-span-12 bg-white rounded-xl shadow-sm border border-slate-200 p-5">
     <div class="flex items-center gap-4 mb-3">

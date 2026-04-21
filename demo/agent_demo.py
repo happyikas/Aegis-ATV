@@ -50,6 +50,38 @@ def _verdict_color(decision: str) -> str:
     }.get(decision, "0")
 
 
+def _intent_id_from_verdict(verdict: dict[str, Any]) -> str | None:
+    """The /evaluate response surfaces ATMU's record_id in step_traces."""
+    for v in verdict.get("step_traces", {}).values():
+        if v.startswith("intent_record_id="):
+            return v.split("=", 1)[1]
+    return None
+
+
+def post_tool_outcome(
+    *,
+    record_id: str,
+    status: str,                            # success | failure | timeout | partial | compensated
+    result_hash: str,
+    side_effect_receipt: str | None = None,
+    follow_up_state: str | None = None,     # committed | aborted | rolled-back | compensated
+    follow_up_reason: str | None = None,
+) -> dict[str, Any]:
+    """Inform Aegis of the post-release outcome via /tool-outcome (M10)."""
+    body: dict[str, Any] = {
+        "record_id": record_id, "status": status, "result_hash": result_hash,
+    }
+    if side_effect_receipt:
+        body["side_effect_receipt"] = side_effect_receipt
+    if follow_up_state:
+        body["follow_up_state"] = follow_up_state
+        body["follow_up_reason"] = follow_up_reason or "post-outcome transition"
+    r = httpx.post(f"{AEGIS_URL}/tool-outcome", json=body, timeout=10.0)
+    if r.status_code >= 400:
+        return {"ok": False, "error": r.text}
+    return r.json()
+
+
 def ask_aegis(
     *,
     tool_name: str,
@@ -151,9 +183,36 @@ def run_stub(aid: str, trace_id: str) -> list[dict[str, Any]]:
         )
         decision = v["decision"]
         color = _verdict_color(decision)
+
+        # M10: ATMU intent record id surfaced via step_traces.
+        intent_id = _intent_id_from_verdict(v)
+        atmu_state = "?"
+        if intent_id is not None:
+            if decision == "ALLOW":
+                # Tool "ran" successfully → mark outcome committed.
+                outcome = post_tool_outcome(
+                    record_id=intent_id, status="success",
+                    result_hash=f"stub-{i:02d}",
+                    side_effect_receipt=f"stub-receipt-{i:02d}",
+                )
+                atmu_state = outcome.get("current_state", "?")
+            elif decision == "REQUIRE_APPROVAL":
+                # Stub mode: the demo human "approves" → committed.
+                outcome = post_tool_outcome(
+                    record_id=intent_id, status="success",
+                    result_hash=f"stub-{i:02d}",
+                    follow_up_state="committed",
+                    follow_up_reason="stub demo: human approved",
+                )
+                atmu_state = outcome.get("current_state", "?")
+            else:
+                # BLOCK: intent already aborted by the firewall.
+                atmu_state = "aborted"
+
         print(
             f"  {i}. {_c('1', call['name']):<28} → "
-            f"{_c(color, decision):<25} "
+            f"{_c(color, decision):<23} "
+            f"atmu={_c('2', atmu_state):<13} "
             f"({v['reason']})"
         )
         results.append(v)
@@ -291,9 +350,32 @@ def run_live(aid: str, trace_id: str) -> list[dict[str, Any]]:
             )
             decision = v["decision"]
             color = _verdict_color(decision)
+
+            # M10: surface ATMU intent state per call.
+            intent_id = _intent_id_from_verdict(v)
+            atmu_state = "?"
+            if intent_id is not None:
+                if decision == "ALLOW":
+                    out = post_tool_outcome(
+                        record_id=intent_id, status="success",
+                        result_hash=f"live-{call_idx:02d}",
+                    )
+                    atmu_state = out.get("current_state", "?")
+                elif decision == "REQUIRE_APPROVAL":
+                    out = post_tool_outcome(
+                        record_id=intent_id, status="success",
+                        result_hash=f"live-{call_idx:02d}",
+                        follow_up_state="committed",
+                        follow_up_reason="live demo: human approved",
+                    )
+                    atmu_state = out.get("current_state", "?")
+                else:
+                    atmu_state = "aborted"
+
             print(
                 f"  {call_idx}. {_c('1', block.name):<28} → "
-                f"{_c(color, decision):<25} "
+                f"{_c(color, decision):<23} "
+                f"atmu={_c('2', atmu_state):<13} "
                 f"({v['reason']})"
             )
             results.append(v)
@@ -358,6 +440,22 @@ def main() -> int:
     print(f"  chain_valid = {_c('32' if chain['chain_valid'] else '31', str(chain['chain_valid']))}")
     if chain["chain_error"]:
         print(f"  error       = {chain['chain_error']}")
+
+    # M11: Burn-in controller — show layer slots that this scenario bumped.
+    try:
+        burnin = httpx.get(f"{AEGIS_URL}/burnin-status", timeout=5.0).json()
+        scoped = [
+            layer for layer in burnin.get("layers", [])
+            if (layer.get("aid") in (None, aid) and (layer.get("tenant_id") in (None, TENANT)))
+        ]
+        if scoped:
+            print(_c("1", f"\nBurn-in layer slots touched by this run ({len(scoped)} of {len(burnin['layers'])} total):"))
+            for layer in scoped:
+                key = layer["key"][:38]
+                print(f"  {key:<40s} phase={_c('2', layer['phase']):<13s} samples={layer['samples']}")
+    except httpx.HTTPError:
+        pass
+
     return 0
 
 
