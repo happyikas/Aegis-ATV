@@ -18,6 +18,8 @@ dist/
 keys/*.pem
 keys/*.pub
 data/*.sqlite
+data/*.sqlite-wal
+data/*.sqlite-shm
 data/*.jsonl
 
 # OS
