@@ -1,8 +1,17 @@
-"""Step 335 — Forecasted Cost (PLAN 6.4).
+"""Step 335 — Forecasted-Cost Gating (patent ¶[0059] + Claim 33).
 
-Per-tenant budget table (MVP: in-process dict). Real product would query a
-DB. Any of bytes/dollars over budget OR confidence below 0.3 escalates to
-REQUIRE_APPROVAL.
+Reads the ``budget_burn_rate``, ``forecasted_cost_to_completion``, and
+``cumulative_dollars`` slots of the cost_efficiency_metrics subfield
+and compares against per-tenant budget ceilings:
+
+    forecast > ceiling          → REQUIRE_APPROVAL  (over-ceiling)
+    cumulative > ceiling        → REQUIRE_APPROVAL  (already exceeded)
+    forecast > ceiling × ALERT  → pass-with-warning trace
+    otherwise                   → pass
+
+In hardware-codesigned (T3) embodiments, the cost-gate verdict
+additionally considers the cost-linkage divergence metrics within the
+hw_cost_attestation subfield. T2 sees only the SW side.
 """
 
 from __future__ import annotations
@@ -12,40 +21,54 @@ import numpy as np
 from aegis.firewall.core import FirewallContext, StepResult
 from aegis.schema import ATVInput
 
+# Per-tenant budget ceilings, in dollars per task. Real product reads from a
+# config service or database.
 TENANT_BUDGETS: dict[str, dict[str, float]] = {
-    "demo-tenant": {"bytes": 1e9, "dollars": 1.0, "time_ms": 60_000},
+    "demo-tenant": {"dollars": 1.0},
 }
+DEFAULT_BUDGET: dict[str, float] = {"dollars": 1.0}
 
-DEFAULT_BUDGET: dict[str, float] = {"bytes": 1e9, "dollars": 1.0, "time_ms": 60_000}
-LOW_CONFIDENCE_THRESHOLD = 0.3
+# Ratio of ceiling at which step 335 emits a 'approaching' warning.
+APPROACHING_FRACTION = 0.8
 
 
 def run(atv: np.ndarray, inp: ATVInput, ctx: FirewallContext) -> StepResult:
     budget = TENANT_BUDGETS.get(inp.header.tenant_id, DEFAULT_BUDGET)
-    ce = inp.cost_estimate
+    ceiling = float(budget.get("dollars", DEFAULT_BUDGET["dollars"]))
 
-    if ce.exp_bytes_write > budget["bytes"]:
+    ce = inp.cost_estimate
+    forecast = float(ce.forecasted_cost_to_completion)
+    cumulative = float(ce.cumulative_dollars)
+    burn = float(ce.budget_burn_rate)
+
+    # Already over the ceiling — escalate.
+    if cumulative > ceiling:
         return StepResult(
             "REQUIRE_APPROVAL",
-            f"exp_bytes_write {ce.exp_bytes_write:.0f} > budget {budget['bytes']:.0f}",
-            "step335: byte budget exceeded",
+            f"cumulative_dollars {cumulative:.4f} > budget {ceiling:.4f}",
+            "step335: cumulative cost exceeded ceiling",
         )
-    if ce.exp_dollars > budget["dollars"]:
+
+    # Forecast predicts overrun — patent: gate on forecast, not just cumulative.
+    if forecast > 0 and forecast > ceiling:
         return StepResult(
             "REQUIRE_APPROVAL",
-            f"exp_dollars {ce.exp_dollars:.4f} > budget {budget['dollars']:.4f}",
-            "step335: dollar budget exceeded",
+            f"forecasted_cost_to_completion {forecast:.4f} > budget {ceiling:.4f}",
+            "step335: forecast over ceiling",
         )
-    if ce.confidence < LOW_CONFIDENCE_THRESHOLD:
+
+    # Approaching — pass but record the alert in the trace.
+    if forecast > 0 and forecast > APPROACHING_FRACTION * ceiling:
         return StepResult(
-            "REQUIRE_APPROVAL",
-            f"cost confidence too low: {ce.confidence:.2f}",
-            "step335: low cost confidence",
+            None,
+            "",
+            f"step335: approaching ceiling (forecast {forecast:.4f} / "
+            f"ceiling {ceiling:.4f}, burn {burn:.2f})",
         )
 
     return StepResult(
         None,
         "",
-        f"step335: ok (bytes={ce.exp_bytes_write:.0f}, $={ce.exp_dollars:.4f}, "
-        f"conf={ce.confidence:.2f})",
+        f"step335: ok (cum={cumulative:.4f}, forecast={forecast:.4f}, "
+        f"ceiling={ceiling:.4f}, burn={burn:.2f})",
     )

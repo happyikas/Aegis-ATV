@@ -46,8 +46,9 @@ def atv_summary_for_llm(inp: ATVInput) -> str:
         f"Tenant: {inp.header.tenant_id}\n"
         f"Plan: {inp.plan_text[:300]}\n"
         f"Safety scores: {inp.safety_flags}\n"
-        f"Cost estimate: bytes={inp.cost_estimate.exp_bytes_write}, "
-        f"$={inp.cost_estimate.exp_dollars}"
+        f"Cost estimate: tokens_in={inp.cost_estimate.input_token_count:.0f}, "
+        f"$={inp.cost_estimate.cumulative_dollars:.4f}, "
+        f"forecast=${inp.cost_estimate.forecasted_cost_to_completion:.4f}"
     )
 
 

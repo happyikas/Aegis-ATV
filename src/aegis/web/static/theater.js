@@ -469,6 +469,11 @@ const state = {
 // ---------- /evaluate call ----------
 async function evaluate_call(step) {
   const c = step.call;
+  // ATV-2080-v1 payload. scenario data uses legacy `bytes/dollars/conf`
+  // keys; we translate those into the CostEfficiencyMetrics shape so
+  // cost-budget scenarios (5GB context, etc.) still trigger step 335.
+  const forecastFromBytes = (c.bytes ?? 0) > 1e9 ? 5.0 : 0.01;
+  const forecastFromDollars = (c.dollars ?? 0) > 0.1 ? (c.dollars * 50) : 0.01;
   const payload = {
     header: {
       trace_id: state.trace,
@@ -476,6 +481,9 @@ async function evaluate_call(step) {
       tenant_id: "demo-tenant",
       aid: state.aid,
       ats: "ATV-2080-v1",
+      schema_version: "ATV-2080-v1",
+      tier_profile: "T2",
+      cost_attestation_profile: "software",
       timestamp_ns: Date.now() * 1_000_000,
     },
     agent_state_text: c.state || "",
@@ -484,9 +492,10 @@ async function evaluate_call(step) {
     tool_args_json: c.args,
     safety_flags: { prompt_injection: c.inj ?? 0, pii_exposure: c.pii ?? 0 },
     cost_estimate: {
-      exp_bytes_write: c.bytes ?? 0,
-      exp_dollars: c.dollars ?? 0,
-      confidence: c.conf ?? 0.9,
+      input_token_count: (c.args || "").length / 4,
+      cumulative_dollars: c.dollars ?? 0.001,
+      forecasted_cost_to_completion: Math.max(forecastFromBytes, forecastFromDollars),
+      budget_burn_rate: (c.conf ?? 0.9) < 0.3 ? 0.95 : 0.2,
     },
   };
   const t0 = performance.now();

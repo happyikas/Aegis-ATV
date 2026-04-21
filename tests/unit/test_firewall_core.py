@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from aegis.firewall.core import FirewallContext, StepResult, run_firewall
-from aegis.schema import CostEfficiency
+from aegis.schema import CostEfficiencyMetrics
 from tests.unit._firewall_helpers import ZERO_ATV, make_input
 
 
@@ -51,7 +51,7 @@ def test_default_pipeline_clean_request_allows() -> None:
     inp = make_input(
         tool_name="read_file",
         tool_args_json='{"path":"./data/report.txt"}',
-        cost=CostEfficiency(exp_bytes_write=1024, exp_dollars=0.01, confidence=0.9),
+        cost=CostEfficiencyMetrics(cumulative_dollars=0.01, forecasted_cost_to_completion=0.05),
     )
     v = run_firewall(ZERO_ATV, inp, atv_id="abc")
     assert v.decision == "ALLOW"

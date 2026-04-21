@@ -25,7 +25,7 @@ def _payload(aid: str, *, tool: str = "read_file", args: str = '{"path":"./data/
         "tool_name": tool,
         "tool_args_json": args,
         "safety_flags": {},
-        "cost_estimate": {"exp_dollars": 0.001, "confidence": 0.9},
+        "cost_estimate": {"cumulative_dollars": 0.001, "forecasted_cost_to_completion": 0.01},
     }
 
 
