@@ -1,9 +1,9 @@
 """Shared pytest fixtures + safe environment.
 
 Forces dummy embedding/judge so tests never reach the network, and points
-every filesystem-touching setting (signing key, audit DB, JSONL) at a
-session-scoped temp dir so importing ``aegis.main`` doesn't litter the
-repo with ./keys/ or ./data/ files.
+every filesystem-touching setting (signing key, audit DB, JSONL, ATMU
+intent log) at a session-scoped temp dir so importing ``aegis.main``
+doesn't litter the repo with ./keys/ or ./data/ files.
 """
 
 from __future__ import annotations
@@ -22,11 +22,13 @@ os.environ.setdefault("AEGIS_SIGNING_KEY_PATH", str(_TMP_ROOT / "ed25519.pem"))
 os.environ.setdefault("AEGIS_PUBLIC_KEY_PATH", str(_TMP_ROOT / "ed25519.pub"))
 os.environ.setdefault("AEGIS_AUDIT_DB", ":memory:")
 os.environ.setdefault("AEGIS_AUDIT_JSONL", str(_TMP_ROOT / "audit.jsonl"))
+os.environ.setdefault("AEGIS_INTENT_LOG_DB", ":memory:")
 
 
 @pytest.fixture
 def aegis_app(tmp_path: Path) -> Iterator[object]:
-    """Build a fresh FastAPI app per test, isolated key/db/log under tmp_path."""
+    """Build a fresh FastAPI app per test, isolated stores under tmp_path."""
+    from aegis.atmu import IntentLog
     from aegis.audit.jsonl_store import JsonlStore
     from aegis.audit.sqlite_store import AuditDB
     from aegis.main import create_app
@@ -35,5 +37,7 @@ def aegis_app(tmp_path: Path) -> Iterator[object]:
     key = load_or_create_key(tmp_path / "ed25519.pem")
     db = AuditDB(":memory:")
     log = JsonlStore(tmp_path / "audit.jsonl")
-    yield create_app(key=key, db=db, log=log)
+    intent_log = IntentLog(":memory:")
+    yield create_app(key=key, db=db, log=log, intent_log=intent_log)
     db.close()
+    intent_log.close()
