@@ -6,7 +6,7 @@ import time
 
 import numpy as np
 
-from aegis.schema import ATVHeader, ATVInput, CostEfficiency
+from aegis.schema import ATVHeader, ATVInput, CostEfficiencyMetrics
 
 ZERO_ATV = np.zeros(2080, dtype=np.float32)
 
@@ -17,7 +17,7 @@ def make_input(
     tool_args_json: str = '{"path":"./data/x.txt"}',
     tenant_id: str = "demo-tenant",
     safety_flags: dict[str, float] | None = None,
-    cost: CostEfficiency | None = None,
+    cost: CostEfficiencyMetrics | None = None,
 ) -> ATVInput:
     return ATVInput(
         header=ATVHeader(
@@ -32,5 +32,5 @@ def make_input(
         tool_name=tool_name,
         tool_args_json=tool_args_json,
         safety_flags=safety_flags or {},
-        cost_estimate=cost or CostEfficiency(),
+        cost_estimate=cost or CostEfficiencyMetrics(),
     )

@@ -93,20 +93,6 @@ def _build_payload(event: dict) -> dict:
 
     aegis_tool = TOOL_MAP.get(tool_name, "call_external_api")
 
-    # Heuristic cost estimate per tool family.
-    cost: dict[str, float] = {"exp_dollars": 0.0001, "confidence": 0.7}
-    if aegis_tool == "write_file":
-        body = (
-            tool_input.get("content")
-            or tool_input.get("new_string")
-            or tool_input.get("file_text")
-            or ""
-        )
-        cost["exp_bytes_write"] = float(len(str(body)))
-    elif aegis_tool == "execute_shell":
-        cost["exp_bytes_write"] = 0.0
-        cost["exp_dollars"] = 0.001  # shell side-effects unbounded — bias slightly higher
-
     args_json = json.dumps(tool_input)[:4000]
     plan_text = f"execute Claude Code tool: {tool_name}"
 
@@ -115,6 +101,17 @@ def _build_payload(event: dict) -> dict:
     # default 'dummy' is offline regex, no API key needed.
     safety_flags = classify_call(tool_args_json=args_json, plan_text=plan_text)
 
+    # ATV-2080-v1 CostEfficiencyMetrics shape (16 named slots, ¶[0045]).
+    # The hook estimates only what it can cheaply observe; rest stay 0.
+    cost_estimate: dict[str, float] = {
+        "input_token_count": float(len(args_json)) / 4.0,            # rough: ~4 chars/token
+        "output_token_count": 0.0,
+        "cumulative_dollars": 0.0001,
+        "forecasted_cost_to_completion": 0.001,
+    }
+    if aegis_tool == "execute_shell":
+        cost_estimate["forecasted_cost_to_completion"] = 0.01
+
     return {
         "header": {
             "trace_id": session_id,
@@ -122,6 +119,9 @@ def _build_payload(event: dict) -> dict:
             "tenant_id": TENANT,
             "aid": f"claude-code-{session_id[:8]}",
             "ats": "ATV-2080-v1",
+            "schema_version": "ATV-2080-v1",
+            "tier_profile": "T2",
+            "cost_attestation_profile": "software",
             "timestamp_ns": time.time_ns(),
         },
         "agent_state_text": f"claude-code session {session_id}",
@@ -130,7 +130,7 @@ def _build_payload(event: dict) -> dict:
         # Cap arg JSON to keep the embedding call cheap & avoid token blowup.
         "tool_args_json": args_json,
         "safety_flags": safety_flags,
-        "cost_estimate": cost,
+        "cost_estimate": cost_estimate,
     }
 
 

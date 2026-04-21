@@ -62,7 +62,7 @@ def test_burn_in_id_propagates_into_audit_chain(aegis_app: FastAPI) -> None:
             "tool_name": "read_file",
             "tool_args_json": '{"path":"./data/x.txt"}',
             "safety_flags": {},
-            "cost_estimate": {"exp_dollars": 0.001, "confidence": 0.9},
+            "cost_estimate": {"cumulative_dollars": 0.001, "forecasted_cost_to_completion": 0.01},
         },
     )
     assert r.status_code == 200
@@ -95,7 +95,7 @@ def test_caller_supplied_burn_in_wins(aegis_app: FastAPI) -> None:
             "tool_name": "read_file",
             "tool_args_json": '{"path":"./data/x.txt"}',
             "safety_flags": {},
-            "cost_estimate": {"exp_dollars": 0.001, "confidence": 0.9},
+            "cost_estimate": {"cumulative_dollars": 0.001, "forecasted_cost_to_completion": 0.01},
         },
     )
     assert r.status_code == 200

@@ -32,8 +32,11 @@ def _payload(
         "tool_name": tool_name,
         "tool_args_json": tool_args_json,
         "safety_flags": safety_flags or {},
-        "cost_estimate": cost
-        or {"exp_bytes_write": 1024, "exp_dollars": 0.001, "confidence": 0.9},
+        "cost_estimate": cost or {
+            "input_token_count": 100.0,
+            "cumulative_dollars": 0.001,
+            "forecasted_cost_to_completion": 0.01,
+        },
     }
 
 
@@ -99,7 +102,12 @@ def test_evaluate_require_approval_for_budget_overrun(aegis_app: FastAPI) -> Non
         json=_payload(
             tool_name="write_file",
             tool_args_json='{"path":"./data/big.bin"}',
-            cost={"exp_bytes_write": 5e9, "exp_dollars": 0.01, "confidence": 0.9},
+            # Forecasted cost over $1.0 ceiling → step 335 APPROVAL.
+            cost={
+                "cumulative_dollars": 0.05,
+                "forecasted_cost_to_completion": 5.0,
+                "budget_burn_rate": 0.9,
+            },
         ),
     )
     assert r.status_code == 200
