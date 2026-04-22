@@ -38,6 +38,58 @@ def test_haiku_parses_clean_json_block() -> None:
     assert v.decision == "BLOCK"
     assert v.confidence == pytest.approx(0.92)
     assert "exfil" in v.reason
+    # No attribution in this response → empty dict (M13 default)
+    assert v.subfield_attribution == {}
+
+
+@respx.mock
+def test_haiku_parses_attribution_head() -> None:
+    """M13: Haiku may emit per-subfield contribution scores."""
+    from aegis.judge.haiku import HaikuJudge
+
+    body = json.dumps({
+        "decision": "BLOCK",
+        "confidence": 0.95,
+        "reason": "destructive shell pattern",
+        "attribution": {
+            "tool_arg_inspection": 0.9,
+            "action_blast_radius": 0.7,
+            "agent_state_embedding": 0.1,
+        },
+    })
+    respx.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(200, json=_anthropic_response(body))
+    )
+    v = HaikuJudge().evaluate("?")
+    assert v.subfield_attribution == {
+        "tool_arg_inspection": 0.9,
+        "action_blast_radius": 0.7,
+        "agent_state_embedding": 0.1,
+    }
+
+
+@respx.mock
+def test_haiku_clamps_attribution_scores_to_unit_interval() -> None:
+    from aegis.judge.haiku import HaikuJudge
+
+    body = json.dumps({
+        "decision": "ALLOW",
+        "confidence": 0.8,
+        "reason": "ok",
+        "attribution": {
+            "tool_arg_inspection": 1.5,    # above 1.0 → clamp to 1.0
+            "action_history": -0.2,        # below 0.0 → clamp to 0.0
+            "garbage_string": "not a number",  # ignored
+        },
+    })
+    respx.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(200, json=_anthropic_response(body))
+    )
+    v = HaikuJudge().evaluate("?")
+    assert v.subfield_attribution == {
+        "tool_arg_inspection": 1.0,
+        "action_history": 0.0,
+    }
 
 
 @respx.mock

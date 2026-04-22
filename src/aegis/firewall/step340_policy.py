@@ -73,20 +73,29 @@ def run(atv: np.ndarray, inp: ATVInput, ctx: FirewallContext) -> StepResult:
 
     judge = get_judge()
     jv = judge.evaluate(atv_summary_for_llm(inp))
+
+    # M13: surface top-3 attributed subfields in the trace so dashboards
+    # and the Theater pipeline panel can render the attention head.
+    top_attr = ""
+    if jv.subfield_attribution:
+        top = sorted(jv.subfield_attribution.items(), key=lambda kv: -kv[1])[:3]
+        top_attr = " attr=[" + ", ".join(f"{k}:{v:.2f}" for k, v in top) + "]"
+        ctx.extras["subfield_attribution"] = jv.subfield_attribution
+
     if jv.decision == "ALLOW":
         return StepResult(
             None,
             "",
-            f"step340: sLLM allow (conf={jv.confidence:.2f})",
+            f"step340: sLLM allow (conf={jv.confidence:.2f}){top_attr}",
         )
     if jv.decision == "BLOCK":
         return StepResult(
             "BLOCK",
             jv.reason or "sLLM judge: block",
-            f"step340: sLLM block (conf={jv.confidence:.2f})",
+            f"step340: sLLM block (conf={jv.confidence:.2f}){top_attr}",
         )
     return StepResult(
         "REQUIRE_APPROVAL",
         jv.reason or "sLLM judge: approval",
-        f"step340: sLLM approval (conf={jv.confidence:.2f})",
+        f"step340: sLLM approval (conf={jv.confidence:.2f}){top_attr}",
     )
