@@ -1,0 +1,13 @@
+Every time I leave Claude Code or Cursor unattended on a long task, I have the same thought: what is actually preventing this thing from doing something stupid? The honest answer in most setups is "a regex denylist that the model itself enforces." That's not a firewall. That's a sticker.
+
+So I built a real firewall.
+
+AegisData T2 is a Python sidecar that sits between your agent and its tools. Every call goes through a seven-stage pipeline. Argument inspection catches obvious shell injection. AID authorization checks if this agent is even allowed to use this tool. Blast radius escalates dangerous operations to human approval. Cost forecast gates anything over your budget. The policy engine matches against rules, and falls back to a small LLM judge — Claude Haiku in this build — that returns a verdict plus per-subfield attribution scores.
+
+Every verdict gets Ed25519-signed and Merkle-chained into a tamper-evident audit log. Every record also lands in an AES 256 GCM encrypted journal where the cleartext header is used as additional-authenticated-data — so flipping any byte fails decrypt.
+
+There's a per-AID circuit breaker that auto-quarantines runaway agents. There's a Hierarchical Agent Memory store with bound-AAD encryption. And there's a 5-layer Burn-in controller that tracks statistical drift per tenant, role, and instance.
+
+Three hundred and twenty-six tests passing, mypy strict over sixty-one source files, runs in one Docker container.
+
+Repo and full architecture write-up in the description.
