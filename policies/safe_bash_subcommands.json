@@ -1,0 +1,87 @@
+{
+  "_comment": "Bash sub-command blast-radius classification (DOGFOOD Rec #1). When a tool maps to execute_shell, step 320 parses the first word(s) of the command and looks it up here. Lookup order: (1) two-word match e.g. 'git push' → 8; (2) one-word match e.g. 'git' → falls through to its category; (3) fallback to default_blast.",
+  "_schema_version": "v1",
+  "default_blast": 8,
+
+  "two_word_overrides": {
+    "git push": 8,
+    "git push --force": 9,
+    "git rebase": 6,
+    "git reset --hard": 7,
+    "git clean -fd": 6,
+    "git stash drop": 5,
+    "git tag -d": 4,
+    "git branch -D": 5,
+    "npm publish": 8,
+    "npm install": 5,
+    "yarn publish": 8,
+    "cargo publish": 8,
+    "docker push": 7,
+    "docker run": 7,
+    "docker exec": 6,
+    "docker rm": 5,
+    "docker rmi": 5,
+    "kubectl apply": 7,
+    "kubectl delete": 8,
+    "kubectl exec": 7
+  },
+
+  "categories": {
+    "read_only": {
+      "blast": 2,
+      "commands": [
+        "ls", "cat", "grep", "rg", "find", "locate", "fd",
+        "pwd", "which", "whereis", "type",
+        "echo", "printf",
+        "wc", "head", "tail", "less", "more",
+        "file", "stat", "du", "df",
+        "env", "printenv", "date", "uname", "whoami", "id", "hostname", "uptime",
+        "git", "ps",
+        "ping", "traceroute", "dig", "nslookup", "host",
+        "diff", "cmp", "md5sum", "sha256sum", "sha3sum",
+        "true", "false", "test", "[", "expr",
+        "tree",
+        "jq", "yq", "xmlstarlet",
+        "awk", "sed",
+        "tar -t", "tar -tf", "unzip -l", "zip -l",
+        "history", "alias", "command",
+        "open", "code", "vim", "nano"
+      ]
+    },
+    "local_mutation": {
+      "blast": 5,
+      "commands": [
+        "mkdir", "rmdir", "touch",
+        "cp", "mv", "rm", "ln",
+        "chmod", "chown", "chgrp",
+        "tar", "gzip", "gunzip", "bzip2", "bunzip2", "zip", "unzip", "xz", "unxz",
+        "make", "cmake", "ninja",
+        "uv", "pip", "pip3", "pipx", "poetry",
+        "yarn", "pnpm",
+        "cargo build", "go build", "go test", "go mod",
+        "pytest", "ruff", "mypy", "black", "isort", "flake8",
+        "tee"
+      ]
+    },
+    "side_effecting": {
+      "blast": 8,
+      "commands": [
+        "curl", "wget", "httpie", "http",
+        "ssh", "scp", "rsync", "sftp", "ftp", "telnet", "nc", "ncat",
+        "kubectl", "helm",
+        "ftp", "lftp",
+        "kill", "killall", "pkill",
+        "shutdown", "reboot", "halt",
+        "systemctl", "service", "launchctl",
+        "crontab", "at",
+        "iptables", "ufw", "pfctl",
+        "mount", "umount",
+        "dd",
+        "fdisk", "parted", "mkfs",
+        "useradd", "userdel", "groupadd", "groupdel",
+        "passwd",
+        "su"
+      ]
+    }
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "_comment": "Per-path sensitivity classification (DOGFOOD Rec #2). step 310 extracts a path from tool_args_json and matches it against these glob patterns. Order: (1) `block.exceptions` win over `block.patterns` (so id_*.pub is allowed even though id_* is denied); (2) block patterns -> BLOCK; (3) approve patterns -> REQUIRE_APPROVAL; (4) else continue. Globs use fnmatch syntax with `~/` expansion.",
+  "_schema_version": "v1",
+
+  "block": {
+    "patterns": [
+      "~/.aws/credentials",
+      "~/.aws/config",
+      "~/.ssh/id_rsa",
+      "~/.ssh/id_dsa",
+      "~/.ssh/id_ecdsa",
+      "~/.ssh/id_ed25519",
+      "~/.ssh/identity",
+      "~/.ssh/agent",
+      "/etc/shadow",
+      "/etc/sudoers",
+      "/etc/sudoers.d/*",
+      "~/.kube/config",
+      "~/.docker/config.json",
+      "~/.gnupg/private-keys-v1.d/*",
+      "~/.gnupg/secring.gpg",
+      "~/.password-store/**",
+      "**/*.pem",
+      "**/*.p12",
+      "**/*.pfx",
+      "**/.npmrc",
+      "**/.pypirc",
+      "**/credentials",
+      "**/credentials.json"
+    ],
+    "exceptions": [
+      "~/.ssh/id_*.pub",
+      "**/public.pem",
+      "**/cert.pem",
+      "**/*.crt",
+      "**/aegis-mvp/**/credentials",
+      "**/aegis-mvp/**/credentials.json"
+    ]
+  },
+
+  "approve": {
+    "patterns": [
+      "~/.ssh/**",
+      "~/.aws/**",
+      "~/.gnupg/**",
+      "~/.docker/**",
+      "~/.kube/**",
+      ".env",
+      ".env.*",
+      "~/.env",
+      "**/secrets/**",
+      "**/.secrets/**",
+      "**/secret/**",
+      "**/.gitconfig",
+      "/etc/passwd",
+      "/etc/hosts",
+      "/etc/ssh/**"
+    ]
+  }
+}

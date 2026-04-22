@@ -88,12 +88,21 @@ _PATTERNS: dict[str, list[str]] = {
         r"\\windows\\system32\\config\\sam",
     ],
     "data_exfiltration": [
+        # Existing patterns
         r"curl\s+(?:-[A-Za-z]+\s+)*(?:-X\s+POST|--data\b).+https?://",
         r"wget\s+(?:--post-data|--method\s*=\s*POST)",
         r"\bbase64\b\s+(?:--encode\s+|-w\s*0\s+)?(?:/etc|~/\.|/root)",
         r"\bnc\s+(?:-[lewz]+\s+)*\d+\.\d+\.\d+\.\d+\s+\d+",
         r"@(?:\.env|secrets?\.txt|credentials?\.json|id_rsa|\.aws/credentials)",
         r"\bsend(?:_email|mail)\b.*['\"]?attachments?['\"]?\s*[:=]",
+        # DOGFOOD Rec #5 — broaden curl/wget POST + sensitive-file-attached pattern
+        r"\b(?:curl|wget|http|httpie)\b.*-(?:d|F|data|data-binary|form|upload-file)\s*['\"@]?(?:\.env|.+\.pem|.+\.key|credentials|.aws|.ssh|secrets?)",
+        # base64-piped exfil — `base64 file | curl ...` or `... | nc ...`
+        r"\bbase64\b[^|]*\|\s*(?:curl|wget|nc|ncat|http)\b",
+        # Suspicious-domain heuristics: posting to a non-allowlist host
+        r"\b(?:curl|wget)\b[^|]+(?:attacker|exfil|pastebin|paste\.bin|gist|webhook\.site|requestbin|ngrok)\b",
+        # gzip|tar|zip the whole home and pipe out
+        r"\b(?:tar|zip|gzip)\b[^|]*\$HOME[^|]*\|",
     ],
 }
 
