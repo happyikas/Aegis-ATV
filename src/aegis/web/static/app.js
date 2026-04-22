@@ -33,35 +33,35 @@ const PRESETS = {
     args: '{"path":"./data/report.txt"}',
     plan: "read the Q3 report",
     inj: 0.02, pii: 0.0,
-    bytes: 0, dollars: 0.0001, conf: 0.95,
+    tokens: 100, dollars: 0.0001, forecast: 0.01,
   },
   "sql-drop": {
     tool: "db_query",
     args: '{"sql":"DROP TABLE users"}',
     plan: "destructive SQL test",
     inj: 0.05, pii: 0.0,
-    bytes: 0, dollars: 0.0001, conf: 0.9,
+    tokens: 80, dollars: 0.0001, forecast: 0.01,
   },
   "big-write": {
     tool: "write_file",
     args: '{"path":"./data/big.bin","content":"[placeholder]"}',
     plan: "write archive blob",
     inj: 0.02, pii: 0.0,
-    bytes: 5e9, dollars: 0.01, conf: 0.8,
+    tokens: 500, dollars: 0.05, forecast: 5.0,
   },
   "transfer": {
     tool: "transfer_funds",
     args: '{"from":"acct-A","to":"acct-B","amount":500}',
     plan: "pay vendor invoice",
     inj: 0.0, pii: 0.0,
-    bytes: 0, dollars: 0.001, conf: 0.95,
+    tokens: 60, dollars: 0.001, forecast: 0.01,
   },
   "external-api": {
     tool: "call_external_api",
     args: '{"url":"https://api.weather.example/forecast","method":"GET"}',
     plan: "fetch weather forecast for Seoul",
     inj: 0.01, pii: 0.0,
-    bytes: 0, dollars: 0.0001, conf: 0.9,
+    tokens: 80, dollars: 0.0001, forecast: 0.01,
   },
 };
 
@@ -312,10 +312,12 @@ function build_payload() {
     tool_name: $("tool-name").value,
     tool_args_json: $("tool-args").value,
     safety_flags: { prompt_injection: inj, pii_exposure: pii },
+    // ATV-2080-v1 cost_efficiency_metrics shape (¶[0045] s-1..s-16).
+    // The dashboard exposes 3 of the 16 slots; the rest default to 0.
     cost_estimate: {
-      exp_bytes_write: parseFloat($("cost-bytes").value) || 0,
-      exp_dollars: parseFloat($("cost-dollars").value) || 0,
-      confidence: parseFloat($("cost-conf").value) || 0,
+      input_token_count: parseFloat($("cost-tokens").value) || 0,
+      cumulative_dollars: parseFloat($("cost-dollars").value) || 0,
+      forecasted_cost_to_completion: parseFloat($("cost-forecast").value) || 0,
     },
   };
 }
@@ -354,29 +356,28 @@ async function evaluate() {
 
 // ---------- 5-call demo ----------
 const DEMO_SCRIPT = [
-  { tool: "read_file",     args: '{"path":"./data/report.txt"}',                           plan: "read Q3 report",        inj: .02, pii: .0, bytes: 0,   dollars: 0.0001, conf: .95 },
-  { tool: "write_file",    args: '{"path":"./data/summary.txt","content":"..."}',           plan: "write summary",         inj: .02, pii: .0, bytes: 1024,dollars: 0.0002, conf: .9  },
-  { tool: "execute_shell", args: '{"command":"rm -rf /"}',                                  plan: "cleanup",               inj: .02, pii: .0, bytes: 0,   dollars: 0.0001, conf: .9  },
-  { tool: "write_file",    args: '{"path":"./data/big.bin","content":"[5GB]"}',             plan: "archive",               inj: .02, pii: .0, bytes: 5e9, dollars: 0.05,   conf: .7  },
-  { tool: "transfer_funds",args: '{"from":"acct-A","to":"acct-B","amount":500}',            plan: "pay invoice",           inj: .0,  pii: .0, bytes: 0,   dollars: 0.001,  conf: .95 },
+  { tool: "read_file",     args: '{"path":"./data/report.txt"}',                           plan: "read Q3 report",        inj: .02, pii: .0, tokens: 100, dollars: 0.0001, forecast: 0.01 },
+  { tool: "write_file",    args: '{"path":"./data/summary.txt","content":"..."}',           plan: "write summary",         inj: .02, pii: .0, tokens: 170, dollars: 0.0002, forecast: 0.01 },
+  { tool: "execute_shell", args: '{"command":"rm -rf /"}',                                  plan: "cleanup",               inj: .02, pii: .0, tokens: 80,  dollars: 0.0001, forecast: 0.01 },
+  { tool: "write_file",    args: '{"path":"./data/big.bin","content":"[5GB]"}',             plan: "archive",               inj: .02, pii: .0, tokens: 500, dollars: 0.05,   forecast: 5.0  },
+  { tool: "transfer_funds",args: '{"from":"acct-A","to":"acct-B","amount":500}',            plan: "pay invoice",           inj: .0,  pii: .0, tokens: 60,  dollars: 0.001,  forecast: 0.01 },
 ];
 
 async function run_demo() {
   const btn = $("btn-demo");
   btn.disabled = true; btn.textContent = "Running…";
-  const prevAid = $("aid").value;
   const aid = "demo-web-" + crypto.randomUUID().slice(0, 8);
   $("aid").value = aid;
   try {
-    for (const [i, step] of DEMO_SCRIPT.entries()) {
+    for (const step of DEMO_SCRIPT) {
       $("tool-name").value = step.tool;
       $("tool-args").value = step.args;
       $("plan-text").value = step.plan;
       $("inj").value = step.inj; $("inj-val").textContent = step.inj.toFixed(2);
       $("pii").value = step.pii; $("pii-val").textContent = step.pii.toFixed(2);
-      $("cost-bytes").value = step.bytes;
+      $("cost-tokens").value = step.tokens;
       $("cost-dollars").value = step.dollars;
-      $("cost-conf").value = step.conf;
+      $("cost-forecast").value = step.forecast;
       await evaluate();
       await new Promise(r => setTimeout(r, 450));
     }
@@ -444,9 +445,9 @@ function apply_preset(name) {
   $("plan-text").value = p.plan;
   $("inj").value = p.inj; $("inj-val").textContent = p.inj.toFixed(2);
   $("pii").value = p.pii; $("pii-val").textContent = p.pii.toFixed(2);
-  $("cost-bytes").value = p.bytes;
+  $("cost-tokens").value = p.tokens;
   $("cost-dollars").value = p.dollars;
-  $("cost-conf").value = p.conf;
+  $("cost-forecast").value = p.forecast;
 }
 
 // ---------- Burn-in baseline (M11) ----------
@@ -497,12 +498,277 @@ async function load_burnin() {
   }
 }
 
+// ---------- AID admin (M14) ----------
+async function load_aid_quarantine() {
+  const status = $("aid-status");
+  const list = $("aid-list");
+  status.textContent = "loading…";
+  status.className = "text-xs text-slate-400 mono ml-auto";
+  try {
+    const r = await fetch("/admin/aid");
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const body = await r.json();
+    list.innerHTML = "";
+    const q = body.quarantined || [];
+    if (q.length === 0) {
+      list.innerHTML = `<li class="text-slate-400 italic text-sm py-2">no AIDs quarantined — circuit closed for all agents.</li>`;
+      status.textContent = "0 quarantined";
+      return;
+    }
+    for (const item of q) {
+      const ts = item.quarantined_at_ns
+        ? new Date(Number(BigInt(item.quarantined_at_ns) / 1_000_000n)).toISOString().replace("T", " ").slice(0, 19)
+        : "—";
+      list.insertAdjacentHTML("beforeend", `
+        <li class="flex items-center gap-3 px-3 py-2 rounded border border-red-200 bg-red-50">
+          <span class="w-2 h-2 rounded-full bg-red-500 shrink-0"></span>
+          <span class="mono font-semibold text-red-900 truncate">${item.aid}</span>
+          <span class="text-xs text-red-700">${item.violations} violations</span>
+          <span class="text-xs text-slate-500 ml-auto mono">${ts}</span>
+          <button class="aid-fill text-xs bg-white border border-slate-300 hover:bg-slate-100 rounded px-2 py-0.5"
+            data-aid="${item.aid}">use ↑</button>
+        </li>
+      `);
+    }
+    for (const b of document.querySelectorAll(".aid-fill")) {
+      b.addEventListener("click", () => { $("aid-release-aid").value = b.dataset.aid; });
+    }
+    status.textContent = `${q.length} quarantined`;
+    status.className = "text-xs ml-auto text-red-600 mono";
+  } catch (e) {
+    status.textContent = `error: ${e.message}`;
+    status.className = "text-xs ml-auto text-red-600 mono";
+  }
+}
+
+async function release_aid() {
+  const aid = $("aid-release-aid").value.trim();
+  const reason = $("aid-release-reason").value.trim() || "manual";
+  const token = $("aid-admin-token").value;
+  const result = $("aid-release-result");
+  if (!aid) { result.textContent = "aid required"; result.className = "text-xs mono mt-2 text-red-600"; return; }
+  try {
+    const r = await fetch("/admin/aid/release", {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-Aegis-Admin-Token": token },
+      body: JSON.stringify({ aid, reason }),
+    });
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
+    result.textContent = `✓ released — status=${body.status}, violations counter retained=${body.violations}`;
+    result.className = "text-xs mono mt-2 text-green-700";
+    await load_aid_quarantine();
+  } catch (e) {
+    result.textContent = `✗ ${e.message}`;
+    result.className = "text-xs mono mt-2 text-red-600";
+  }
+}
+
+// ---------- Forensic replay (M15) ----------
+async function load_replay() {
+  const status = $("replay-status");
+  status.textContent = "replaying…";
+  status.className = "text-xs ml-auto text-slate-400 mono";
+  try {
+    const r = await fetch("/forensic/replay");
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const body = await r.json();
+    if (!body.available) {
+      status.textContent = body.reason || "unavailable";
+      $("replay-ok").textContent = "—";
+      $("replay-bad").textContent = "—";
+      $("replay-aids").textContent = "—";
+      $("replay-heads").innerHTML = "";
+      return;
+    }
+    $("replay-ok").textContent = body.decrypted_count ?? 0;
+    $("replay-bad").textContent = body.tampered_count ?? 0;
+    $("replay-aids").textContent = (body.aids_seen || []).length;
+    const heads = $("replay-heads");
+    heads.innerHTML = "";
+    for (const [aid, head] of Object.entries(body.per_aid_head || {})) {
+      const valid = body.per_aid_chain_valid?.[aid] === true;
+      const dot = valid ? "bg-green-500" : "bg-red-500";
+      heads.insertAdjacentHTML("beforeend", `
+        <li class="flex items-center gap-2 px-2 py-1 rounded border border-slate-200 bg-slate-50">
+          <span class="w-2 h-2 rounded-full ${dot}"></span>
+          <span class="font-semibold truncate w-44">${aid}</span>
+          <span class="text-slate-500 truncate">${head.slice(0, 40)}…</span>
+        </li>
+      `);
+    }
+    const tampered = body.tampered_count || 0;
+    status.textContent = tampered === 0
+      ? `✓ all ${body.decrypted_count} records decrypted, chains valid`
+      : `✗ ${tampered} tampered records`;
+    status.className = `text-xs ml-auto mono ${tampered === 0 ? 'text-green-700' : 'text-red-600'}`;
+  } catch (e) {
+    status.textContent = `error: ${e.message}`;
+    status.className = "text-xs ml-auto text-red-600 mono";
+  }
+}
+
+// ---------- HAM (M16) ----------
+function _ham_ids() {
+  return { aid: $("ham-aid").value.trim(), tenant_id: $("ham-tenant").value.trim() };
+}
+
+function _split_csv(s) {
+  return (s || "").split(",").map(x => x.trim()).filter(Boolean);
+}
+
+async function ham_store() {
+  const out = $("ham-store-result");
+  let body;
+  try { body = JSON.parse($("ham-body").value); }
+  catch (e) { out.textContent = `bad JSON: ${e.message}`; out.className = "text-xs mono break-all text-red-600"; return; }
+  try {
+    const r = await fetch("/ham/memory", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ..._ham_ids(), body, tags: _split_csv($("ham-tags").value) }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
+    out.innerHTML = `✓ object_id=<b>${j.object_id}</b> seq=${j.seq}`;
+    out.className = "text-xs mono break-all text-green-700";
+    // refresh recall + ground refs hint
+    await ham_recall();
+  } catch (e) {
+    out.textContent = `✗ ${e.message}`;
+    out.className = "text-xs mono break-all text-red-600";
+  }
+}
+
+async function _ham_post(path, body) {
+  const r = await fetch(path, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
+  return j;
+}
+
+function _render_ham_items(items) {
+  const list = $("ham-items");
+  list.innerHTML = "";
+  if (!items.length) {
+    list.innerHTML = `<li class="text-slate-400 italic">no items</li>`;
+    return;
+  }
+  for (const it of items) {
+    const ts = new Date(Number(BigInt(it.ts_ns) / 1_000_000n)).toISOString().replace("T", " ").slice(11, 19);
+    const tags = (it.tags || []).map(t => `<span class="bg-slate-200 text-slate-700 rounded px-1">${t}</span>`).join(" ");
+    const bodyJson = it.body ? JSON.stringify(it.body) : "";
+    list.insertAdjacentHTML("beforeend", `
+      <li class="flex items-start gap-2 px-2 py-1.5 rounded border border-slate-200 bg-slate-50">
+        <input type="checkbox" class="ham-pick mt-1" data-id="${it.object_id}" />
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2">
+            <span class="mono text-slate-700 truncate">${it.object_id}</span>
+            <span class="text-slate-400">${ts}</span>
+            <span class="ml-auto">${tags}</span>
+            <button class="ham-forget bg-red-100 hover:bg-red-200 text-red-800 rounded px-2 text-[10px]"
+              data-id="${it.object_id}">forget</button>
+          </div>
+          <div class="mono text-[11px] text-slate-600 break-all">${bodyJson}</div>
+        </div>
+      </li>
+    `);
+  }
+  for (const b of document.querySelectorAll(".ham-forget")) {
+    b.addEventListener("click", () => ham_forget(b.dataset.id));
+  }
+  // auto-fill ref ids field with the currently checked items
+  document.querySelectorAll(".ham-pick").forEach(cb =>
+    cb.addEventListener("change", () => {
+      $("ham-refs").value = Array.from(document.querySelectorAll(".ham-pick:checked"))
+        .map(x => x.dataset.id).join(",");
+    })
+  );
+}
+
+async function ham_recall() {
+  const status = $("ham-status");
+  status.textContent = "recalling…";
+  status.className = "text-xs text-slate-400 mono ml-auto";
+  try {
+    const j = await _ham_post("/ham/recall", {
+      ..._ham_ids(),
+      tags: _split_csv($("ham-recall-tags").value),
+      limit: 20,
+    });
+    _render_ham_items(j.items || []);
+    status.textContent = `${j.length} items`;
+    status.className = "text-xs ml-auto text-slate-600 mono";
+  } catch (e) {
+    status.textContent = `error: ${e.message}`;
+    status.className = "text-xs ml-auto text-red-600 mono";
+  }
+}
+
+async function ham_context() {
+  try {
+    const j = await _ham_post("/ham/context", { ..._ham_ids(), max_items: 5 });
+    _render_ham_items((j.bundle && j.bundle.items) || []);
+    $("ham-status").textContent = `bundle = ${(j.source_ids || []).length} items`;
+    $("ham-status").className = "text-xs ml-auto text-indigo-700 mono";
+  } catch (e) {
+    $("ham-status").textContent = `error: ${e.message}`;
+    $("ham-status").className = "text-xs ml-auto text-red-600 mono";
+  }
+}
+
+async function ham_forget(object_id) {
+  try {
+    await _ham_post("/ham/forget", { ..._ham_ids(), object_id, reason: "user dashboard" });
+    await ham_recall();
+  } catch (e) {
+    alert(`forget failed: ${e.message}`);
+  }
+}
+
+async function ham_summarize() {
+  try {
+    const j = await _ham_post("/ham/summarize", { ..._ham_ids() });
+    $("ham-summary").textContent = JSON.stringify(j, null, 2);
+  } catch (e) {
+    $("ham-summary").textContent = `error: ${e.message}`;
+  }
+}
+
+async function ham_ground() {
+  const claim = $("ham-claim").value.trim();
+  const refs = _split_csv($("ham-refs").value);
+  if (!claim || !refs.length) { $("ham-ground-result").textContent = "claim + ref ids required"; return; }
+  try {
+    const j = await _ham_post("/ham/ground", { ..._ham_ids(), claim, reference_ids: refs });
+    $("ham-ground-result").textContent =
+      `claim_hash=${j.claim_hash.slice(0, 24)}…\n` +
+      `bound=${j.references.length}, missing=${j.missing.length}`;
+  } catch (e) {
+    $("ham-ground-result").textContent = `error: ${e.message}`;
+  }
+}
+
 function wire() {
   $("btn-evaluate").addEventListener("click", evaluate);
   $("btn-demo").addEventListener("click", run_demo);
   $("btn-audit").addEventListener("click", load_chain);
   $("btn-attest").addEventListener("click", load_attestation);
   $("btn-burnin").addEventListener("click", load_burnin);
+  // M14
+  $("btn-aid-refresh").addEventListener("click", load_aid_quarantine);
+  $("btn-aid-release").addEventListener("click", release_aid);
+  // M15
+  $("btn-replay").addEventListener("click", load_replay);
+  // M16
+  $("btn-ham-store").addEventListener("click", ham_store);
+  $("btn-ham-recall").addEventListener("click", ham_recall);
+  $("btn-ham-context").addEventListener("click", ham_context);
+  $("btn-ham-summarize").addEventListener("click", ham_summarize);
+  $("btn-ham-ground").addEventListener("click", ham_ground);
+
   for (const b of document.querySelectorAll(".preset")) {
     b.addEventListener("click", () => apply_preset(b.dataset.preset));
   }
@@ -517,4 +783,6 @@ document.addEventListener("DOMContentLoaded", () => {
   service_check();
   load_attestation();
   load_burnin();
+  load_aid_quarantine();
+  load_replay();
 });

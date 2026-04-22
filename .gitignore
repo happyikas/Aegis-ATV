@@ -17,10 +17,12 @@ dist/
 .env
 keys/*.pem
 keys/*.pub
+keys/*.key
 data/*.sqlite
 data/*.sqlite-wal
 data/*.sqlite-shm
 data/*.jsonl
+data/*.bin
 
 # OS
 .DS_Store

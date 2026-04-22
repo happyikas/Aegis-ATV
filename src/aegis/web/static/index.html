@@ -101,18 +101,18 @@
 
     <div class="grid grid-cols-3 gap-3">
       <div class="space-y-1">
-        <label class="text-xs text-slate-500 uppercase tracking-wide">exp bytes write</label>
-        <input id="cost-bytes" type="number" min="0" value="1024"
+        <label class="text-xs text-slate-500 uppercase tracking-wide">tokens (s-1)</label>
+        <input id="cost-tokens" type="number" min="0" value="200"
           class="w-full border border-slate-300 rounded px-2 py-1 mono text-sm" />
       </div>
       <div class="space-y-1">
-        <label class="text-xs text-slate-500 uppercase tracking-wide">exp $</label>
+        <label class="text-xs text-slate-500 uppercase tracking-wide">cum $ (s-5)</label>
         <input id="cost-dollars" type="number" min="0" step="0.0001" value="0.0001"
           class="w-full border border-slate-300 rounded px-2 py-1 mono text-sm" />
       </div>
       <div class="space-y-1">
-        <label class="text-xs text-slate-500 uppercase tracking-wide">confidence</label>
-        <input id="cost-conf" type="number" min="0" max="1" step="0.05" value="0.9"
+        <label class="text-xs text-slate-500 uppercase tracking-wide">forecast $ (s-14)</label>
+        <input id="cost-forecast" type="number" min="0" step="0.001" value="0.01"
           class="w-full border border-slate-300 rounded px-2 py-1 mono text-sm" />
       </div>
     </div>
@@ -279,10 +279,164 @@
       </div>
     </div>
   </section>
+  <!-- ========= AID admin (M14 — circuit breaker) ========= -->
+  <section class="col-span-6 bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+    <div class="flex items-center gap-3 mb-3">
+      <h2 class="font-semibold text-slate-700">AID circuit breaker
+        <span class="text-xs text-slate-400 font-normal">/admin/aid</span>
+      </h2>
+      <button id="btn-aid-refresh"
+        class="bg-slate-700 hover:bg-slate-800 text-white text-sm px-3 py-1.5 rounded">
+        Refresh
+      </button>
+      <span id="aid-status" class="text-xs text-slate-400 mono ml-auto"></span>
+    </div>
+    <div class="text-xs text-slate-600 mb-3 leading-5">
+      Patent §5B per-AID auth + auto-quarantine after repeated violations.
+      Listed AIDs are <span class="font-semibold text-red-700">hard-blocked</span>
+      at step 315 until released by an admin token.
+    </div>
+    <ol id="aid-list" class="space-y-1.5 text-sm mb-4"></ol>
+    <details>
+      <summary class="text-xs text-slate-500 hover:text-slate-700">Release an AID (admin token required)</summary>
+      <div class="mt-2 grid grid-cols-12 gap-2">
+        <input id="aid-release-aid" placeholder="aid"
+          class="col-span-4 border border-slate-300 rounded px-2 py-1 mono text-xs" />
+        <input id="aid-release-reason" placeholder="reason" value="manual review"
+          class="col-span-4 border border-slate-300 rounded px-2 py-1 text-xs" />
+        <input id="aid-admin-token" placeholder="X-Aegis-Admin-Token"
+          type="password"
+          class="col-span-3 border border-slate-300 rounded px-2 py-1 mono text-xs" />
+        <button id="btn-aid-release"
+          class="col-span-1 bg-amber-600 hover:bg-amber-700 text-white text-xs rounded px-2 py-1">
+          release
+        </button>
+      </div>
+      <div id="aid-release-result" class="text-xs mono mt-2"></div>
+    </details>
+  </section>
+
+  <!-- ========= Forensic replay (M15 — encrypted journal) ========= -->
+  <section class="col-span-6 bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+    <div class="flex items-center gap-3 mb-3">
+      <h2 class="font-semibold text-slate-700">Forensic replay
+        <span class="text-xs text-slate-400 font-normal">/forensic/replay</span>
+      </h2>
+      <button id="btn-replay"
+        class="bg-slate-700 hover:bg-slate-800 text-white text-sm px-3 py-1.5 rounded">
+        Replay
+      </button>
+      <span id="replay-status" class="text-xs text-slate-400 mono ml-auto"></span>
+    </div>
+    <div class="text-xs text-slate-600 mb-3 leading-5">
+      Patent §13B AES-256-GCM journal. Each call walks every record,
+      decrypts with the per-tenant data-key, and reconstructs the per-AID
+      hash chain. Tampered records surface here, not at audit time.
+    </div>
+    <div class="grid grid-cols-3 gap-3 text-xs mb-3">
+      <div class="bg-green-50 border border-green-200 rounded px-3 py-2">
+        <div class="text-green-700 font-semibold">decrypted</div>
+        <div class="mono text-2xl text-green-900" id="replay-ok">—</div>
+      </div>
+      <div class="bg-red-50 border border-red-200 rounded px-3 py-2">
+        <div class="text-red-700 font-semibold">tampered</div>
+        <div class="mono text-2xl text-red-900" id="replay-bad">—</div>
+      </div>
+      <div class="bg-slate-50 border border-slate-200 rounded px-3 py-2">
+        <div class="text-slate-700 font-semibold">aids seen</div>
+        <div class="mono text-2xl text-slate-900" id="replay-aids">—</div>
+      </div>
+    </div>
+    <details>
+      <summary class="text-xs text-slate-500 hover:text-slate-700">Per-AID chain heads</summary>
+      <ol id="replay-heads" class="text-xs mono mt-2 space-y-1"></ol>
+    </details>
+  </section>
+
+  <!-- ========= HAM viewer (M16 — Hierarchical Agent Memory) ========= -->
+  <section class="col-span-12 bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+    <div class="flex items-center gap-3 mb-3">
+      <h2 class="font-semibold text-slate-700">Hierarchical Agent Memory
+        <span class="text-xs text-slate-400 font-normal">/ham/* — patent §13A</span>
+      </h2>
+      <button id="btn-ham-stats"
+        class="bg-slate-700 hover:bg-slate-800 text-white text-sm px-3 py-1.5 rounded">
+        Stats
+      </button>
+      <span id="ham-status" class="text-xs text-slate-400 mono ml-auto"></span>
+    </div>
+    <div class="text-xs text-slate-600 mb-4 leading-5">
+      L3+L4 software emulation. Each item is AES-256-GCM encrypted with
+      AAD bound to <span class="mono">(tenant_id|aid|seq)</span>. The
+      cleartext index holds tags + tombstone state only — bodies are
+      decrypted on recall.
+    </div>
+
+    <div class="grid grid-cols-12 gap-4">
+      <!-- left: memory write -->
+      <div class="col-span-4 space-y-2">
+        <div class="text-xs text-slate-500 uppercase tracking-wide">store an item</div>
+        <input id="ham-aid" value="web-ui-agent" placeholder="aid"
+          class="w-full border border-slate-300 rounded px-2 py-1 mono text-sm" />
+        <input id="ham-tenant" value="demo-tenant" placeholder="tenant_id"
+          class="w-full border border-slate-300 rounded px-2 py-1 mono text-sm" />
+        <textarea id="ham-body" rows="4"
+          class="w-full border border-slate-300 rounded px-2 py-1 mono text-xs"
+          spellcheck="false">{"note":"Q3 report shows revenue up 12%"}</textarea>
+        <input id="ham-tags" placeholder="tags (comma-separated)" value="report,q3"
+          class="w-full border border-slate-300 rounded px-2 py-1 mono text-xs" />
+        <button id="btn-ham-store"
+          class="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm rounded px-3 py-1.5">
+          memory →
+        </button>
+        <div id="ham-store-result" class="text-xs mono break-all text-slate-600"></div>
+      </div>
+
+      <!-- middle: recall + filter -->
+      <div class="col-span-5 space-y-2">
+        <div class="text-xs text-slate-500 uppercase tracking-wide">recall</div>
+        <div class="flex gap-2">
+          <input id="ham-recall-tags" placeholder="filter tags (optional)"
+            class="flex-1 border border-slate-300 rounded px-2 py-1 mono text-xs" />
+          <button id="btn-ham-recall"
+            class="bg-slate-700 hover:bg-slate-800 text-white text-xs rounded px-3 py-1.5">
+            recall
+          </button>
+          <button id="btn-ham-context"
+            class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs rounded px-3 py-1.5">
+            context
+          </button>
+        </div>
+        <ol id="ham-items" class="space-y-1 text-xs"></ol>
+      </div>
+
+      <!-- right: summarize / forget / ground -->
+      <div class="col-span-3 space-y-2">
+        <div class="text-xs text-slate-500 uppercase tracking-wide">summarize</div>
+        <button id="btn-ham-summarize"
+          class="w-full bg-slate-700 hover:bg-slate-800 text-white text-xs rounded px-2 py-1">
+          tag histogram + counts
+        </button>
+        <pre id="ham-summary" class="text-[11px] bg-slate-50 border border-slate-200 rounded p-2 mono whitespace-pre-wrap break-all min-h-[36px]"></pre>
+
+        <div class="text-xs text-slate-500 uppercase tracking-wide pt-2">ground a claim</div>
+        <input id="ham-claim" placeholder="claim text" value="Q3 revenue is up"
+          class="w-full border border-slate-300 rounded px-2 py-1 text-xs" />
+        <input id="ham-refs" placeholder="ref ids (comma)"
+          class="w-full border border-slate-300 rounded px-2 py-1 mono text-xs" />
+        <button id="btn-ham-ground"
+          class="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs rounded px-2 py-1">
+          bind
+        </button>
+        <pre id="ham-ground-result" class="text-[11px] bg-slate-50 border border-slate-200 rounded p-2 mono whitespace-pre-wrap break-all min-h-[36px]"></pre>
+      </div>
+    </div>
+  </section>
+
 </main>
 
 <footer class="max-w-[1400px] mx-auto px-6 py-4 text-xs text-slate-400 text-center">
-  T2 tier MVP · 2080-D ATV · Ed25519 + Merkle SHA3-256 audit chain
+  T2 tier MVP · 2080-D ATV · Ed25519 + Merkle SHA3-256 audit chain · AES-256-GCM journal · HAM L3+L4
 </footer>
 
 <script src="/static/app.js"></script>
