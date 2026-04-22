@@ -1,0 +1,11 @@
+Most AI agent frameworks today have nothing actually stopping them from doing something stupid. The guard rails are usually a regex denylist that the model itself enforces.
+
+So I built a real one.
+
+AegisData T2 is a Python sidecar. Every tool call your agent makes goes through a seven-stage firewall before it runs. Argument inspection. AID authorization. Blast radius. Cost forecast. Policy plus small LLM judge.
+
+The verdict gets Ed25519-signed, Merkle-chained into a tamper-evident audit log, and AES 256 GCM encrypted into a separate forensic journal.
+
+Three hundred and twenty-six tests, mypy strict, runs in one Docker container.
+
+Code in the description.

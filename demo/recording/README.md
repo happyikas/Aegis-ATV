@@ -16,6 +16,10 @@ demo/recording/
 ├── demo.gif                  # rendered playback (884 KB, ~25s loop)
 ├── transcript.log            # plain-text transcript (with ANSI colors)
 ├── capture_screens.sh        # script that produced the screens
+├── narration-60s.txt         # 60-second voiceover script (source)
+├── narration-60s.m4a         # 60-second voiceover (Samantha @ 165 wpm, 184 KB)
+├── narration-90s.txt         # 90-second voiceover script (source)
+├── narration-90s.m4a         # 90-second voiceover (Samantha @ 165 wpm, 372 KB)
 └── screens/
     ├── 01-dashboard-overview.png       Full dashboard, idle state
     ├── 01b-dashboard-with-state.png    Dashboard with active quarantine + populated HAM (★ recommended hero shot)
@@ -27,6 +31,9 @@ demo/recording/
     ├── 07-admin-aid.png                Raw /admin/aid JSON
     └── 08-openapi-docs.png             Auto-generated OpenAPI / Swagger UI
 ```
+
+For overlaying the voiceover onto the GIF as a single MP4 file, see
+[`docs/RECORDING_KIT.md` § Option B](../../docs/RECORDING_KIT.md).
 
 ---
 
