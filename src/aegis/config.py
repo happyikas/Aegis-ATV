@@ -56,5 +56,11 @@ class Settings(BaseSettings):
 
     aegis_policy_dir: str = "./policies"
 
+    # M15 — encrypted ATV journal (AES-GCM AEAD). The data key is
+    # auto-generated on first run if the file is missing. T3 will seal
+    # this under the hardware TEE.
+    aegis_journal_data_key_path: str = "./keys/journal_data.key"
+    aegis_journal_path: str = "./data/audit_encrypted.jsonl"
+
 
 settings = Settings()

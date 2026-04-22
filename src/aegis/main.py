@@ -28,10 +28,12 @@ from aegis.api.audit_query import make_router as _audit_router
 from aegis.api.burnin_status import make_router as _burnin_router
 from aegis.api.cost_attestation import make_router as _cost_router
 from aegis.api.evaluate import make_router as _evaluate_router
+from aegis.api.replay import make_router as _replay_router
 from aegis.api.source import make_router as _source_router
 from aegis.api.tool_outcome import make_router as _tool_outcome_router
 from aegis.atmu import IntentLog
 from aegis.attest.burn_in import BurnInMeasurement, compute_burn_in
+from aegis.audit.encrypted_journal import EncryptedJournal, load_or_create_data_key
 from aegis.audit.jsonl_store import JsonlStore
 from aegis.audit.sqlite_store import AuditDB
 from aegis.burnin import BurnInController
@@ -52,6 +54,7 @@ def create_app(
     intent_log: IntentLog | None = None,
     burnin_controller: BurnInController | None = None,
     cost_ledger: CostAttestationLedger | None = None,
+    encrypted_journal: EncryptedJournal | None = None,
     measurement: BurnInMeasurement | None = None,
 ) -> FastAPI:
     """Build a FastAPI app. Override stores/keys for tests."""
@@ -73,6 +76,13 @@ def create_app(
             jsonl_path=Path(settings.aegis_cost_ledger_jsonl),
             signing_key=cost_key,
         )
+    # M15 — encrypted ATV journal. Auto-create the data key on first run.
+    if encrypted_journal is None:
+        data_key = load_or_create_data_key(Path(settings.aegis_journal_data_key_path))
+        encrypted_journal = EncryptedJournal(
+            path=Path(settings.aegis_journal_path),
+            data_key=data_key,
+        )
     real_measurement = measurement if measurement is not None else compute_burn_in(
         code_root=_PACKAGE_ROOT,
         policy_dir=Path(settings.aegis_policy_dir),
@@ -86,7 +96,7 @@ def create_app(
         _evaluate_router(
             key=real_key, db=real_db, log=real_log,
             intent_log=real_intent_log, burnin_controller=real_burnin,
-            cost_ledger=cost_ledger,
+            cost_ledger=cost_ledger, encrypted_journal=encrypted_journal,
             burn_in_id=real_measurement.burn_in_id,
         )
     )
@@ -98,6 +108,7 @@ def create_app(
     app.include_router(_burnin_router(controller=real_burnin))
     app.include_router(_cost_router(ledger=cost_ledger))
     app.include_router(_admin_aid_router(breaker=get_circuit_breaker()))
+    app.include_router(_replay_router(journal=encrypted_journal))
 
     if _STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")

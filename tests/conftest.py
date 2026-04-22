@@ -34,6 +34,7 @@ os.environ.setdefault("AEGIS_COST_LEDGER_JSONL", str(_TMP_ROOT / "cost.jsonl"))
 def aegis_app(tmp_path: Path) -> Iterator[object]:
     """Build a fresh FastAPI app per test, isolated stores under tmp_path."""
     from aegis.atmu import IntentLog
+    from aegis.audit.encrypted_journal import EncryptedJournal, load_or_create_data_key
     from aegis.audit.jsonl_store import JsonlStore
     from aegis.audit.sqlite_store import AuditDB
     from aegis.cost.ledger import CostAttestationLedger
@@ -42,6 +43,7 @@ def aegis_app(tmp_path: Path) -> Iterator[object]:
 
     key = load_or_create_key(tmp_path / "ed25519.pem")
     cost_key = load_or_create_key(tmp_path / "ed25519_cost.pem")
+    journal_key = load_or_create_data_key(tmp_path / "journal_data.key")
     db = AuditDB(":memory:")
     log = JsonlStore(tmp_path / "audit.jsonl")
     intent_log = IntentLog(":memory:")
@@ -50,9 +52,14 @@ def aegis_app(tmp_path: Path) -> Iterator[object]:
         jsonl_path=tmp_path / "cost.jsonl",
         signing_key=cost_key,
     )
+    encrypted_journal = EncryptedJournal(
+        path=tmp_path / "audit_encrypted.jsonl",
+        data_key=journal_key,
+    )
     yield create_app(
         key=key, db=db, log=log,
         intent_log=intent_log, cost_ledger=cost_ledger,
+        encrypted_journal=encrypted_journal,
     )
     db.close()
     intent_log.close()
