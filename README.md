@@ -1,5 +1,7 @@
 # AegisData T2 MVP
 
+![demo](demo/recording/demo.gif)
+
 A Python sidecar that wraps every AI-agent tool call in a 2,080-dimensional
 **Agent Trace Vector (ATV-2080-v1)**, runs it through a 7-stage Action
 Firewall, brackets the call in an **Agent Transaction Management Unit
@@ -162,6 +164,7 @@ See [`tools/README.md`](tools/README.md) for install + tool mapping.
 | [`docs/DEMO.md`](docs/DEMO.md) | Recording playbook with timed beats — 90-second elevator demo + 5-minute deep-dive script |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Per-milestone surface tour with file pointers, data flow diagrams, and patent-claim cross-references |
 | [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | Production runbook: env vars, key rotation, AID admin, journal forensics, backup/restore |
+| [`demo/recording/README.md`](demo/recording/README.md) | Pre-rendered media kit — GIF, asciinema cast, 9 dashboard screenshots, with audience-targeted usage notes |
 | [`PLAN_v2.md`](PLAN_v2.md) | Patent-aligned re-plan + claim coverage matrix |
 | [`SETUP_MACMINI.md`](SETUP_MACMINI.md) | Mac mini bootstrap for 24/7 Claude Code firewall use |
 | [`tools/README.md`](tools/README.md) | Claude Code hook install + 10-case smoke test |

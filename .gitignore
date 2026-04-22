@@ -26,3 +26,6 @@ data/*.bin
 
 # OS
 .DS_Store
+
+# Local dev tool configs
+.claude/
