@@ -30,6 +30,11 @@ from aegis.atv.builder import build_atv
 from aegis.audit.jsonl_store import JsonlStore
 from aegis.audit.sqlite_store import AuditDB
 from aegis.burnin import BurnInController
+from aegis.cost import (
+    CostAttestationLedger,
+    compute_divergence,
+    evaluate_escalation,
+)
 from aegis.firewall import step350_approval, step360_audit, step370_exec
 from aegis.firewall.core import run_firewall
 from aegis.firewall.step320_blast import TOOL_BLAST_TABLE, UNKNOWN_TOOL_BLAST
@@ -44,6 +49,7 @@ def _evaluate_impl(
     log: JsonlStore,
     intent_log: IntentLog | None = None,
     burnin_controller: BurnInController | None = None,
+    cost_ledger: CostAttestationLedger | None = None,
     burn_in_id: str | None = None,
 ) -> Verdict:
     # Auto-fill the Burn-in id into the ATV header so every audit record
@@ -112,6 +118,35 @@ def _evaluate_impl(
     )
     verdict.signature = record["signature"]
 
+    # M12: Cost Attestation Ledger (Claims 3, 30, 34) — separate signed
+    # store with its own key. Append a record for every evaluation; the
+    # 'cost_attestation_hint' marker on the audit record (M9) signals
+    # which audit entries were cost-influenced for downstream indexing.
+    if cost_ledger is not None:
+        divergence = compute_divergence(
+            inp.cost_estimate,
+            model_name=(inp.header.model_hash or "default"),
+            # T2: HW values are 0; T3 will populate from per-AID HW counters.
+            hw_flops_observed=0.0,
+            hw_hbm_bytes_observed=0.0,
+        )
+        cost_ledger.append(
+            atv_commitment=atv_commitment,
+            header=inp.header,
+            sw_cost_metrics=inp.cost_estimate,
+            divergence=divergence,
+            model_name=inp.header.model_hash,
+        )
+        # Claim 27: cost-divergence escalation INDEPENDENT of sLLM verdict.
+        decision = evaluate_escalation(divergence)
+        if decision.triggered and verdict.decision == "ALLOW":
+            verdict.decision = "REQUIRE_APPROVAL"
+            verdict.reason = decision.reason
+            verdict.step_traces["aegis.cost.escalation"] = (
+                f"step-cost: {decision.metric}={decision.observed:.3f} > "
+                f"threshold {decision.threshold:.3f}"
+            )
+
     # M10: ATMU final transition — ALLOW commits, APPROVAL stays prepared
     # (committed at /approve time), BLOCK already aborted above.
     if intent_log is not None and intent_record_id and verdict.decision == "ALLOW":
@@ -149,6 +184,7 @@ def make_router(
     log: JsonlStore,
     intent_log: IntentLog | None = None,
     burnin_controller: BurnInController | None = None,
+    cost_ledger: CostAttestationLedger | None = None,
     burn_in_id: str | None = None,
 ) -> APIRouter:
     r = APIRouter()
@@ -158,7 +194,7 @@ def make_router(
         return _evaluate_impl(
             inp, key=key, db=db, log=log,
             intent_log=intent_log, burnin_controller=burnin_controller,
-            burn_in_id=burn_in_id,
+            cost_ledger=cost_ledger, burn_in_id=burn_in_id,
         )
 
     return r

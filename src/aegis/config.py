@@ -40,6 +40,14 @@ class Settings(BaseSettings):
     aegis_signing_key_path: str = "./keys/ed25519.pem"
     aegis_public_key_path: str = "./keys/ed25519.pub"
 
+    # Cost Attestation Ledger — patent Claim 34 requires the cost-attestation
+    # signing key slot be DISTINCT from the telemetry signing-key slot, so
+    # customers/regulators can be granted cost-only access.
+    aegis_cost_signing_key_path: str = "./keys/ed25519_cost.pem"
+    aegis_cost_public_key_path: str = "./keys/ed25519_cost.pub"
+    aegis_cost_ledger_db: str = "./data/cost_attestation.sqlite"
+    aegis_cost_ledger_jsonl: str = "./data/cost_attestation.jsonl"
+
     aegis_audit_db: str = "./data/audit.sqlite"
     aegis_audit_jsonl: str = "./data/audit.jsonl"
 
