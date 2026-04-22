@@ -14,6 +14,13 @@ services:
       AEGIS_INTENT_LOG_DB: /app/data/intent_log.sqlite
       AEGIS_COST_LEDGER_DB: /app/data/cost_attestation.sqlite
       AEGIS_COST_LEDGER_JSONL: /app/data/cost_attestation.jsonl
+      # M15 — encrypted ATV journal (AES-256-GCM)
+      AEGIS_JOURNAL_PATH: /app/data/journal.bin
+      AEGIS_JOURNAL_DATA_KEY_PATH: /app/keys/journal_data.key
+      # M16 — Hierarchical Agent Memory store
+      AEGIS_HAM_DB: /app/data/ham.sqlite
+      AEGIS_HAM_DATA_KEY_PATH: /app/keys/ham_data.key
+      # Signing keys
       AEGIS_SIGNING_KEY_PATH: /app/keys/ed25519.pem
       AEGIS_PUBLIC_KEY_PATH: /app/keys/ed25519.pub
       AEGIS_COST_SIGNING_KEY_PATH: /app/keys/ed25519_cost.pem

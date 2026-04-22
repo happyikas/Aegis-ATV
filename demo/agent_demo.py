@@ -89,6 +89,7 @@ def ask_aegis(
     plan_text: str,
     trace_id: str,
     aid: str,
+    role_id: str | None = None,
     cost_estimate: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     args_json = json.dumps(tool_args)
@@ -97,7 +98,7 @@ def ask_aegis(
     # Defaults to offline regex (provider=dummy); set AEGIS_SAFETY_PROVIDER
     # to 'openai' or 'haiku' for hosted classifiers.
     safety_flags = classify_call(tool_args_json=args_json, plan_text=plan_text)
-    payload = {
+    payload: dict[str, Any] = {
         "header": {
             "trace_id": trace_id,
             "span_id": str(uuid.uuid4()),
@@ -122,6 +123,8 @@ def ask_aegis(
             "forecasted_cost_to_completion": 0.01,
         },
     }
+    if role_id:
+        payload["role_id"] = role_id
     r = httpx.post(f"{AEGIS_URL}/evaluate", json=payload, timeout=30.0)
     r.raise_for_status()
     return r.json()
@@ -405,6 +408,168 @@ def run_live(aid: str, trace_id: str) -> list[dict[str, Any]]:
     return results
 
 
+# ─────────────────────────────────────────────────────────────────────
+# M14 — AID circuit breaker scenario
+# ─────────────────────────────────────────────────────────────────────
+def run_circuit_breaker_scenario(trace_id: str) -> None:
+    """Demonstrate per-AID quarantine + admin release.
+
+    Uses the read-only-role policy from ``policies/aid_region.json``
+    (allowed: read_file, list_directory; max 3 violations). We try
+    write_file 3 times → quarantine. Then a legitimate read_file is
+    blocked. Then admin token releases the AID and the read works again.
+    """
+    aid = f"breaker-demo-{uuid.uuid4().hex[:6]}"
+    role = "read-only-role"
+    print(_c("1", f"\n=== M14: AID circuit breaker (aid={aid}, role={role}) ==="))
+    print(_c("2", "  Policy: max 3 violations, then auto-quarantine."))
+
+    # 3 disallowed write_file calls → trip the breaker
+    for i in range(1, 4):
+        v = ask_aegis(
+            tool_name="write_file",
+            tool_args={"path": "./data/x.txt", "content": "boom"},
+            plan_text="trying a disallowed tool to trip the breaker",
+            trace_id=trace_id, aid=aid, role_id=role,
+            cost_estimate={"input_token_count": 50.0, "cumulative_dollars": 0.0001,
+                           "forecasted_cost_to_completion": 0.01},
+        )
+        print(f"  violation {i}/3 -> {_c(_verdict_color(v['decision']), v['decision'])}: {v['reason']}")
+
+    # 4th call — even an allowed tool gets hard-blocked because the AID
+    # is now quarantined (step315 shortcut).
+    v = ask_aegis(
+        tool_name="read_file",
+        tool_args={"path": "./data/report.txt"},
+        plan_text="legitimate read after quarantine",
+        trace_id=trace_id, aid=aid, role_id=role,
+    )
+    print(f"  post-quarantine read_file -> {_c(_verdict_color(v['decision']), v['decision'])}: {v['reason']}")
+
+    # Inspect via /admin/aid
+    info = httpx.get(f"{AEGIS_URL}/admin/aid", timeout=5.0).json()
+    qcount = len(info.get("quarantined", []))
+    print(_c("2", f"  /admin/aid lists {qcount} quarantined AID(s)."))
+
+    # Admin release with token (defaults to dev-admin-token if env not set)
+    token = os.environ.get("AEGIS_ADMIN_TOKEN", "dev-admin-token")
+    rel = httpx.post(
+        f"{AEGIS_URL}/admin/aid/release",
+        json={"aid": aid, "reason": "demo: human reviewed"},
+        headers={"X-Aegis-Admin-Token": token},
+        timeout=5.0,
+    )
+    if rel.status_code == 200:
+        print(_c("32", f"  /admin/aid/release ok -> status={rel.json().get('status')}"))
+    else:
+        print(_c("31", f"  /admin/aid/release FAILED ({rel.status_code}): {rel.text[:120]}"))
+
+    # Post-release: the same AID can now use an allowed tool again.
+    v = ask_aegis(
+        tool_name="read_file",
+        tool_args={"path": "./data/report.txt"},
+        plan_text="post-release legitimate read",
+        trace_id=trace_id, aid=aid, role_id=role,
+    )
+    print(f"  post-release read_file -> {_c(_verdict_color(v['decision']), v['decision'])}: {v['reason']}")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# M15 — Forensic replay scenario
+# ─────────────────────────────────────────────────────────────────────
+def run_replay_scenario() -> None:
+    """Walk the encrypted ATV journal end-to-end and report findings."""
+    print(_c("1", "\n=== M15: Forensic replay (/forensic/replay) ==="))
+    try:
+        rep = httpx.get(f"{AEGIS_URL}/forensic/replay", timeout=15.0).json()
+    except httpx.HTTPError as e:
+        print(_c("31", f"  failed: {e}"))
+        return
+    if not rep.get("available"):
+        print(_c("33", f"  unavailable: {rep.get('reason')}"))
+        return
+    decrypted = rep.get("decrypted_count", 0)
+    tampered = rep.get("tampered_count", 0)
+    aids = rep.get("aids_seen", [])
+    print(f"  decrypted     = {_c('32', str(decrypted))}")
+    print(f"  tampered      = {_c('31' if tampered else '32', str(tampered))}")
+    print(f"  aids touched  = {len(aids)}")
+    valid = sum(1 for v in (rep.get("per_aid_chain_valid") or {}).values() if v)
+    total = len(rep.get("per_aid_chain_valid") or {})
+    print(f"  chains valid  = {_c('32' if valid == total else '31', f'{valid}/{total}')}")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# M16 — Hierarchical Agent Memory scenario
+# ─────────────────────────────────────────────────────────────────────
+def run_ham_scenario(aid: str) -> None:
+    """Exercise memory → recall → context → ground → forget → summarize."""
+    print(_c("1", f"\n=== M16: Hierarchical Agent Memory (aid={aid}) ==="))
+    base = {"aid": aid, "tenant_id": TENANT}
+
+    # Store three items with overlapping tags
+    obj_ids: list[str] = []
+    for note, tags in [
+        ("Q3 revenue: $1.2M", ["report", "q3"]),
+        ("Top customer: ACME", ["report", "customer"]),
+        ("Meeting tomorrow at 14:00", ["calendar"]),
+    ]:
+        r = httpx.post(
+            f"{AEGIS_URL}/ham/memory",
+            json={**base, "body": {"note": note}, "tags": tags},
+            timeout=5.0,
+        ).json()
+        obj_ids.append(r["object_id"])
+        print(f"  memory  -> object_id={r['object_id']} seq={r['seq']}")
+
+    # Recall by tag
+    rec = httpx.post(
+        f"{AEGIS_URL}/ham/recall",
+        json={**base, "tags": ["report"]},
+        timeout=5.0,
+    ).json()
+    print(f"  recall(tags=['report']) -> {rec['length']} items")
+
+    # Context bundle
+    ctx = httpx.post(
+        f"{AEGIS_URL}/ham/context",
+        json={**base, "max_items": 3},
+        timeout=5.0,
+    ).json()
+    print(f"  context -> bundle of {len(ctx['source_ids'])} items")
+
+    # Ground a claim against the first two object_ids + a fake one
+    g = httpx.post(
+        f"{AEGIS_URL}/ham/ground",
+        json={
+            **base,
+            "claim": "Q3 revenue is up and ACME is the top customer",
+            "reference_ids": [obj_ids[0], obj_ids[1], "phantom-id"],
+        },
+        timeout=5.0,
+    ).json()
+    print(
+        f"  ground  -> bound={len(g['references'])} missing={len(g['missing'])} "
+        f"claim_hash={g['claim_hash'][:16]}…"
+    )
+
+    # Tombstone one item
+    f = httpx.post(
+        f"{AEGIS_URL}/ham/forget",
+        json={**base, "object_id": obj_ids[0], "reason": "demo cleanup"},
+        timeout=5.0,
+    ).json()
+    print(f"  forget  -> ok={f.get('ok')}")
+
+    # Summarize
+    s = httpx.post(
+        f"{AEGIS_URL}/ham/summarize",
+        json={**base},
+        timeout=5.0,
+    ).json()
+    print(f"  summarize -> live={s['item_count']} tag_hist={s['tag_histogram']}")
+
+
 def main() -> int:
     aid = f"agent-demo-{uuid.uuid4().hex[:8]}"
     trace_id = str(uuid.uuid4())
@@ -455,6 +620,15 @@ def main() -> int:
                 print(f"  {key:<40s} phase={_c('2', layer['phase']):<13s} samples={layer['samples']}")
     except httpx.HTTPError:
         pass
+
+    # M14/M15/M16 extension scenarios — small but exercise the full surface.
+    if os.environ.get("AEGIS_DEMO_SKIP_EXTRAS") != "1":
+        try:
+            run_circuit_breaker_scenario(trace_id=str(uuid.uuid4()))
+            run_ham_scenario(aid=f"ham-demo-{uuid.uuid4().hex[:6]}")
+            run_replay_scenario()  # last — sees every encrypted record above
+        except httpx.HTTPError as e:
+            print(_c("31", f"\nextra scenario error: {e}"))
 
     return 0
 
