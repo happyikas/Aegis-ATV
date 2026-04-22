@@ -1,0 +1,20 @@
+{
+  "_comment": "Per-AID authorization table (patent §5B). default_policy applies when an AID has no specific entry. Empty allowed_tools / allowed_paths = no restriction (M14 fail-open default for backward compatibility); production deployments should populate the AIDs map with strict role-based rules.",
+  "default_policy": {
+    "allowed_tools": [],
+    "allowed_paths": [],
+    "max_violations": 5
+  },
+  "aids": {
+    "demo-tenant:financial-role": {
+      "allowed_tools": ["read_file", "transfer_funds"],
+      "allowed_paths": ["./data/"],
+      "max_violations": 1
+    },
+    "demo-tenant:read-only-role": {
+      "allowed_tools": ["read_file", "list_directory"],
+      "allowed_paths": ["./data/"],
+      "max_violations": 3
+    }
+  }
+}
