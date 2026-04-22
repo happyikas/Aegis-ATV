@@ -174,6 +174,7 @@ See [`tools/README.md`](tools/README.md) for install + tool mapping.
 | [`PLAN_v3.md`](PLAN_v3.md) | T3 hardware tier design (M17–M26) — TEE attestation, ML-DSA dual-sign, FPGA judge, CSD integration |
 | [`WHITEPAPER.md`](WHITEPAPER.md) | **(한국어) 기술 백서 — 마크다운 소스** — 11 sections, ~1,300 lines (시장 / 사고 / 기술 / **사고 대응 7 시나리오** / MVP / POC / 데모 / 피치 / GTM / C-level) |
 | [`docs/build/WHITEPAPER.pdf`](docs/build/WHITEPAPER.pdf) | **(한국어) 기술 백서 — PDF (49 pages, ~2.1 MB)** — A4 portrait, 디자인 커버 + 11 sections + 4 appendices (포함: **부록 D — 7 사고 시나리오 실제 실행 결과 9 pages**). `bash tools/whitepaper/build_pdf.sh` 로 재생성 |
+| [`docs/build/PITCH_DECK.pdf`](docs/build/PITCH_DECK.pdf) | **(한국어) 투자자 피치 덱 — PDF (13 slides, A4 landscape, ~900 KB)** — Cover · Problem · Why now · 사고 사례 · Solution · 차별화 · Proof · Market · Business model · GTM · Roadmap · Team · Closing. `bash tools/deck/build_pdf.sh` 로 재생성 |
 | [`demo/scenarios/`](demo/scenarios/) | **사고 대응 시나리오 7개 — 실행 가능 버전** — 백서 §5 의 시나리오 A–G를 PASS/FAIL 자동 검증 가능한 bash 스크립트로 재현. `bash demo/scenarios/run_all.sh` |
 | [`SETUP_MACMINI.md`](SETUP_MACMINI.md) | Mac mini bootstrap for 24/7 Claude Code firewall use |
 | [`tools/README.md`](tools/README.md) | Claude Code hook install + 10-case smoke test |

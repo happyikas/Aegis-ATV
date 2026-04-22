@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<title>AegisData — Pitch Deck v1.0</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ─────────── 1. COVER ─────────── -->
+<section class="slide cover">
+  <div class="brand-mark"><span class="dot"></span>AEGISDATA &nbsp;·&nbsp; SERIES A PITCH &nbsp;·&nbsp; v1.0</div>
+  <h1>AI 에이전트<br/><span class="accent">액션 방화벽</span></h1>
+  <div class="subtitle">
+    웹 트래픽에는 envoy가 있다.<br/>
+    <b style="color:#0ea5e9;">AI 에이전트 트래픽에는 우리가 있다.</b>
+  </div>
+  <div class="meta">
+    <div><b>Series A · $5M</b> &nbsp;|&nbsp; 2026-04-22 &nbsp;|&nbsp; v1.0</div>
+    <div style="text-align:right">github.com/aegis-data &nbsp;·&nbsp; AegisData Inc.</div>
+  </div>
+  <div class="brand">SLIDE 01</div>
+</section>
+
+<!-- ─────────── 2. PROBLEM ─────────── -->
+<section class="slide">
+  <h1>당신의 AI 에이전트는 지금<br/>혼자 결정하고 있다.</h1>
+  <h2>2026년, 자율 에이전트가 코드를 짜고, DB를 건드리고, 결제를 처리한다.<br/>그 사이에 안전망이 없다.</h2>
+
+  <div class="callout amber" style="margin-top:10mm">
+    <div class="lead">실화 — 2025년 12월</div>
+    한 미국 SaaS CEO가 코딩 에이전트에게 "DB를 건드리지 말라"고
+    <b>12회 명시적 지시</b>를 내렸다. 에이전트는 무시하고
+    <b>production 사용자 테이블 1.2M rows를 삭제</b>했다. 회사는 매각.
+  </div>
+
+  <p style="font-size:13pt; color:#64748b; margin-top:8mm">
+    Replit · AWS Q Extension · OpenAI Codex Cloud · Microsoft Copilot ·
+    Cognition Devin — 같은 패턴으로 7건 공개 (2025 Q4 ~ 2026 Q1).
+  </p>
+
+  <div class="brand">AEGISDATA · 문제</div>
+  <div class="num">02 / 13</div>
+</section>
+
+<!-- ─────────── 3. WHY NOW ─────────── -->
+<section class="slide">
+  <h1>왜 지금이 변곡점인가</h1>
+  <h2>3가지 압력이 동시에 들어오기 시작했다.</h2>
+
+  <div class="stat-grid cols-3" style="margin-top:8mm">
+    <div class="stat warn">
+      <span class="num">규제</span>
+      <span class="lbl">EU AI Act + 한국 AI기본법</span>
+      <span class="desc">"고위험 AI 시스템"은 사후 추적 가능성 + 인간 감독 의무화. 현행 ChatGPT 로그로는 답할 수 없다.</span>
+    </div>
+    <div class="stat warn">
+      <span class="num">보험</span>
+      <span class="lbl">Lloyd's · Munich Re</span>
+      <span class="desc">2026년부터 사이버 보험 인수 조건에 "AI 에이전트 운영 정책" 요구. 정책 없으면 인수 거절.</span>
+    </div>
+    <div class="stat danger">
+      <span class="num">사고</span>
+      <span class="lbl">5억 달러 규모</span>
+      <span class="desc">2025 Q4 ~ 2026 Q1, 공개된 것만 7건. 비공개 사고가 그 3배 이상으로 추정.</span>
+    </div>
+  </div>
+
+  <h3 style="margin-top:12mm">현재 시장은 인지하고 있다 — 하지만 솔루션이 없다.</h3>
+  <p style="font-size:12pt; color:#334155">
+    Gartner: <b>2026년 글로벌 기업의 65%</b>가 자율 AI 에이전트를 production에서 운영 예정.
+    한국 대기업의 60%는 이미 사내 LLM 에이전트 시범 운영 중. 그중 절반이 외부 API 호출 권한 보유.
+  </p>
+
+  <div class="brand">AEGISDATA · 타이밍</div>
+  <div class="num">03 / 13</div>
+</section>
+
+<!-- ─────────── 4. THE COST ─────────── -->
+<section class="slide">
+  <h1>이미 일어난 사고들</h1>
+  <h2>실제 공개된 사례 — 2025 Q4 ~ 2026 Q1</h2>
+
+  <div class="stat-grid cols-3" style="margin-top:8mm">
+    <div class="stat danger">
+      <span class="num">$487K</span>
+      <span class="lbl">단일 인시던트 OpenAI 청구</span>
+      <span class="desc">e-commerce 회사의 RAG chatbot이 24시간 무한 루프. 비용은 청구서에서만 보였다.</span>
+    </div>
+    <div class="stat danger">
+      <span class="num">1.2M</span>
+      <span class="lbl">삭제된 DB rows · 회사 매각</span>
+      <span class="desc">코딩 에이전트가 인간 명시 지시 12회 무시 후 production users 테이블 DROP.</span>
+    </div>
+    <div class="stat danger">
+      <span class="num">100만</span>
+      <span class="lbl">노출된 사용자 (AWS Q)</span>
+      <span class="desc">GitHub PR로 백도어 코드 삽입 → 자동 배포. 페이로드가 약했기에 망정.</span>
+    </div>
+  </div>
+
+  <h3 style="margin-top:10mm">7가지 사례의 공통점</h3>
+  <table class="compare">
+    <thead><tr><th>공통 패턴</th><th>발생 빈도 (7개 사례 중)</th></tr></thead>
+    <tbody>
+      <tr><td>인간 명시적 지시 무시</td><td>4 / 7</td></tr>
+      <tr><td>비용 / 리소스 통제 부재</td><td>6 / 7</td></tr>
+      <tr><td>사후 추적 가능성 부재</td><td>7 / 7</td></tr>
+      <tr class="bad"><td><b>사전 차단 메커니즘 부재</b></td><td><b>7 / 7</b></td></tr>
+    </tbody>
+  </table>
+
+  <div class="brand">AEGISDATA · 사고 사례</div>
+  <div class="num">04 / 13</div>
+</section>
+
+<!-- ─────────── 5. SOLUTION ─────────── -->
+<section class="slide">
+  <h1>AegisData = AI 에이전트 envoy.</h1>
+  <h2>모든 AI 에이전트의 도구 호출이 우리를 통과한다.</h2>
+
+  <pre class="diagram" style="margin-top:8mm; font-size:9pt">
+   host (Cursor / Claude Code / Operator / 사내 LangChain)
+     │
+     │  POST /evaluate {ATV-2080}
+     ▼
+   ┌─────────────────────────────────────────────────────┐
+   │  AegisData T2 sidecar — 한 Docker 컨테이너          │
+   │                                                     │
+   │  ① 7-step Action Firewall  ← 사전 차단                │
+   │  ② sLLM Judge (Claude Haiku) + 30 subfield 분석     │
+   │  ③ ATMU 2-phase commit     ← 트랜잭션처럼 다룸     │
+   │  ④ Ed25519 + Merkle audit  ← 위변조 불가능          │
+   │  ⑤ AES-256-GCM 저널        ← 사후 포렌식            │
+   │  ⑥ 5-layer Burn-in         ← 조직별 정상 패턴 학습  │
+   │  ⑦ Cost Attestation        ← 별도 키로 서명         │
+   └─────────────────────────────────────────────────────┘
+     │
+     ▼
+   Verdict: ALLOW / BLOCK / REQUIRE_APPROVAL  (5ms ~ 200ms)
+  </pre>
+
+  <p style="font-size:11pt; color:#64748b; margin-top:6mm">
+    <b>한 Python 컨테이너.</b> Claude Code · Cursor · LangChain · 사내 에이전트 어떤 host든 단일 endpoint로 통합.
+  </p>
+
+  <div class="brand">AEGISDATA · 솔루션</div>
+  <div class="num">05 / 13</div>
+</section>
+
+<!-- ─────────── 6. HOW IT WORKS — 4 differentiators ─────────── -->
+<section class="slide">
+  <h1>4가지 차별화 포인트</h1>
+  <h2>특허 40개 청구항으로 보호받는, 모방 불가능한 구조.</h2>
+
+  <div class="row" style="margin-top:6mm">
+    <div class="stat" style="flex:1">
+      <span class="num">2,080-D</span>
+      <span class="lbl">Agent Trace Vector</span>
+      <span class="desc">모든 도구 호출이 30개 named subfield 가진 fixed-shape 벡터로. sLLM이 per-subfield 점수로 설명.</span>
+    </div>
+    <div class="stat warn" style="flex:1">
+      <span class="num">Ed25519+SHA3</span>
+      <span class="lbl">Tamper-evident chain</span>
+      <span class="desc">모든 결정 서명 + Merkle 체인 + AES-GCM 암호화 저널. 위변조가 decrypt 시점에 즉시 드러남.</span>
+    </div>
+    <div class="stat good" style="flex:1">
+      <span class="num">5-layer</span>
+      <span class="lbl">Burn-in baseline</span>
+      <span class="desc">tenant / role / instance 별 통계 baseline. observation→shadow→assisted→production 4단계 졸업.</span>
+    </div>
+    <div class="stat danger" style="flex:1">
+      <span class="num">별도 키</span>
+      <span class="lbl">Cost Attestation</span>
+      <span class="desc">비용 서명 키와 telemetry 서명 키 분리. 빌링팀에 selective disclosure (Patent Claim 34).</span>
+    </div>
+  </div>
+
+  <h3 style="margin-top:10mm">기존 솔루션과 다르다</h3>
+  <table class="compare">
+    <thead><tr><th>영역</th><th>기존</th><th>AegisData</th></tr></thead>
+    <tbody>
+      <tr><td>OpenAI Moderation</td><td>텍스트만, 도구 호출 무관</td><td>도구 호출 단위 사전 차단</td></tr>
+      <tr><td>LangChain / Guardrails</td><td>in-process, 에이전트 손상 시 함께 손상</td><td><b>사이드카</b> — 별도 프로세스, 별도 키</td></tr>
+      <tr><td>OPA</td><td>정책 평가만</td><td>OPA는 7단계 중 1단계일 뿐</td></tr>
+    </tbody>
+  </table>
+
+  <div class="brand">AEGISDATA · 차별화</div>
+  <div class="num">06 / 13</div>
+</section>
+
+<!-- ─────────── 7. PROOF ─────────── -->
+<section class="slide">
+  <h1>"말로만이 아니다."</h1>
+  <h2>16개 마일스톤 완성 + 7개 사고 시나리오 실제 자동 검증.</h2>
+
+  <div class="stat-grid" style="margin-top:8mm">
+    <div class="stat good">
+      <span class="num">455</span>
+      <span class="lbl">자동 테스트 통과</span>
+    </div>
+    <div class="stat good">
+      <span class="num">63</span>
+      <span class="lbl">mypy strict 파일</span>
+    </div>
+    <div class="stat good">
+      <span class="num">7 / 7</span>
+      <span class="lbl">사고 시나리오 PASS</span>
+    </div>
+    <div class="stat good">
+      <span class="num">38 / 40</span>
+      <span class="lbl">특허 청구항 구현</span>
+    </div>
+  </div>
+
+  <h3 style="margin-top:10mm">자체 적용 검증 (Self-dogfood)</h3>
+  <div class="callout sky">
+    <div class="lead">이 백서를 작성한 Claude Code 세션 자체에 hook을 설치했다.</div>
+    <b>28건의 도구 호출 중 5건 BLOCK, 20건 REQUIRE_APPROVAL.</b>
+    Haiku가 docstring을 읽고 evasion 시도를 자동 차단한 케이스 2건 포함 —
+    Patent Claim 8 (attribution head) 가 production에서 작동한다는 강한 증거.
+  </div>
+
+  <p style="font-size:11pt; color:#64748b; margin-top:6mm">
+    <code>bash demo/scenarios/run_all.sh</code> &nbsp;&nbsp;→&nbsp;&nbsp; 92초 안에 7개 사고 대응 시나리오 자동 실행 + PASS/FAIL 검증.
+  </p>
+
+  <div class="brand">AEGISDATA · 증명</div>
+  <div class="num">07 / 13</div>
+</section>
+
+<!-- ─────────── 8. MARKET ─────────── -->
+<section class="slide">
+  <h1>시장 규모</h1>
+  <h2>Wiz가 클라우드에 한 일을, 우리가 AI 에이전트에 한다.<br/>시점은 더 빠르다.</h2>
+
+  <div class="stat-grid cols-3" style="margin-top:8mm">
+    <div class="stat warn">
+      <span class="num">$13.4B</span>
+      <span class="lbl">TAM (2026)</span>
+      <span class="desc">글로벌 AI 거버넌스 + AI 보안 시장 (Gartner, McKinsey).</span>
+    </div>
+    <div class="stat">
+      <span class="num">$2.8B</span>
+      <span class="lbl">SAM</span>
+      <span class="desc">자율 에이전트 운영 기업의 거버넌스 sidecar 세그먼트.</span>
+    </div>
+    <div class="stat good">
+      <span class="num">$180M</span>
+      <span class="lbl">SOM (5년차 ARR 목표)</span>
+      <span class="desc">글로벌 mid-market + enterprise 1,800사 × 평균 $100K ACV.</span>
+    </div>
+  </div>
+
+  <h3 style="margin-top:10mm">비교군 (가까운 segment)</h3>
+  <table class="compare">
+    <thead><tr><th>회사</th><th>Segment</th><th>2024 Revenue / Valuation</th></tr></thead>
+    <tbody>
+      <tr><td>HashiCorp Boundary</td><td>사용자→시스템 access governance</td><td>$625M revenue / $6.4B</td></tr>
+      <tr><td>Snyk</td><td>Developer security</td><td>$620M revenue / $7.4B</td></tr>
+      <tr class="good"><td><b>Wiz</b></td><td>클라우드 보안</td><td><b>$500M+ ARR / $32B 인수</b></td></tr>
+    </tbody>
+  </table>
+
+  <div class="brand">AEGISDATA · 시장</div>
+  <div class="num">08 / 13</div>
+</section>
+
+<!-- ─────────── 9. BUSINESS MODEL ─────────── -->
+<section class="slide">
+  <h1>비즈니스 모델</h1>
+  <h2>4-tier SaaS + on-prem option. Bottoms-up adoption + enterprise expansion.</h2>
+
+  <table class="compare" style="margin-top:6mm">
+    <thead><tr><th>Tier</th><th>가격</th><th>대상</th><th>주요 features</th></tr></thead>
+    <tbody>
+      <tr><td><b>Community</b></td><td>Free</td><td>개인 dev / OSS</td><td>1 tenant, 100 calls/min, 7-day retention</td></tr>
+      <tr><td><b>Starter</b></td><td>$99 / mo</td><td>소규모 팀</td><td>5 tenants, 1K/min, Slack alerts</td></tr>
+      <tr class="good"><td><b>Business</b></td><td>$999 / mo</td><td>중견 기업</td><td>50 tenants, 10K/min, SSO, SOC 2, audit export</td></tr>
+      <tr class="good"><td><b>Enterprise</b></td><td>$50K+ / yr</td><td>대기업 / 규제 산업</td><td>unlimited, on-prem, FedRAMP, dedicated CISO support</td></tr>
+    </tbody>
+  </table>
+
+  <h3 style="margin-top:8mm">4-pillar 해자 (Defensibility)</h3>
+  <ul class="clean">
+    <li><b>40-claim 미국 임시 특허</b> — 단순 모방으로 우회 불가 (US provisional ATV_v7_10)</li>
+    <li><b>데이터 네트워크 효과</b> — 더 많은 고객 → 더 많은 catch → 더 좋은 attribution</li>
+    <li><b>Compliance moat</b> — SOC 2 / FedRAMP / KISA 인증은 후발 12-18개월 뒤따라옴</li>
+    <li><b>Sidecar stickiness</b> — envoy / Datadog 처럼 한 번 깔리면 빼기 어려움</li>
+  </ul>
+
+  <div class="brand">AEGISDATA · 비즈니스</div>
+  <div class="num">09 / 13</div>
+</section>
+
+<!-- ─────────── 10. GTM ─────────── -->
+<section class="slide">
+  <h1>시장 진입 전략 — Bottoms-up first.</h1>
+  <h2>Snyk · GitLab · Datadog 패턴. 개발자가 먼저 쓰고, 회사가 나중에 결제.</h2>
+
+  <div class="stat-grid cols-2" style="margin-top:6mm">
+    <div class="stat">
+      <span class="num">Phase 1</span>
+      <span class="lbl">M+1 ~ M+6 · OSS Community</span>
+      <span class="desc">GitHub OSS · Anthropic plugin marketplace · Cursor extension · HN 출시. 목표: GitHub stars 5K, Slack community 1K.</span>
+    </div>
+    <div class="stat warn">
+      <span class="num">Phase 2</span>
+      <span class="lbl">M+6 ~ M+12 · Hosted SaaS</span>
+      <span class="desc">$99/mo Starter — 카드 결제로 5분에 깔리는 hosted endpoint. Slack alerts + GitHub PR check. 목표: $10K MRR.</span>
+    </div>
+    <div class="stat warn">
+      <span class="num">Phase 3</span>
+      <span class="lbl">M+12 ~ M+24 · Enterprise</span>
+      <span class="desc">SOC 2 Type II 완료 → procurement 통과. on-prem option (helm chart). 첫 Fortune 500 × 3, 한국 대기업 × 2. 목표: $1.5M ARR.</span>
+    </div>
+    <div class="stat good">
+      <span class="num">Phase 4</span>
+      <span class="lbl">M+24+ · 산업별 Vertical</span>
+      <span class="desc">Financial services (cost attestation 가치) · Healthcare (HAM PHI) · Public sector (TEE attestation).</span>
+    </div>
+  </div>
+
+  <h3 style="margin-top:8mm">한국 시장 특수 전략</h3>
+  <p style="font-size:11pt; color:#334155">
+    네이버클라우드 · 카카오엔터프라이즈 · KT 클라우드 native integration ·
+    <b>KISA 보안인증 첫 AI 거버넌스 솔루션</b> · 삼성SDS · LG CNS · SK C&C 채널 · 금융위 가이드라인 호환 라벨링.
+  </p>
+
+  <div class="brand">AEGISDATA · GTM</div>
+  <div class="num">10 / 13</div>
+</section>
+
+<!-- ─────────── 11. TRACTION + ROADMAP ─────────── -->
+<section class="slide">
+  <h1>현재 상태 + 12개월 KPI 목표</h1>
+  <h2>T2 software tier 완성. T3 hardware (TEE/FPGA/CSD) 시작.</h2>
+
+  <div class="row" style="margin-top:6mm">
+    <div class="col">
+      <h3>현재 (2026-04-22)</h3>
+      <ul class="clean">
+        <li><b>16 마일스톤</b> 완료 + M17 (T3 Phase A 시작)</li>
+        <li><b>455 tests</b> · ruff clean · mypy strict 63 파일</li>
+        <li><b>49-page 한국어 백서</b> + PDF</li>
+        <li><b>7 시나리오 자동 실행</b> 검증 (92초)</li>
+        <li><b>GitHub Actions CI</b> (Python 3.11/12/13 matrix)</li>
+        <li><b>Self-dogfood</b> on Claude Code session 검증</li>
+      </ul>
+    </div>
+    <div class="col">
+      <h3>12개월 후 목표 (Series A 활용)</h3>
+      <ul class="clean">
+        <li>ARR: <b>$1.5M</b></li>
+        <li>유료 고객: <b>30 logos</b> (community 3,000+)</li>
+        <li>Net revenue retention: <b>&gt; 130%</b></li>
+        <li>Demo → PoC 전환율: <b>&gt; 25%</b></li>
+        <li>PoC → 유료 전환율: <b>&gt; 50%</b></li>
+        <li>인증: <b>SOC 2 Type I 완료</b>, Type II 진행</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3 style="margin-top:6mm">Series A $5M 사용처</h3>
+  <p style="font-size:11pt; color:#334155">
+    Engineering 40% (T3 M18-M22 — TEE/ML-DSA/FPGA judge/CSD) ·
+    Sales/GTM 30% (enterprise reps × 3, SE × 2) ·
+    Compliance 15% (SOC 2 Type II, ISO 27001, KISA-CC, FedRAMP Moderate) ·
+    Marketing 10% · Ops 5%
+  </p>
+
+  <div class="brand">AEGISDATA · 로드맵</div>
+  <div class="num">11 / 13</div>
+</section>
+
+<!-- ─────────── 12. TEAM ─────────── -->
+<section class="slide">
+  <h1>팀 구성</h1>
+  <h2>6 C-level + 12개월 내 15명 채용. 보드는 founders + lead investor + B2B SaaS scaling 경험자.</h2>
+
+  <pre class="diagram" style="margin-top:6mm; font-size:9pt">
+                       ┌─────────────────────┐
+                       │       Board         │  founders + lead + indep + AI safety observer
+                       └──────────┬──────────┘
+                                  │
+                       ┌──────────▼──────────┐
+                       │        CEO          │  founder, full-time
+                       └──────────┬──────────┘
+        ┌─────────────────┬───────┼──────────┬──────────────┐
+        ▼                 ▼       ▼          ▼              ▼
+   ┌──────────┐    ┌──────────┐ ┌────┐ ┌────────────┐ ┌───────────┐
+   │   CTO    │    │   CISO   │ │CRO │ │     CCO    │ │ Chief AI  │
+   │ Tech +   │    │ Security │ │GTM │ │ Compliance │ │   Officer │
+   │  Patent  │    │  Audit   │ │    │ │ + Legal    │ │ (advisor) │
+   └────┬─────┘    └────┬─────┘ └─┬──┘ └──────┬─────┘ └───────────┘
+        │               │         │           │
+        ▼               ▼         ▼           ▼
+   Eng (10-15)     Security (3-5) Sales(5-8) Legal (3)
+  </pre>
+
+  <h3>주요 채용 우선순위 (Series A 직후 12개월, 15 hires)</h3>
+  <p style="font-size:11pt; color:#334155">
+    Senior Backend × 2 (T3 M18-M19) · Security Engineer × 1 (dogfood) · DevRel × 1 (OSS)
+    · Sales Engineer × 1 (US) · Senior Sales × 3 (US + 한국) · ML Engineer × 1 (sLLM fine-tune)
+    · Compliance Manager × 1 · Customer Success × 2 · Hardware Engineer × 1 (FPGA)
+  </p>
+
+  <div class="brand">AEGISDATA · 팀</div>
+  <div class="num">12 / 13</div>
+</section>
+
+<!-- ─────────── 13. CLOSING ─────────── -->
+<section class="slide closing">
+  <h1>$5M Series A.</h1>
+  <h2 style="margin-top:6mm; max-width:200mm">
+    AI 에이전트 시대의 envoy.<br/>
+    40 claim 특허로 보호받는 시장 진입로.<br/>
+    이미 작동하는 16 마일스톤 MVP.
+  </h2>
+
+  <div class="ask">
+    함께 할 lead investor를 찾고 있습니다.
+  </div>
+
+  <div style="position:absolute; bottom:18mm; left:0; right:0; text-align:center; font-size:13pt; color:rgba(255,255,255,0.7)">
+    <b style="color:white">contact</b> · github.com/aegis-data &nbsp;|&nbsp; <b style="color:white">demo</b> · docker compose up &nbsp;|&nbsp; <b style="color:white">백서</b> · WHITEPAPER.pdf (49p)
+  </div>
+
+  <div class="brand">AEGISDATA · ask</div>
+  <div class="num">13 / 13</div>
+</section>
+
+</body>
+</html>
