@@ -165,7 +165,9 @@ See [`tools/README.md`](tools/README.md) for install + tool mapping.
 | [`docs/QUICKSTART.md`](docs/QUICKSTART.md) | 60-second path: install → boot → first verdict → first chain |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Per-milestone surface tour with file pointers, data flow diagrams, and patent-claim cross-references |
 | [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | Production runbook: env vars, key rotation, AID admin, journal forensics, backup/restore |
-| [`PLAN_v2.md`](PLAN_v2.md) | Patent-aligned re-plan + claim coverage matrix |
+| [`docs/T3_BOUNDARY.md`](docs/T3_BOUNDARY.md) | T2 → T3 substitution boundary — exactly what changes (additive only) when implementing the hardware tier |
+| [`PLAN_v2.md`](PLAN_v2.md) | T2 patent-aligned re-plan (M8–M16) + claim coverage matrix |
+| [`PLAN_v3.md`](PLAN_v3.md) | T3 hardware tier design (M17–M26) — TEE attestation, ML-DSA dual-sign, FPGA judge, CSD integration |
 | [`SETUP_MACMINI.md`](SETUP_MACMINI.md) | Mac mini bootstrap for 24/7 Claude Code firewall use |
 | [`tools/README.md`](tools/README.md) | Claude Code hook install + 10-case smoke test |
 
@@ -367,17 +369,28 @@ tools/
 
 ---
 
-## Out of scope (T3 — patent-future work)
+## T3 — patent-future work
 
-* Real TEE deployment + hardware EK burn-in (L1)
-* CSD (Computational Storage Device) integration
-* In-storage similarity / FPGA/AIE judge inference
-* Hardware AID-tag comparator at the memory controller
-* Post-quantum signatures (ML-DSA stub exists but is disabled)
-* In-storage HAM L2 tier (NVMe-backed CXL pool)
+The T3 (hardware) tier is fully specified — see
+[`PLAN_v3.md`](PLAN_v3.md) for the 10-milestone breakdown (M17–M26)
+and [`docs/T3_BOUNDARY.md`](docs/T3_BOUNDARY.md) for the
+T2 → T3 substitution boundary.
 
-These slot in via the existing T2 surface — the schema, headers, and
-endpoints already carry the field placeholders (e.g. `tier_profile`,
-`cost_attestation_profile`, the 200-D HW band, the `hw_cost_attestation`
-subfield range 2044..2059). T3 fills the zeros without changing the
-external contract.
+Quick summary of what T3 adds:
+
+| Phase | Milestones | Adds |
+|---|---|---|
+| **A** TEE software path (cloud-available) | M17–M19 | Real Intel TDX / AMD SEV-SNP attestation · ML-DSA post-quantum dual-signing · HW perf-counter cost attestation |
+| **B** In-storage / accelerator | M20–M22 | FPGA/AIE bit-exact deterministic sLLM judge · HW tag comparator at memory controller · NVMe-CSD integration with in-storage similarity |
+| **C** Cross-cutting hardening | M23–M26 | Per-AID HW resource counters · TEE-sealed key storage · Linkage-consistency vector (SW↔HW drift detection) · ZK range proof for cost dimensions (stretch) |
+
+**The external contract doesn't move.** T2 clients talk to T3 servers
+without code changes — schema, endpoints, and JSON shapes stay
+identical. The only visible difference is that some response fields
+stop being zero.
+
+T3 hardware claims (CSD, FPGA, TEE) have schema placeholders already
+in place — `tier_profile`, `cost_attestation_profile`, the 200-D HW
+band, the `hw_cost_attestation` subfield range 2044..2059, the
+`linkage_consistency_features` 2060..2079. T3 fills these
+placeholders without breaking the external contract.
