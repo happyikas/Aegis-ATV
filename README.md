@@ -166,6 +166,7 @@ See [`tools/README.md`](tools/README.md) for install + tool mapping.
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Per-milestone surface tour with file pointers, data flow diagrams, and patent-claim cross-references |
 | [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | Production runbook: env vars, key rotation, AID admin, journal forensics, backup/restore |
 | [`docs/T3_BOUNDARY.md`](docs/T3_BOUNDARY.md) | T2 → T3 substitution boundary — exactly what changes (additive only) when implementing the hardware tier |
+| [`docs/DOGFOOD.md`](docs/DOGFOOD.md) | Dogfood report — Aegis hook installed against an actual Claude Code session, 28 calls, 5 BLOCKs, 20 REQUIRE_APPROVALs, with TP/FP/FN taxonomy and concrete code-change recommendations |
 | [`PLAN_v2.md`](PLAN_v2.md) | T2 patent-aligned re-plan (M8–M16) + claim coverage matrix |
 | [`PLAN_v3.md`](PLAN_v3.md) | T3 hardware tier design (M17–M26) — TEE attestation, ML-DSA dual-sign, FPGA judge, CSD integration |
 | [`SETUP_MACMINI.md`](SETUP_MACMINI.md) | Mac mini bootstrap for 24/7 Claude Code firewall use |
