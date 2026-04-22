@@ -5,61 +5,81 @@ A Python sidecar that wraps every AI-agent tool call in a 2,080-dimensional
 Firewall, brackets the call in an **Agent Transaction Management Unit
 (ATMU)** Write-Ahead Intent Log, asks an sLLM judge when needed,
 **Ed25519-signs** every record, chains it into a **Merkle-linked
-audit log**, and feeds every observation into a **5-layer Burn-in
-controller** that progresses through Observation → Shadow → Assisted →
-Production.
+audit log**, encrypts it into an **AES-256-GCM forensic journal**,
+maintains per-AID **circuit-breaker quarantines**, tracks per-tenant
+**cost attestation** in a separately-keyed ledger, exposes a
+**Hierarchical Agent Memory (HAM)** L3+L4 store, and feeds every
+observation into a **5-layer Burn-in controller** that progresses
+through Observation → Shadow → Assisted → Production.
 
-Implements the T2 (software-only) tier of AegisData provisional patent
-v7.10. The original 7-day MVP design is in [`PLAN.md`](PLAN.md); the
-patent-aligned re-plan and milestone status is in
+Implements the **T2 (software-only) tier** of AegisData provisional
+patent v7.10. The original 7-day MVP design is in [`PLAN.md`](PLAN.md);
+the patent-aligned re-plan and per-milestone status is in
 [`PLAN_v2.md`](PLAN_v2.md).
+
+**Status (2026-04-21):** M1–M16 complete — full T2 surface live.
+326 tests pass, ruff clean, mypy strict over 61 source files. Runs in
+Docker (`docker compose up`) and as a Claude Code `PreToolUse` hook.
 
 ---
 
 ## What's in the box
 
-| Layer | Module | Notes |
-|---|---|---|
-| Schema | `aegis.schema` | ATV-2080-v1, **30 subfields** per patent Appendix A; pydantic v2 models |
-| Vector | `aegis.atv.{builder, embeddings}` | OpenAI / dummy embedding backends; 19 SW encoders + HW zero-fill (T2) |
-| Firewall (310..340) | `aegis.firewall.{core, step310..step340}` | regex deny-list / blast / human / cost / policy+sLLM |
-| Firewall (350..370) | `aegis.firewall.{step350_approval, step360_audit, step370_exec}` | approval dispatch / sign+append / exec annotation |
-| ATMU | `aegis.atmu.{state_machine, intent_log, checkpoint, compensating}` | Write-Ahead Intent Log + 2-phase commit + 7 transaction states + compensation plans |
-| Burn-in | `aegis.burnin.{phases, controller}` | 5 layers (HW/tenant/topology/role/instance) × 4 phases with patent ¶[0075] graduation gates |
-| Judge | `aegis.judge.{base, haiku, dummy}` | Claude Haiku 4.5; dummy fallback when no key |
-| Sign | `aegis.sign.{ed25519, merkle}` | PEM PKCS8, canonical-JSON SHA3-256 + Merkle chain |
-| Audit | `aegis.audit.{sqlite_store, jsonl_store}` | WAL + lock + `BEGIN IMMEDIATE` |
-| Code attestation | `aegis.attest.code_attestation` | L3/L4/L5 code+config+key hash signed at startup; surfaced via `/attestation` |
-| Pre-LLM safety | `tools/aegis_safety.py` (stdlib) | regex / OpenAI Moderations / Haiku classifier |
-| API | `aegis.main`, `aegis.api.*` | see endpoint table below |
+| # | Milestone | Module | Patent |
+|---|---|---|---|
+| M1–M7 | Original MVP | `aegis.firewall.step{310,320,330,335,340}` · `aegis.judge.haiku` · `aegis.sign.ed25519` · `aegis.audit.{sqlite,jsonl}_store` · `aegis.attest.code_attestation` | Claims 1, 2 (partial), 17, 23 |
+| M8 | ATV-2080-v1 30-subfield schema | `aegis.schema` (30 named slices, `CostEfficiencyMetrics` 16 slots) · `aegis.atv.builder` (19 SW encoders + HW band zero-fill) | Appendix A, Claims 6, 7, 9, 24 |
+| M9 | Firewall split 350/360/370 | `aegis.firewall.step350_approval` · `step360_audit` · `step370_exec` | Claims 2, 16 |
+| M10 | ATMU + Write-Ahead Intent Log + 2PC | `aegis.atmu.{state_machine, intent_log, checkpoint, compensating}` · `POST /tool-outcome` | Claims 2, 15 |
+| M11 | 5-layer Burn-in × 4-phase graduation | `aegis.burnin.{phases, controller}` · `GET /burnin-status` | Claims 4, 13, 14, 19, 20 |
+| M12 | Cost Attestation Ledger (separate key) + 3 divergence | `aegis.cost.{model_flops, divergence, escalation, ledger}` · `GET /cost-attestation/{aid}` | Claims 3, 26, 27, 30, 33, 34 |
+| M13 | sLLM attribution head | `aegis.judge.haiku` (30-subfield contribution scores) · `step340` trace shows top-3 | Claims 8, 11 |
+| M14 | AID auth + per-AID circuit breaker | `aegis.firewall.{step315_aid_auth, circuit_breaker}` · `policies/aid_region.json` · `aegis.api.admin_aid` | Claim 5B (¶[0063L]–[0063M]) |
+| M15 | AES-256-GCM encrypted journal + forensic replay | `aegis.audit.{encrypted_journal, replay}` · `aegis.api.replay` (`GET /forensic/replay`) | §13B, ¶[0102G-1] |
+| M16 | Hierarchical Agent Memory L3+L4 | `aegis.ham.store` · `aegis.api.ham` (7 endpoints) | §13A, ¶[0102C] |
 
-Hardware band (200-D, indices 1880..2079) is intentionally zero-filled in
-T2 per patent ¶[0042] — that's the T3 work.
+The **hardware band (200-D, indices 1880..2079)** is intentionally
+zero-filled in T2 per patent ¶[0042] — that's the T3 work.
 
 ### Endpoints
 
-| Method | Path | Returns | Notes |
+| Method | Path | Returns | Milestone |
 |---|---|---|---|
-| GET | `/healthz` | `{ok, version, burn_in_id}` | liveness + current code-attestation hash |
-| POST | `/evaluate` | `Verdict` (decision/reason/atv_id/signature/step_traces) | full firewall + ATMU intent + audit append in one call |
-| POST | `/approve` | `{ok, atv_id, head}` | record human approval as a chained signed record |
-| POST | `/tool-outcome` | `{ok, record_id, current_state, tool_outcome}` | post-release outcome for an ATMU intent (M10) |
-| GET | `/audit/{aid}` | `{aid, head, length, chain_valid, chain_error, chain}` | full Merkle-chained signed records for one agent |
-| GET | `/attestation` | code-attestation measurement (L3/L4/L5 hashes + Ed25519 sig) | server software identity |
-| GET | `/burnin-status` | `{layers[…], expected_samples, weights}` | live Burn-in baseline maturity (M11) |
-| POST | `/burnin/graduate` | `{ok, layer_key, reason}` | manual phase advancement (409 if gates fail) |
-| POST | `/burnin/label` | `{ok}` | feed labelled ground-truth into TPR/FPR/precision counters |
-| GET | `/source/list` + `/source/peek` | code snippets | dashboard-only — used by Theater "Source-code paths" panel |
+| GET | `/healthz` | `{ok, version, burn_in_id}` | M1 |
+| POST | `/evaluate` | `Verdict` (decision, reason, atv_id, signature, step_traces) | M1–M14 |
+| POST | `/approve` | `{ok, atv_id, head}` | M1 |
+| POST | `/tool-outcome` | `{ok, record_id, current_state, tool_outcome}` | M10 |
+| GET | `/audit/{aid}` | `{aid, head, length, chain_valid, chain}` | M1 |
+| GET | `/attestation` | code-attestation L3/L4/L5 + Ed25519 signature | M7 |
+| GET | `/burnin-status` | per-layer phase + samples + TPR/FPR/precision | M11 |
+| POST | `/burnin/graduate` | `{ok, layer_key, reason}` (409 if gates fail) | M11 |
+| POST | `/burnin/label` | `{ok}` | M11 |
+| GET | `/cost-attestation/{aid}` | per-AID Cost Attestation Records (separately signed) | M12 |
+| GET | `/cost-attestation/by-tenant/{tenant_id}` | tenant-scoped ledger view | M12 |
+| GET | `/admin/aid` | quarantined AIDs list | M14 |
+| GET | `/admin/aid/{aid}` | full violation history for one AID | M14 |
+| POST | `/admin/aid/release` | manual release (requires `X-Aegis-Admin-Token` header) | M14 |
+| GET | `/forensic/replay` | walk encrypted journal, decrypt, per-AID chain validity | M15 |
+| POST | `/ham/memory` | store an AID-bound encrypted item | M16 |
+| POST | `/ham/recall` | retrieve by aid + tenant + tag filter | M16 |
+| POST | `/ham/context` | assemble bundle of N most-recent items | M16 |
+| POST | `/ham/forget` | tombstone an object (idempotent) | M16 |
+| POST | `/ham/summarize` | counts + tag histogram | M16 |
+| POST | `/ham/ground` | bind a claim to N memory references (returns SHA3 claim_hash) | M16 |
+| GET | `/ham/stats` | total/live/tombstoned counts | M16 |
+| GET | `/` | web dashboard (single-page) | — |
+| GET | `/theater` | ATV Theater (band visualizer) | — |
+| GET | `/source` | dashboard "Source-code paths" panel | — |
 
 ---
 
 ## Quick start
 
 ```bash
-# 1. Install deps (downloads Python 3.11 if missing)
+# 1. Install deps (downloads Python 3.11+ if missing)
 uv sync
 
-# 2. Run the test suite
+# 2. Run the test suite (326 tests)
 uv run pytest -q
 
 # 3. Lint + typecheck
@@ -68,15 +88,51 @@ uv run ruff check . && uv run mypy src
 # 4. Boot the service
 uv run uvicorn aegis.main:app --reload --port 8000
 
-# 5. In a second shell — run the 5-call demo against it
+# 5. In a second shell — run the full demo
 uv run python -m demo.agent_demo
 ```
 
-Or with the helper that does steps 4+5:
+The demo runs **the original 5-call scenario** (ALLOW/BLOCK/APPROVAL
+mix) followed by **three extension scenarios** that exercise every M8–M16
+endpoint:
+
+```
+=== M14: AID circuit breaker (aid=breaker-demo-…, role=read-only-role) ===
+  violation 1/3 -> BLOCK: ... write_file; violations=1/3
+  violation 2/3 -> BLOCK: ... write_file; violations=2/3
+  violation 3/3 -> BLOCK: ... write_file; violations=3/3
+  post-quarantine read_file -> BLOCK: AID … is quarantined — admin release required
+  /admin/aid lists 1 quarantined AID(s).
+  /admin/aid/release ok -> status=normal
+  post-release read_file -> ALLOW: all firewall steps passed
+
+=== M16: Hierarchical Agent Memory (aid=ham-demo-…) ===
+  memory  -> object_id=…  seq=1
+  memory  -> object_id=…  seq=2
+  memory  -> object_id=…  seq=3
+  recall(tags=['report']) -> 2 items
+  context -> bundle of 3 items
+  ground  -> bound=2 missing=1 claim_hash=630b056b3d6defc2…
+  forget  -> ok=True
+  summarize -> live=2 tag_hist={'calendar': 1, 'report': 1, 'customer': 1}
+
+=== M15: Forensic replay (/forensic/replay) ===
+  decrypted     = 10
+  tampered      = 0
+  aids touched  = 2
+  chains valid  = 2/2
+```
+
+Set `AEGIS_DEMO_SKIP_EXTRAS=1` to run only the original 5-call scenario.
+
+### One-shot helper
 
 ```bash
 ./demo/run_scenario.sh
 ```
+
+Brings the service up via `docker compose` if available, otherwise via
+`uv run uvicorn`, waits for `/healthz`, then runs the demo.
 
 ### Docker
 
@@ -84,34 +140,31 @@ Or with the helper that does steps 4+5:
 docker compose up --build
 ```
 
-Verified end-to-end with OrbStack on macOS — see `docker-compose.yml`.
+The compose file provisions persistent volumes for the audit DB,
+ATMU intent log, encrypted journal, HAM store, and signing keys
+(distinct keys for telemetry vs. cost attestation per Claim 34).
+Verified end-to-end with OrbStack on macOS.
 
 ### Use as a Claude Code firewall
 
 `tools/aegis_hook.py` is a `PreToolUse` hook that fires before every
 tool call inside Claude Code, asks the running Aegis service for a
 verdict, and short-circuits the tool with stderr if blocked.
+See [`tools/README.md`](tools/README.md) for install + tool mapping.
 
-```bash
-# 1. Service running
-docker compose up -d
+---
 
-# 2. Add to ~/.claude/settings.json:
-#    {
-#      "hooks": { "PreToolUse": [{
-#        "matcher": "*",
-#        "hooks": [{
-#          "type": "command",
-#          "command": "python3 /ABS/PATH/MVP/tools/aegis_hook.py"
-#        }]
-#      }] }
-#    }
+## Documentation
 
-# 3. Smoke test (10 cases: ALLOW, BLOCK, APPROVAL, FAIL_OPEN, ...)
-bash tools/test_hook.sh
-```
-
-Full install + env vars + tool mapping table: see [`tools/README.md`](tools/README.md).
+| Doc | What's in it |
+|---|---|
+| [`docs/QUICKSTART.md`](docs/QUICKSTART.md) | 60-second path: install → boot → first verdict → first chain |
+| [`docs/DEMO.md`](docs/DEMO.md) | Recording playbook with timed beats — 90-second elevator demo + 5-minute deep-dive script |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Per-milestone surface tour with file pointers, data flow diagrams, and patent-claim cross-references |
+| [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | Production runbook: env vars, key rotation, AID admin, journal forensics, backup/restore |
+| [`PLAN_v2.md`](PLAN_v2.md) | Patent-aligned re-plan + claim coverage matrix |
+| [`SETUP_MACMINI.md`](SETUP_MACMINI.md) | Mac mini bootstrap for 24/7 Claude Code firewall use |
+| [`tools/README.md`](tools/README.md) | Claude Code hook install + 10-case smoke test |
 
 ---
 
@@ -125,6 +178,25 @@ The defaults are deliberately offline-friendly:
 |---|---|---|
 | `AEGIS_EMBEDDING_PROVIDER` | `dummy` | `openai` (needs `OPENAI_API_KEY`) |
 | `AEGIS_JUDGE_PROVIDER` | `dummy` | `haiku` (needs `ANTHROPIC_API_KEY`) |
+| `AEGIS_SAFETY_PROVIDER` | `dummy` | `openai` (Moderations) or `haiku` |
+| `AEGIS_ADMIN_TOKEN` | `dev-admin-token` | any random string for production AID release |
+
+Storage paths (auto-created on first run):
+
+| Setting | Default |
+|---|---|
+| `AEGIS_AUDIT_DB` | `./data/audit.sqlite` |
+| `AEGIS_AUDIT_JSONL` | `./data/audit.jsonl` |
+| `AEGIS_INTENT_LOG_DB` | `./data/intent_log.sqlite` |
+| `AEGIS_COST_LEDGER_DB` | `./data/cost_attestation.sqlite` |
+| `AEGIS_COST_LEDGER_JSONL` | `./data/cost_attestation.jsonl` |
+| `AEGIS_JOURNAL_PATH` | `./data/journal.bin` |
+| `AEGIS_JOURNAL_DATA_KEY_PATH` | `./keys/journal_data.key` |
+| `AEGIS_HAM_DB` | `./data/ham.sqlite` |
+| `AEGIS_HAM_DATA_KEY_PATH` | `./keys/ham_data.key` |
+| `AEGIS_SIGNING_KEY_PATH` / `_PUBLIC_KEY_PATH` | `./keys/ed25519.{pem,pub}` |
+| `AEGIS_COST_SIGNING_KEY_PATH` / `_PUBLIC_KEY_PATH` | `./keys/ed25519_cost.{pem,pub}` (Claim 34: distinct from telemetry key) |
+| `AEGIS_POLICY_DIR` | `./policies/` |
 
 If you set the provider to `openai` / `haiku` but the corresponding key
 is missing, the code automatically falls back to the dummy implementation
@@ -132,168 +204,30 @@ so nothing breaks.
 
 ---
 
-## Demo output (PLAN 1.3 Definition of Done)
+## Web dashboard
 
-```
-=== AegisData T2 demo (mode=stub, aid=agent-demo-XXXX) ===
-Tool-call verdicts:
-  1. read_file        → ALLOW              (all firewall steps passed)
-  2. write_file       → ALLOW              (all firewall steps passed)
-  3. execute_shell    → BLOCK              (dangerous pattern: \brm\s+-rf\s+/)
-  4. write_file       → REQUIRE_APPROVAL   (exp_bytes_write 5000000000 > budget 1000000000)
-  5. transfer_funds   → REQUIRE_APPROVAL   (blast radius 10 >= 7)
+Open [`http://localhost:8000`](http://localhost:8000) for the live
+single-page dashboard. It surfaces every M8–M16 panel:
 
-Verdict tally:
-  ALLOW             2
-  BLOCK             1
-  REQUIRE_APPROVAL  2
+* **Craft a tool call** — preset buttons + sliders for `prompt_injection`,
+  `pii_exposure`, the 16-slot cost metrics, and a free-form JSON args field
+* **Action Firewall pipeline** — animated row-by-row trace through steps
+  310 / 315 / 320 / 330 / 335 / 340 / 350 / 360 / 370
+* **Verdict** — decision badge, reason, ATV id, Ed25519 signature
+* **ATV-2080-v1 bands** — color-coded strip with deterministic intensity
+  per band derived from `atv_id`
+* **Audit chain** — per-AID Merkle chain with `prev_hash → this_hash`
+  visualization and live `chain_valid` flag
+* **Burn-in baseline** — per-layer phase + samples + TPR/FPR/precision
+* **Burn-in attestation** — L1–L5 code/config/key hashes + browser-side
+  Ed25519 signature verification
+* **AID circuit breaker** (M14) — live quarantine list, admin release form
+* **Forensic replay** (M15) — decrypted / tampered / aids-seen tiles +
+  per-AID chain head listing
+* **Hierarchical Agent Memory** (M16) — three-column store / recall /
+  summarize+ground+forget interface; checkboxes auto-fill ground refs
 
-Audit chain for agent-demo-XXXX:
-  length      = 5
-  head        = 4a2866d5c92545fec8d4e282...
-  chain_valid = True
-```
-
-* **Stub mode** (no `ANTHROPIC_API_KEY`): exercises Aegis with a fixed 5-call scenario hand-tuned to hit every verdict class.
-* **Live mode** (`ANTHROPIC_API_KEY` set): asks Claude Sonnet 4.6 with the tool catalog and forwards each `tool_use` block to Aegis.
-
----
-
-## API reference
-
-### `POST /evaluate`
-
-> **Breaking change in M8 (patent v7.10 alignment):** the `cost_estimate`
-> field switched from the legacy `{exp_bytes_write, exp_dollars,
-> confidence}` trio to the patent's 16-named-slot
-> `CostEfficiencyMetrics` shape (`input_token_count`,
-> `output_token_count`, `cumulative_dollars`,
-> `forecasted_cost_to_completion`, `budget_burn_rate`, `cache_hit_rate`,
-> `task_progress_score`, …). All fields default to 0; populate what you
-> can measure on the host.
-
-Request body (`ATVInput`):
-
-```json
-{
-  "header": {
-    "trace_id": "t-001",
-    "span_id":  "s-001",
-    "tenant_id": "demo-tenant",
-    "aid": "agent-42",
-    "ats": "ATV-2080-v1",
-    "schema_version": "ATV-2080-v1",
-    "tier_profile": "T2",
-    "cost_attestation_profile": "software",
-    "timestamp_ns": 1737172800000000000
-  },
-  "agent_state_text": "User asked for a file summary...",
-  "plan_text": "Read the file, then write summary.",
-  "tool_name": "read_file",
-  "tool_args_json": "{\"path\":\"./data/report.txt\"}",
-  "safety_flags": {"prompt_injection": 0.02},
-  "memory_fingerprint": "sha3_256:abcdef01234567...",
-  "cost_estimate": {
-    "input_token_count": 200,
-    "output_token_count": 80,
-    "cumulative_dollars": 0.001,
-    "forecasted_cost_to_completion": 0.01,
-    "budget_burn_rate": 0.05
-  }
-}
-```
-
-Response (`Verdict`):
-
-```json
-{
-  "decision": "ALLOW",
-  "reason": "all firewall steps passed",
-  "atv_id": "6f8b7c5a-...",
-  "signature": "7a2c...",
-  "confidence": 1.0,
-  "step_traces": {
-    "aegis.firewall.step310_args.run":     "step310: ok (inj=0.02)",
-    "aegis.firewall.step320_blast.run":    "step320: blast=1 (tool=read_file)",
-    "aegis.firewall.step330_human.run":    "step330: ok (blast=1)",
-    "aegis.firewall.step335_cost.run":     "step335: ok (cum=0.001, forecast=0.01, ceiling=1.0)",
-    "aegis.firewall.step340_policy.run":   "step340: allow match safe-read",
-    "aegis.firewall.step370_exec.annotate":"step370: exec-recommendation=PROCEED",
-    "aegis.atmu.intent_log":               "intent_record_id=e4a09dae-7c44-...",
-    "aegis.burnin.composite_score":        "composite=0.000"
-  }
-}
-```
-
-The host SHOULD use the `intent_record_id` value from `step_traces` to
-post a follow-up `/tool-outcome` after running (or skipping) the tool.
-
-### `POST /approve`
-
-Append a signed human-decision record onto an aid's chain (typically
-following a previous `REQUIRE_APPROVAL`):
-
-```json
-{
-  "atv_id": "6f8b7c5a-...",
-  "aid": "agent-42",
-  "tenant_id": "demo-tenant",
-  "approver": "alice",
-  "decision": "ALLOW",
-  "note": "manually reviewed"
-}
-```
-
-### `POST /tool-outcome` (M10)
-
-After executing or skipping a tool, the host informs Aegis of the
-outcome so the ATMU intent record transitions out of `prepared` /
-`committed`:
-
-```json
-{
-  "record_id": "e4a09dae-7c44-...",
-  "status": "success",
-  "result_hash": "sha3-256-of-tool-output",
-  "side_effect_receipt": "txn-confirmation-id",
-  "follow_up_state": "committed",
-  "follow_up_reason": "human approved"
-}
-```
-
-Status ∈ `{success, failure, timeout, partial, compensated}`.
-`follow_up_state` ∈ `{prepared, committed, aborted, rolled-back, compensated, quarantined}`
-and is validated by the state machine — illegal transitions return 409.
-
-### `GET /audit/{aid}`
-
-Returns the full Merkle-chained signed record list for one agent, plus a
-`chain_valid` flag (server re-runs `verify_chain` so callers don't have
-to). Each record carries the M11 `cost_attestation_hint` boolean so a
-future Cost Attestation Ledger can index cost-influenced records.
-
-### `GET /burnin-status` (M11)
-
-Returns the per-layer slot table for the 5-layer Burn-in controller:
-
-```json
-{
-  "layers": [
-    {"key":"L1","layer":"L1","tenant_id":null,"role_id":null,"aid":null,
-     "phase":"observation","samples":3,"tpr":0.0,"fpr":0.0,
-     "precision":0.0,"override_rate":0.0,"transitions":[]},
-    {"key":"L2:demo-tenant","layer":"L2","tenant_id":"demo-tenant",...},
-    ...
-  ],
-  "expected_samples":{"L1":1000,"L2":5000,"L3":2000,"L4":1000,"L5":500},
-  "weights":{"L1":0.20,"L2":0.20,"L3":0.20,"L4":0.20,"L5":0.20}
-}
-```
-
-`POST /burnin/graduate {layer_key}` advances one slot if its phase gates
-are met (409 with reason otherwise). `POST /burnin/label {inp, verdict,
-ground_truth, was_human_override?}` feeds labelled outcomes into
-TPR/FPR/precision so Shadow → Assisted graduation can be evaluated.
+`/theater` shows the ATV vector itself with a band-by-band breakdown.
 
 ---
 
@@ -303,10 +237,37 @@ TPR/FPR/precision so Shadow → Assisted graduation can be evaluated.
 uv run pytest --cov=aegis
 ```
 
-* **243 tests** (M8: +12 ATV builder · M9: +9 firewall split · M10: +37 ATMU · M11: +21 burn-in, on top of the original 164)
-* **Strict mypy** over 46 source files
-* **Concurrency**: 100-record SQLite audit chain, 200-line JSONL, 100-intent ATMU WAL all pass under thread contention
-* **No network in tests**: respx mocks `api.anthropic.com`; OpenAI is unused under `dummy` provider
+* **326 tests** across unit + integration + e2e
+* **mypy --strict** over **61 source files**
+* **ruff** clean
+* **Concurrency**: 100-record SQLite audit chain, 200-line JSONL,
+  100-intent ATMU WAL, and per-AID circuit-breaker counters all pass
+  under thread contention
+* **No network in tests**: respx mocks `api.anthropic.com`; OpenAI is
+  unused under `dummy` provider
+
+Per-milestone test files:
+
+```
+tests/unit/
+├── test_step310_args.py … test_step370_exec.py        firewall
+├── test_step315_aid_auth.py · test_circuit_breaker.py   M14
+├── test_atmu_state_machine.py · test_intent_log.py     M10
+├── test_burnin_*.py                                     M11
+├── test_cost_*.py                                       M12
+├── test_judge_haiku.py (attribution head)               M13
+├── test_encrypted_journal.py · test_replay.py          M15
+└── test_ham.py                                          M16
+
+tests/integration/
+├── test_evaluate_e2e.py · test_audit_chain_e2e.py      M1
+├── test_tool_outcome_e2e.py                             M10
+├── test_burnin_e2e.py                                   M11
+├── test_cost_attestation_e2e.py                         M12
+├── test_admin_aid_e2e.py                                M14
+├── test_replay_e2e.py                                   M15
+└── test_ham_e2e.py                                      M16
+```
 
 ---
 
@@ -314,43 +275,95 @@ uv run pytest --cov=aegis
 
 ```
 src/aegis/
-├── schema.py              ATV slice constants + Pydantic models
-├── config.py              pydantic-settings (.env loader)
-├── main.py                FastAPI factory + `app`
+├── schema.py                ATV slice constants + 30-subfield Pydantic models
+├── config.py                pydantic-settings (.env loader)
+├── main.py                  FastAPI factory + `app`
 ├── atv/
-│   ├── embeddings.py      EmbeddingProvider abstraction
-│   └── builder.py         build_atv() — fills the 2080-D vector
+│   ├── embeddings.py        EmbeddingProvider abstraction
+│   └── builder.py           build_atv() — 19 SW encoders + HW zero-fill
 ├── firewall/
-│   ├── core.py            FirewallContext + run_firewall orchestrator
-│   ├── step310_args.py    pattern blocklist + injection threshold
-│   ├── step320_blast.py   tool blast-radius lookup
-│   ├── step330_human.py   high-blast → REQUIRE_APPROVAL
-│   ├── step335_cost.py    per-tenant byte/dollar/confidence budgets
-│   └── step340_policy.py  policy match + sLLM judge fallback
+│   ├── core.py              FirewallContext + run_firewall orchestrator
+│   ├── circuit_breaker.py   M14 — per-AID violation counter + quarantine
+│   ├── step310_args.py      pattern blocklist + injection threshold
+│   ├── step315_aid_auth.py  M14 — AID-region authorization
+│   ├── step320_blast.py     tool blast-radius lookup
+│   ├── step330_human.py     high-blast → REQUIRE_APPROVAL
+│   ├── step335_cost.py      M8 — forecast-gating with 16-slot metrics
+│   ├── step340_policy.py    policy match + sLLM judge fallback
+│   ├── step350_approval.py  M9 — approval dispatch (channels)
+│   ├── step360_audit.py     M9 — sign + append + cost_attestation_hint
+│   └── step370_exec.py      M9 — exec annotation (PROCEED/SUPPRESS/DEFER)
+├── atmu/                    M10 — Agent Transaction Management Unit
+│   ├── state_machine.py     7-state machine + legal transitions
+│   ├── intent_log.py        SQLite-backed Write-Ahead Intent Log
+│   ├── checkpoint.py        blast≥7 checkpoint manifests
+│   └── compensating.py      DEFAULT_COMPENSATION_STRATEGIES
+├── burnin/                  M11 — 5-layer × 4-phase
+│   ├── phases.py            Phase StrEnum + PhaseMetrics + can_graduate
+│   └── controller.py        BurnInController (observe / record_label / try_graduate)
+├── cost/                    M12 — Cost Attestation Ledger
+│   ├── model_flops.py       FLOPS_PER_TOKEN per model
+│   ├── divergence.py        token-to-FLOPs / memory-cost / dollar-cost metrics
+│   ├── escalation.py        Claim 27 — independent of sLLM verdict
+│   └── ledger.py            separate Ed25519 key + per-aid Merkle chain
 ├── judge/
-│   ├── base.py            Judge ABC + JudgeVerdict
-│   ├── haiku.py           Claude Haiku 4.5 backend
-│   └── dummy.py           offline stub
+│   ├── base.py              Judge ABC + JudgeVerdict (with `subfield_attribution`)
+│   ├── haiku.py             M13 — Claude Haiku 4.5 + attribution head
+│   └── dummy.py             offline stub
 ├── sign/
-│   ├── ed25519.py         keypair management + sign/verify
-│   └── merkle.py          chain hashing + verify_chain
+│   ├── ed25519.py           keypair management + sign/verify
+│   └── merkle.py            chain hashing + verify_chain
 ├── audit/
-│   ├── sqlite_store.py    indexed records + chain head (transactional)
-│   └── jsonl_store.py     append-only raw record dump
+│   ├── sqlite_store.py      indexed records + chain head (transactional)
+│   ├── jsonl_store.py       append-only raw record dump
+│   ├── encrypted_journal.py M15 — AES-256-GCM with AAD-bound header
+│   └── replay.py            M15 — ReplayReport + per-AID chain rebuild
+├── ham/                     M16 — Hierarchical Agent Memory L3+L4
+│   └── store.py             encrypted SQLite + L1 OrderedDict cache
+├── attest/
+│   ├── code_attestation.py  L3/L4/L5 hashes signed at startup
+│   └── burn_in.py           BurnInMeasurement assembly
 └── api/
-    ├── evaluate.py        POST /evaluate
-    ├── approve.py         POST /approve
-    └── audit_query.py     GET  /audit/{aid}
+    ├── evaluate.py          POST /evaluate
+    ├── approve.py           POST /approve
+    ├── audit_query.py       GET  /audit/{aid}
+    ├── attestation.py       GET  /attestation
+    ├── tool_outcome.py      POST /tool-outcome (M10)
+    ├── burnin_status.py     M11 endpoints
+    ├── cost_attestation.py  M12 endpoints
+    ├── admin_aid.py         M14 endpoints
+    ├── replay.py            M15 endpoint
+    ├── ham.py               M16 endpoints
+    └── source.py            dashboard source-peek
 
-policies/default.json      deny + allow rules (PLAN 6.9)
-demo/agent_demo.py         5-call scenario hitting every verdict class
-demo/run_scenario.sh       bring service up + run demo
+policies/
+├── default.json             deny + allow rules (PLAN 6.9)
+└── aid_region.json          M14 — per-AID role policy
+
+demo/
+├── agent_demo.py            5-call scenario + M14/M15/M16 extensions
+├── tools.py                 Anthropic tool catalog
+└── run_scenario.sh          bring service up + run demo
+
+tools/
+├── aegis_hook.py            Claude Code PreToolUse hook
+├── aegis_safety.py          PRE-LLM safety classifier (regex / OpenAI / Haiku)
+└── test_hook.sh             10-case smoke test
 ```
 
 ---
 
-## Out of scope (per PLAN 1.2)
+## Out of scope (T3 — patent-future work)
 
-Real TEE deployment, hardware EK burn-in (L1), post-quantum signatures,
-CSD integration, in-storage similarity, web UI. These are T3 / future
-work.
+* Real TEE deployment + hardware EK burn-in (L1)
+* CSD (Computational Storage Device) integration
+* In-storage similarity / FPGA/AIE judge inference
+* Hardware AID-tag comparator at the memory controller
+* Post-quantum signatures (ML-DSA stub exists but is disabled)
+* In-storage HAM L2 tier (NVMe-backed CXL pool)
+
+These slot in via the existing T2 surface — the schema, headers, and
+endpoints already carry the field placeholders (e.g. `tier_profile`,
+`cost_attestation_profile`, the 200-D HW band, the `hw_cost_attestation`
+subfield range 2044..2059). T3 fills the zeros without changing the
+external contract.
