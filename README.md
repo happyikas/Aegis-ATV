@@ -1,5 +1,7 @@
 # AegisData T2 MVP
 
+[![CI](https://github.com/chanikpark/aegis-mvp/actions/workflows/ci.yml/badge.svg)](https://github.com/chanikpark/aegis-mvp/actions/workflows/ci.yml)
+
 ![demo](demo/recording/demo.gif)
 
 A Python sidecar that wraps every AI-agent tool call in a 2,080-dimensional
