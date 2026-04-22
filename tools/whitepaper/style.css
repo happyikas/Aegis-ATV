@@ -1,0 +1,336 @@
+/* AegisData Whitepaper — print-ready stylesheet (Korean + English).
+   Targets Chrome headless --print-to-pdf. A4 portrait. */
+
+@page {
+  size: A4;
+  margin: 22mm 18mm 22mm 18mm;
+
+  @top-left   { content: ""; }
+  @top-right  { content: "AegisData 기술 백서 v1.0"; font-size: 8pt; color: #94a3b8; font-family: -apple-system, "Apple SD Gothic Neo", "Helvetica Neue", sans-serif; }
+  @bottom-center { content: counter(page) " / " counter(pages); font-size: 8pt; color: #94a3b8; font-family: -apple-system, "Apple SD Gothic Neo", sans-serif; }
+}
+
+@page :first {
+  margin: 0;
+  @top-left { content: ""; }
+  @top-right { content: ""; }
+  @bottom-center { content: ""; }
+}
+
+/* ─────────── Base ─────────── */
+:root {
+  --fg: #0f172a;
+  --fg-soft: #334155;
+  --muted: #64748b;
+  --rule: #e2e8f0;
+  --bg-card: #f8fafc;
+  --accent: #0c4a6e;       /* deep slate-blue */
+  --accent-2: #0ea5e9;     /* sky highlight */
+  --code-bg: #f1f5f9;
+  --quote-bg: #fef3c7;
+  --quote-bar: #f59e0b;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, "Apple SD Gothic Neo", "Pretendard", "Noto Sans KR", "Helvetica Neue", Helvetica, sans-serif;
+  font-size: 10.5pt;
+  line-height: 1.55;
+  color: var(--fg);
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+/* ─────────── Cover ─────────── */
+.cover {
+  width: 210mm;
+  height: 297mm;
+  margin: 0;
+  padding: 0;
+  page-break-after: always;
+  background: linear-gradient(160deg, #0c4a6e 0%, #1e3a8a 60%, #0f172a 100%);
+  color: white;
+  position: relative;
+  overflow: hidden;
+}
+
+.cover::before {
+  /* abstract grid texture */
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    repeating-linear-gradient(0deg, transparent 0 39px, rgba(255,255,255,0.04) 39px 40px),
+    repeating-linear-gradient(90deg, transparent 0 39px, rgba(255,255,255,0.04) 39px 40px);
+  pointer-events: none;
+}
+
+.cover::after {
+  content: "";
+  position: absolute;
+  right: -100mm;
+  top: -100mm;
+  width: 350mm;
+  height: 350mm;
+  background: radial-gradient(circle, rgba(14,165,233,0.18) 0%, transparent 60%);
+  pointer-events: none;
+}
+
+.cover-inner {
+  position: relative;
+  z-index: 2;
+  padding: 24mm 22mm;
+  height: calc(297mm - 48mm);
+  display: flex;
+  flex-direction: column;
+}
+
+.brand-mark {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 9pt;
+  letter-spacing: 0.18em;
+  color: rgba(255,255,255,0.6);
+  text-transform: uppercase;
+  margin-bottom: 6mm;
+}
+
+.brand-mark .dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-2);
+  vertical-align: middle;
+  margin: 0 6px 2px 0;
+  box-shadow: 0 0 12px var(--accent-2);
+}
+
+.cover-title {
+  font-size: 56pt;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.0;
+  margin: 0 0 6mm 0;
+  color: white;
+}
+
+.cover-title .accent {
+  color: var(--accent-2);
+}
+
+.cover-subtitle {
+  font-size: 22pt;
+  font-weight: 400;
+  line-height: 1.3;
+  margin: 0 0 10mm 0;
+  color: rgba(255,255,255,0.92);
+  max-width: 150mm;
+}
+
+.cover-tagline {
+  font-size: 11pt;
+  color: rgba(255,255,255,0.7);
+  border-left: 3px solid var(--accent-2);
+  padding-left: 5mm;
+  max-width: 140mm;
+  margin: 0 0 auto 0;
+  line-height: 1.55;
+}
+
+.cover-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4mm;
+  margin: 14mm 0 0 0;
+}
+
+.cover-stat {
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 6px;
+  padding: 4mm 4mm;
+}
+
+.cover-stat .num {
+  display: block;
+  font-size: 22pt;
+  font-weight: 700;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  color: white;
+  line-height: 1.0;
+  margin-bottom: 2mm;
+}
+
+.cover-stat .lbl {
+  display: block;
+  font-size: 8pt;
+  color: rgba(255,255,255,0.65);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.cover-foot {
+  margin-top: 12mm;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  font-size: 9pt;
+  color: rgba(255,255,255,0.55);
+}
+
+.cover-foot .meta b { color: rgba(255,255,255,0.85); font-weight: 600; }
+
+/* ─────────── Body typography ─────────── */
+.body { padding: 0; }
+
+h1 {
+  font-size: 22pt;
+  font-weight: 800;
+  margin: 18mm 0 4mm 0;
+  padding-bottom: 3mm;
+  border-bottom: 2px solid var(--accent);
+  color: var(--accent);
+  page-break-before: always;
+  page-break-after: avoid;
+}
+
+/* The very first H1 inside the body should not force a page break
+   because it sits right after the cover. */
+.body > h1:first-of-type {
+  page-break-before: auto;
+}
+
+h2 {
+  font-size: 16pt;
+  font-weight: 700;
+  margin: 10mm 0 3mm 0;
+  color: var(--accent);
+  page-break-after: avoid;
+}
+
+h3 {
+  font-size: 13pt;
+  font-weight: 700;
+  margin: 7mm 0 2mm 0;
+  color: var(--fg);
+  page-break-after: avoid;
+}
+
+h4 {
+  font-size: 11pt;
+  font-weight: 700;
+  margin: 5mm 0 1mm 0;
+  color: var(--fg-soft);
+  page-break-after: avoid;
+}
+
+p, li {
+  margin: 0 0 2.5mm 0;
+  text-align: justify;
+  text-justify: inter-character;
+  word-break: keep-all;
+}
+
+ul, ol {
+  margin: 2mm 0 4mm 6mm;
+  padding: 0;
+}
+
+ul li::marker { color: var(--accent-2); }
+
+strong { font-weight: 700; color: var(--fg); }
+em { color: var(--fg-soft); font-style: italic; }
+
+a { color: var(--accent); text-decoration: none; border-bottom: 1px dotted var(--accent-2); }
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: 6mm 0;
+}
+
+/* ─────────── Tables ─────────── */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 4mm 0 6mm 0;
+  font-size: 9.5pt;
+  page-break-inside: avoid;
+}
+
+table th, table td {
+  border: 1px solid var(--rule);
+  padding: 2mm 3mm;
+  text-align: left;
+  vertical-align: top;
+  word-break: keep-all;
+}
+
+table th {
+  background: var(--accent);
+  color: white;
+  font-weight: 600;
+  font-size: 9pt;
+  letter-spacing: 0.02em;
+}
+
+table tr:nth-child(even) td {
+  background: var(--bg-card);
+}
+
+/* ─────────── Code ─────────── */
+code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 9pt;
+  background: var(--code-bg);
+  padding: 1px 4px;
+  border-radius: 3px;
+  border: 1px solid var(--rule);
+  word-break: break-all;
+}
+
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--accent-2);
+  border-radius: 4px;
+  padding: 4mm;
+  margin: 3mm 0 5mm 0;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 8.5pt;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  page-break-inside: avoid;
+}
+
+pre code {
+  background: transparent;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  font-size: inherit;
+}
+
+/* ─────────── Blockquotes ─────────── */
+blockquote {
+  margin: 4mm 0;
+  padding: 3mm 5mm 3mm 5mm;
+  background: var(--quote-bg);
+  border-left: 4px solid var(--quote-bar);
+  border-radius: 0 4px 4px 0;
+  color: var(--fg-soft);
+  font-style: italic;
+  page-break-inside: avoid;
+}
+
+blockquote p { margin: 0; }
+
+/* ─────────── Page-break helpers ─────────── */
+h1, h2, h3, h4 { break-after: avoid-page; }
+table, pre, blockquote { break-inside: avoid-page; }
+
+/* TL;DR and front matter shouldn't force breaks */
+.frontmatter h1 { page-break-before: auto; }

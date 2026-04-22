@@ -172,7 +172,8 @@ See [`tools/README.md`](tools/README.md) for install + tool mapping.
 | [`docs/DOGFOOD_PHASE_B.md`](docs/DOGFOOD_PHASE_B.md) | Dogfood report Phase B — same 10-call battery rerun against the post-Recommendations firewall. 4 stricter, 1 softer, 0 regressions; 71% noise floor eliminated; all 3 false negatives closed |
 | [`PLAN_v2.md`](PLAN_v2.md) | T2 patent-aligned re-plan (M8–M16) + claim coverage matrix |
 | [`PLAN_v3.md`](PLAN_v3.md) | T3 hardware tier design (M17–M26) — TEE attestation, ML-DSA dual-sign, FPGA judge, CSD integration |
-| [`WHITEPAPER.md`](WHITEPAPER.md) | **(한국어) 기술 백서** — 시장 배경 · 사고 사례 · 특허 기술 설명 · MVP 검증 · POC 가이드 · 데모 시나리오 · 투자자 피치 · GTM · C-level 팀 구성안 (10 sections, 977 lines) |
+| [`WHITEPAPER.md`](WHITEPAPER.md) | **(한국어) 기술 백서 — 마크다운 소스** — 10 sections, 977 lines |
+| [`docs/build/WHITEPAPER.pdf`](docs/build/WHITEPAPER.pdf) | **(한국어) 기술 백서 — PDF (31 pages, ~1.7 MB)** — A4 portrait, 디자인 커버 + 자동 페이지 번호 + 목차. `bash tools/whitepaper/build_pdf.sh` 로 재생성 |
 | [`SETUP_MACMINI.md`](SETUP_MACMINI.md) | Mac mini bootstrap for 24/7 Claude Code firewall use |
 | [`tools/README.md`](tools/README.md) | Claude Code hook install + 10-case smoke test |
 
