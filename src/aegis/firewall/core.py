@@ -46,6 +46,7 @@ def default_steps() -> list[StepFn]:
     """Return the canonical ordered step list. Lazy-imported to avoid cycles."""
     from aegis.firewall import (
         step310_args,
+        step315_aid_auth,
         step320_blast,
         step330_human,
         step335_cost,
@@ -54,6 +55,7 @@ def default_steps() -> list[StepFn]:
 
     return [
         step310_args.run,
+        step315_aid_auth.run,    # M14 — AID-region authorization + circuit breaker
         step320_blast.run,
         step330_human.run,
         step335_cost.run,

@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from aegis import __version__
+from aegis.api.admin_aid import make_router as _admin_aid_router
 from aegis.api.approve import make_router as _approve_router
 from aegis.api.attestation import make_router as _attestation_router
 from aegis.api.audit_query import make_router as _audit_router
@@ -36,6 +37,7 @@ from aegis.audit.sqlite_store import AuditDB
 from aegis.burnin import BurnInController
 from aegis.config import settings
 from aegis.cost.ledger import CostAttestationLedger
+from aegis.firewall.step315_aid_auth import get_circuit_breaker
 from aegis.sign.ed25519 import load_or_create_key
 
 _STATIC_DIR = Path(__file__).parent / "web" / "static"
@@ -95,6 +97,7 @@ def create_app(
     app.include_router(_tool_outcome_router(intent_log=real_intent_log))
     app.include_router(_burnin_router(controller=real_burnin))
     app.include_router(_cost_router(ledger=cost_ledger))
+    app.include_router(_admin_aid_router(breaker=get_circuit_breaker()))
 
     if _STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
