@@ -108,3 +108,52 @@ def test_healthz_includes_burn_in_id(aegis_app: FastAPI) -> None:
     h = client.get("/healthz").json()
     a = client.get("/attestation").json()
     assert h["burn_in_id"] == a["burn_in_id"]
+
+
+# ─────────────────────────────────────────────────────────────────────
+# M17 — TEE attestation endpoint (PLAN_v3)
+# ─────────────────────────────────────────────────────────────────────
+
+
+def test_attestation_includes_tee_quote_ref(aegis_app: FastAPI) -> None:
+    """T2 /attestation now points at the T3 endpoint."""
+    client = TestClient(aegis_app)
+    body = client.get("/attestation").json()
+    assert body.get("tee_quote_ref") == "/attestation/tee-quote"
+
+
+def test_tee_quote_with_mock_provider(aegis_app: FastAPI, monkeypatch) -> None:
+    monkeypatch.setenv("AEGIS_TEE_PROVIDER", "mock")
+    client = TestClient(aegis_app)
+    r = client.get("/attestation/tee-quote")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["provider"] == "mock"
+    q = body["quote"]
+    for key in (
+        "provider", "schema_version", "enclave_measurement",
+        "platform_measurement", "report_data", "tcb_version",
+        "timestamp_ns", "quote_signature", "raw_quote_hex",
+    ):
+        assert key in q
+    assert q["extras"].get("is_mock") is True
+
+
+def test_tee_quote_503_when_provider_none(aegis_app: FastAPI, monkeypatch) -> None:
+    monkeypatch.setenv("AEGIS_TEE_PROVIDER", "none")
+    client = TestClient(aegis_app)
+    r = client.get("/attestation/tee-quote")
+    assert r.status_code == 503
+    assert "TEE attestation not available" in r.json()["detail"]
+
+
+def test_tee_quote_report_data_binds_burn_in_id(aegis_app: FastAPI, monkeypatch) -> None:
+    """report_data MUST be a deterministic function of burn_in_id."""
+    from aegis.attest.tee_quote import derive_report_data
+
+    monkeypatch.setenv("AEGIS_TEE_PROVIDER", "mock")
+    client = TestClient(aegis_app)
+    a = client.get("/attestation").json()
+    q = client.get("/attestation/tee-quote").json()
+    assert q["quote"]["report_data"] == derive_report_data(a["burn_in_id"])
+    assert q["burn_in_id"] == a["burn_in_id"]

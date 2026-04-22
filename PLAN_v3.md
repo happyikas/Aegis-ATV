@@ -542,7 +542,7 @@ T2 DoD (PLAN_v2 §8) 는 모두 그대로 유지. T3 추가 DoD:
 
 | Milestone | 상태 | 주요 성과 | 신규 테스트 |
 |---|---|---|---|
-| M17 TEE attestation | 🔜 다음 | — | — |
+| **M17 TEE attestation** | **✅ 완료 (mock provider)** | `aegis.attest.tee_quote` 모듈 + `TEEQuote` envelope (TDX/SEV-SNP/mock unified shape). `GET /attestation/tee-quote` endpoint. `AEGIS_TEE_PROVIDER=mock` 으로 CI에서도 동작. 실제 TDX/SEV-SNP 코드 경로는 placeholder (device 미존재 시 mock으로 graceful degrade). burn_in_id 가 quote의 `report_data` 에 박힘 — T2 measurement 가 T3 quote에 cryptographically bound. | +21 (455 total) |
 | M18 ML-DSA dual-sign | 🔜 | — | — |
 | M19 HW cost counters | 🔜 | — | — |
 | M20 FPGA sLLM | 🔜 (HW 의존) | — | — |
