@@ -1,0 +1,318 @@
+/* AegisData pitch deck — A4 landscape, 13 slides.
+   Brand-consistent with WHITEPAPER.pdf. Targets Chrome headless print. */
+
+@page {
+  size: A4 landscape;
+  margin: 0;
+}
+
+:root {
+  --fg: #0f172a;
+  --fg-soft: #334155;
+  --muted: #64748b;
+  --rule: #e2e8f0;
+  --bg: #ffffff;
+  --bg-card: #f8fafc;
+  --accent: #0c4a6e;       /* deep slate-blue */
+  --accent-2: #0ea5e9;     /* sky highlight */
+  --accent-warm: #f59e0b;  /* warm amber for stats */
+  --danger: #dc2626;
+  --good: #16a34a;
+}
+
+html, body {
+  margin: 0; padding: 0;
+  font-family: -apple-system, "Apple SD Gothic Neo", "Pretendard", "Noto Sans KR", "Helvetica Neue", sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 14pt;
+  line-height: 1.4;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+/* ─────────── Slide canvas ─────────── */
+.slide {
+  width: 297mm;
+  height: 210mm;
+  padding: 16mm 20mm;
+  box-sizing: border-box;
+  page-break-after: always;
+  position: relative;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.slide:last-child { page-break-after: auto; }
+
+/* On-screen: stack slides vertically with gap */
+@media screen {
+  body { background: #cbd5e1; padding: 30px 0; }
+  .slide {
+    margin: 0 auto 30px auto;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+    border-radius: 4px;
+  }
+}
+
+/* ─────────── Slide chrome ─────────── */
+.slide .num {
+  position: absolute;
+  bottom: 10mm; right: 18mm;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 9pt;
+  color: var(--muted);
+}
+
+.slide .brand {
+  position: absolute;
+  bottom: 10mm; left: 18mm;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 9pt;
+  color: var(--muted);
+  letter-spacing: 0.08em;
+}
+
+/* ─────────── Headings ─────────── */
+.slide h1 {
+  font-size: 36pt;
+  font-weight: 800;
+  margin: 0 0 6mm 0;
+  color: var(--accent);
+  letter-spacing: -0.01em;
+  line-height: 1.05;
+}
+
+.slide h2 {
+  font-size: 18pt;
+  font-weight: 600;
+  margin: 0 0 8mm 0;
+  color: var(--fg-soft);
+  line-height: 1.3;
+}
+
+.slide h3 {
+  font-size: 14pt;
+  font-weight: 700;
+  margin: 6mm 0 3mm 0;
+  color: var(--accent);
+}
+
+.slide p { margin: 0 0 3mm 0; }
+
+/* Layout helpers */
+.center { text-align: center; }
+.row { display: flex; gap: 8mm; }
+.col { flex: 1; }
+.col-2 { flex: 2; }
+.spacer { flex: 1; }
+
+ul.clean { list-style: none; padding: 0; margin: 0; }
+ul.clean li {
+  padding: 2mm 0 2mm 8mm;
+  position: relative;
+  font-size: 13pt;
+  line-height: 1.45;
+}
+ul.clean li::before {
+  content: "▸";
+  position: absolute; left: 0;
+  color: var(--accent-2);
+  font-weight: 700;
+}
+
+/* ─────────── Cover slide ─────────── */
+.cover {
+  background: linear-gradient(160deg, #0c4a6e 0%, #1e3a8a 60%, #0f172a 100%);
+  color: white;
+  display: flex; flex-direction: column;
+}
+
+.cover::before {
+  content: "";
+  position: absolute; inset: 0;
+  background-image:
+    repeating-linear-gradient(0deg, transparent 0 39px, rgba(255,255,255,0.04) 39px 40px),
+    repeating-linear-gradient(90deg, transparent 0 39px, rgba(255,255,255,0.04) 39px 40px);
+  pointer-events: none;
+}
+.cover::after {
+  content: "";
+  position: absolute;
+  right: -100mm; top: -100mm;
+  width: 350mm; height: 350mm;
+  background: radial-gradient(circle, rgba(14,165,233,0.18) 0%, transparent 60%);
+  pointer-events: none;
+}
+
+.cover .brand-mark {
+  position: relative; z-index: 2;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10pt;
+  letter-spacing: 0.18em;
+  color: rgba(255,255,255,0.65);
+  text-transform: uppercase;
+  margin-bottom: 10mm;
+}
+.cover .brand-mark .dot {
+  display: inline-block; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--accent-2);
+  vertical-align: middle; margin: 0 8px 2px 0;
+  box-shadow: 0 0 14px var(--accent-2);
+}
+.cover h1 {
+  font-size: 60pt; font-weight: 800;
+  color: white; margin: 0 0 5mm 0;
+  position: relative; z-index: 2;
+  line-height: 1.0;
+}
+.cover h1 .accent { color: var(--accent-2); }
+.cover .subtitle {
+  font-size: 22pt; font-weight: 400;
+  color: rgba(255,255,255,0.92);
+  max-width: 200mm;
+  position: relative; z-index: 2;
+  margin-bottom: auto;
+}
+.cover .meta {
+  position: absolute; bottom: 18mm; left: 20mm; right: 20mm;
+  display: flex; justify-content: space-between;
+  font-size: 11pt; color: rgba(255,255,255,0.55);
+  z-index: 2;
+}
+.cover .meta b { color: rgba(255,255,255,0.85); font-weight: 600; }
+
+/* ─────────── Stat tiles ─────────── */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6mm;
+}
+.stat-grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
+.stat-grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
+
+.stat {
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-left: 4px solid var(--accent-2);
+  border-radius: 4px;
+  padding: 6mm 6mm;
+}
+.stat.warn { border-left-color: var(--accent-warm); }
+.stat.danger { border-left-color: var(--danger); }
+.stat.good { border-left-color: var(--good); }
+
+.stat .num {
+  position: static;
+  display: block;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 28pt; font-weight: 700;
+  color: var(--accent);
+  line-height: 1.0;
+  margin-bottom: 2mm;
+}
+.stat.warn .num { color: var(--accent-warm); }
+.stat.danger .num { color: var(--danger); }
+.stat.good .num { color: var(--good); }
+.stat .lbl {
+  display: block;
+  font-size: 10pt;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 500;
+}
+.stat .desc {
+  display: block;
+  font-size: 11pt;
+  color: var(--fg-soft);
+  margin-top: 3mm;
+  line-height: 1.4;
+}
+
+/* ─────────── Comparison table ─────────── */
+table.compare {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 4mm 0;
+  font-size: 11pt;
+}
+table.compare th, table.compare td {
+  padding: 3mm 4mm;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--rule);
+}
+table.compare th {
+  background: var(--accent);
+  color: white;
+  font-weight: 600;
+  font-size: 10pt;
+  letter-spacing: 0.02em;
+}
+table.compare tr.bad td { background: #fef2f2; }
+table.compare tr.bad td:first-child { color: var(--danger); font-weight: 600; }
+table.compare tr.good td { background: #f0fdf4; }
+table.compare tr.good td:first-child { color: var(--good); font-weight: 600; }
+
+/* ─────────── Code-style accents ─────────── */
+code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10pt;
+  background: var(--bg-card);
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--rule);
+  word-break: break-all;
+}
+
+.callout {
+  background: var(--bg-card);
+  border-left: 4px solid var(--accent);
+  padding: 5mm 6mm;
+  margin: 4mm 0;
+  border-radius: 0 4px 4px 0;
+}
+.callout.amber { border-left-color: var(--accent-warm); background: #fef3c7; }
+.callout.sky { border-left-color: var(--accent-2); background: #e0f2fe; }
+
+.callout .lead {
+  font-size: 16pt;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 2mm;
+}
+
+/* ─────────── Architecture diagram (ASCII) ─────────── */
+pre.diagram {
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 5mm;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 8.5pt;
+  line-height: 1.4;
+  margin: 4mm 0;
+  white-space: pre;
+  color: var(--fg);
+}
+
+/* ─────────── Closing slide ─────────── */
+.closing {
+  background: linear-gradient(160deg, #0c4a6e 0%, #1e3a8a 100%);
+  color: white;
+  display: flex; flex-direction: column; justify-content: center; align-items: center;
+  text-align: center;
+}
+.closing h1 { color: white; }
+.closing h2 { color: rgba(255,255,255,0.85); }
+.closing .ask {
+  font-size: 24pt;
+  font-weight: 700;
+  background: rgba(14,165,233,0.2);
+  border: 2px solid var(--accent-2);
+  padding: 8mm 16mm;
+  border-radius: 6px;
+  margin-top: 10mm;
+}
+.closing .num, .closing .brand { color: rgba(255,255,255,0.5); }

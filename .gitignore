@@ -11,6 +11,7 @@ build/
 !docs/build/
 docs/build/*
 !docs/build/WHITEPAPER.pdf
+!docs/build/PITCH_DECK.pdf
 dist/
 
 # Virtualenv (uv)
