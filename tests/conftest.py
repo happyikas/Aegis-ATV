@@ -28,6 +28,8 @@ os.environ.setdefault("AEGIS_AUDIT_JSONL", str(_TMP_ROOT / "audit.jsonl"))
 os.environ.setdefault("AEGIS_INTENT_LOG_DB", ":memory:")
 os.environ.setdefault("AEGIS_COST_LEDGER_DB", ":memory:")
 os.environ.setdefault("AEGIS_COST_LEDGER_JSONL", str(_TMP_ROOT / "cost.jsonl"))
+os.environ.setdefault("AEGIS_HAM_DB", ":memory:")
+os.environ.setdefault("AEGIS_HAM_DATA_KEY_PATH", str(_TMP_ROOT / "ham_data.key"))
 
 
 @pytest.fixture
@@ -56,11 +58,19 @@ def aegis_app(tmp_path: Path) -> Iterator[object]:
         path=tmp_path / "audit_encrypted.jsonl",
         data_key=journal_key,
     )
+    from aegis.ham import HierarchicalMemoryStore
+    ham_key = load_or_create_data_key(tmp_path / "ham_data.key")
+    ham_store = HierarchicalMemoryStore(
+        db_path=":memory:",
+        data_key=ham_key,
+    )
     yield create_app(
         key=key, db=db, log=log,
         intent_log=intent_log, cost_ledger=cost_ledger,
         encrypted_journal=encrypted_journal,
+        ham_store=ham_store,
     )
     db.close()
     intent_log.close()
     cost_ledger.close()
+    ham_store.close()
