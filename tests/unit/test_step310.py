@@ -29,7 +29,8 @@ def test_blocks_high_injection_score() -> None:
     inp = make_input(safety_flags={"prompt_injection": 0.95})
     r = run(ZERO_ATV, inp, FirewallContext())
     assert r.verdict == "BLOCK"
-    assert "prompt injection" in r.reason
+    # New (DOGFOOD Rec #5) reason format uses underscored category name.
+    assert "prompt_injection" in r.reason
 
 
 def test_passes_clean_args() -> None:
