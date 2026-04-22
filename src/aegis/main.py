@@ -28,6 +28,7 @@ from aegis.api.audit_query import make_router as _audit_router
 from aegis.api.burnin_status import make_router as _burnin_router
 from aegis.api.cost_attestation import make_router as _cost_router
 from aegis.api.evaluate import make_router as _evaluate_router
+from aegis.api.ham import make_router as _ham_router
 from aegis.api.replay import make_router as _replay_router
 from aegis.api.source import make_router as _source_router
 from aegis.api.tool_outcome import make_router as _tool_outcome_router
@@ -40,6 +41,7 @@ from aegis.burnin import BurnInController
 from aegis.config import settings
 from aegis.cost.ledger import CostAttestationLedger
 from aegis.firewall.step315_aid_auth import get_circuit_breaker
+from aegis.ham import HierarchicalMemoryStore
 from aegis.sign.ed25519 import load_or_create_key
 
 _STATIC_DIR = Path(__file__).parent / "web" / "static"
@@ -55,6 +57,7 @@ def create_app(
     burnin_controller: BurnInController | None = None,
     cost_ledger: CostAttestationLedger | None = None,
     encrypted_journal: EncryptedJournal | None = None,
+    ham_store: HierarchicalMemoryStore | None = None,
     measurement: BurnInMeasurement | None = None,
 ) -> FastAPI:
     """Build a FastAPI app. Override stores/keys for tests."""
@@ -83,6 +86,13 @@ def create_app(
             path=Path(settings.aegis_journal_path),
             data_key=data_key,
         )
+    # M16 — Hierarchical Agent Memory (T2 L3+L4 emulation).
+    if ham_store is None:
+        ham_key = load_or_create_data_key(Path(settings.aegis_ham_data_key_path))
+        ham_store = HierarchicalMemoryStore(
+            db_path=settings.aegis_ham_db,
+            data_key=ham_key,
+        )
     real_measurement = measurement if measurement is not None else compute_burn_in(
         code_root=_PACKAGE_ROOT,
         policy_dir=Path(settings.aegis_policy_dir),
@@ -109,6 +119,7 @@ def create_app(
     app.include_router(_cost_router(ledger=cost_ledger))
     app.include_router(_admin_aid_router(breaker=get_circuit_breaker()))
     app.include_router(_replay_router(journal=encrypted_journal))
+    app.include_router(_ham_router(store=ham_store))
 
     if _STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")

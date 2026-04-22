@@ -62,5 +62,9 @@ class Settings(BaseSettings):
     aegis_journal_data_key_path: str = "./keys/journal_data.key"
     aegis_journal_path: str = "./data/audit_encrypted.jsonl"
 
+    # M16 — Hierarchical Agent Memory (T2 emulation, L3+L4).
+    aegis_ham_db: str = "./data/ham.sqlite"
+    aegis_ham_data_key_path: str = "./keys/ham_data.key"
+
 
 settings = Settings()
