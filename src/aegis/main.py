@@ -25,6 +25,7 @@ from aegis.api.approve import make_router as _approve_router
 from aegis.api.attestation import make_router as _attestation_router
 from aegis.api.audit_query import make_router as _audit_router
 from aegis.api.burnin_status import make_router as _burnin_router
+from aegis.api.cost_attestation import make_router as _cost_router
 from aegis.api.evaluate import make_router as _evaluate_router
 from aegis.api.source import make_router as _source_router
 from aegis.api.tool_outcome import make_router as _tool_outcome_router
@@ -34,6 +35,7 @@ from aegis.audit.jsonl_store import JsonlStore
 from aegis.audit.sqlite_store import AuditDB
 from aegis.burnin import BurnInController
 from aegis.config import settings
+from aegis.cost.ledger import CostAttestationLedger
 from aegis.sign.ed25519 import load_or_create_key
 
 _STATIC_DIR = Path(__file__).parent / "web" / "static"
@@ -47,9 +49,10 @@ def create_app(
     log: JsonlStore | None = None,
     intent_log: IntentLog | None = None,
     burnin_controller: BurnInController | None = None,
+    cost_ledger: CostAttestationLedger | None = None,
     measurement: BurnInMeasurement | None = None,
 ) -> FastAPI:
-    """Build a FastAPI app. Override key/db/log/intent_log/measurement for tests."""
+    """Build a FastAPI app. Override stores/keys for tests."""
     app = FastAPI(title="AegisData T2", version=__version__)
 
     real_key = key if key is not None else load_or_create_key(Path(settings.aegis_signing_key_path))
@@ -59,6 +62,15 @@ def create_app(
         intent_log if intent_log is not None else IntentLog(settings.aegis_intent_log_db)
     )
     real_burnin = burnin_controller if burnin_controller is not None else BurnInController()
+    # Claim 34 — cost-attestation signing key is DISTINCT from the
+    # telemetry signing key. Auto-create on first run.
+    if cost_ledger is None:
+        cost_key = load_or_create_key(Path(settings.aegis_cost_signing_key_path))
+        cost_ledger = CostAttestationLedger(
+            db_path=settings.aegis_cost_ledger_db,
+            jsonl_path=Path(settings.aegis_cost_ledger_jsonl),
+            signing_key=cost_key,
+        )
     real_measurement = measurement if measurement is not None else compute_burn_in(
         code_root=_PACKAGE_ROOT,
         policy_dir=Path(settings.aegis_policy_dir),
@@ -72,6 +84,7 @@ def create_app(
         _evaluate_router(
             key=real_key, db=real_db, log=real_log,
             intent_log=real_intent_log, burnin_controller=real_burnin,
+            cost_ledger=cost_ledger,
             burn_in_id=real_measurement.burn_in_id,
         )
     )
@@ -81,6 +94,7 @@ def create_app(
     app.include_router(_source_router(package_root=_PACKAGE_ROOT))
     app.include_router(_tool_outcome_router(intent_log=real_intent_log))
     app.include_router(_burnin_router(controller=real_burnin))
+    app.include_router(_cost_router(ledger=cost_ledger))
 
     if _STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")

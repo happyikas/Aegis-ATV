@@ -12,8 +12,12 @@ services:
       AEGIS_AUDIT_DB: /app/data/audit.sqlite
       AEGIS_AUDIT_JSONL: /app/data/audit.jsonl
       AEGIS_INTENT_LOG_DB: /app/data/intent_log.sqlite
+      AEGIS_COST_LEDGER_DB: /app/data/cost_attestation.sqlite
+      AEGIS_COST_LEDGER_JSONL: /app/data/cost_attestation.jsonl
       AEGIS_SIGNING_KEY_PATH: /app/keys/ed25519.pem
       AEGIS_PUBLIC_KEY_PATH: /app/keys/ed25519.pub
+      AEGIS_COST_SIGNING_KEY_PATH: /app/keys/ed25519_cost.pem
+      AEGIS_COST_PUBLIC_KEY_PATH: /app/keys/ed25519_cost.pub
       AEGIS_POLICY_DIR: /app/policies
     volumes:
       - ./data:/app/data
