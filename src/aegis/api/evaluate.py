@@ -27,6 +27,7 @@ from aegis.atmu import (
     plan_for,
 )
 from aegis.atv.builder import build_atv
+from aegis.audit.encrypted_journal import EncryptedJournal
 from aegis.audit.jsonl_store import JsonlStore
 from aegis.audit.sqlite_store import AuditDB
 from aegis.burnin import BurnInController
@@ -50,6 +51,7 @@ def _evaluate_impl(
     intent_log: IntentLog | None = None,
     burnin_controller: BurnInController | None = None,
     cost_ledger: CostAttestationLedger | None = None,
+    encrypted_journal: EncryptedJournal | None = None,
     burn_in_id: str | None = None,
 ) -> Verdict:
     # Auto-fill the Burn-in id into the ATV header so every audit record
@@ -118,6 +120,13 @@ def _evaluate_impl(
     )
     verdict.signature = record["signature"]
 
+    # M15: also append the (already-signed) record into the encrypted
+    # power-fail-safe journal. The audit log keeps plaintext for
+    # operator inspection; the journal is the at-rest-encrypted source
+    # of truth for forensic replay (¶[0102E]-[0102G]).
+    if encrypted_journal is not None:
+        encrypted_journal.append(record)
+
     # M12: Cost Attestation Ledger (Claims 3, 30, 34) — separate signed
     # store with its own key. Append a record for every evaluation; the
     # 'cost_attestation_hint' marker on the audit record (M9) signals
@@ -185,6 +194,7 @@ def make_router(
     intent_log: IntentLog | None = None,
     burnin_controller: BurnInController | None = None,
     cost_ledger: CostAttestationLedger | None = None,
+    encrypted_journal: EncryptedJournal | None = None,
     burn_in_id: str | None = None,
 ) -> APIRouter:
     r = APIRouter()
@@ -194,7 +204,8 @@ def make_router(
         return _evaluate_impl(
             inp, key=key, db=db, log=log,
             intent_log=intent_log, burnin_controller=burnin_controller,
-            cost_ledger=cost_ledger, burn_in_id=burn_in_id,
+            cost_ledger=cost_ledger, encrypted_journal=encrypted_journal,
+            burn_in_id=burn_in_id,
         )
 
     return r
