@@ -1,27 +1,29 @@
 """End-to-end: aegis-mvp v1.0.0's 12-incident KPI panel through MVP /evaluate.
 
-Phase 3 gate of INTEGRATION_PLAN. Each donor incident is converted via
-:func:`aegis.atv.adapter.from_claude_code_payload` and posted to the
-real MVP ``/evaluate`` endpoint. We assert two things:
+Phase 3 + D11 gate of INTEGRATION_PLAN. Each donor incident is
+converted via :func:`aegis.atv.adapter.from_claude_code_payload` and
+posted to the real MVP ``/evaluate`` endpoint. We assert that every
+donor block / require_approval incident produces a non-permissive
+verdict (BLOCK or REQUIRE_APPROVAL).
 
-1. The adapter wire is intact: every payload is accepted (HTTP 200).
-2. Where MVP/'s existing rules already cover a class
-   (rm -rf, DROP TABLE, /etc/passwd, AKIA secret), the verdict is at
-   least non-permissive.
+Coverage by stage:
 
-Eight of the donor's twelve patterns rely on rules that are NOT YET
-ported into MVP — those live in ``_donor/aegis-mvp/atmu/rules/``
-(prompt-injection, sandbox-escape, MCP injection, git --force, payment
-overflow, exfil/TLD heuristics) and INTEGRATION_PLAN P1 explicitly
-schedules them under D11. They are marked xfail with a `D11` reason
-so this test is green today and will surface XPASS warnings when D11
-lands, prompting cleanup.
+* ``_MVP_COVERED`` — MVP's pre-existing rules cover four incidents
+  (DROP TABLE, rm -rf, /etc/passwd, AKIA send_email) via step310,
+  policies/sensitive_paths.json, and the dummy judge.
+* The remaining eight incidents are caught by step311 (D11), which
+  ports the donor's seven stdlib pattern rules (persona_drift,
+  exfil_url, sandbox_escape, prompt_injection, mcp_injection,
+  git_destructive, payment_overflow). The two donor rules left
+  out — ``cost_overflow`` and ``malfunction_pattern`` — depend on
+  D7/D10 modules that are not yet ported.
 
 The bar is "equivalent protection," not "byte-identical reasons":
 MVP's firewall has its own subfield encoders and rule vocabulary
-(sensitive_paths.json, step310 destructive regex, dummy judge keyword
-scan, blast-class step320). Some donor patterns are caught here by
-an entirely different stage with a different reason string.
+(sensitive_paths.json, step310 destructive regex, step311 donor pack,
+dummy judge keyword scan, blast-class step320). Some donor patterns
+are caught here by an entirely different stage with a different
+reason string.
 """
 
 from __future__ import annotations
@@ -63,14 +65,6 @@ DONOR_INCIDENTS: list[tuple[str, str, dict[str, Any], str]] = [
         {"body": "AKIA1234567890ABCDEF"},                           "block"),
 ]
 
-# Incidents that MVP's existing rules already cover (no porting needed).
-_MVP_COVERED: frozenset[str] = frozenset({
-    "I-02_drop_table",       # step310 + dummy judge keyword 'drop'
-    "I-03_rm_rf",            # step310 destructive regex \brm\s+-rf\s+/
-    "I-05_path_traversal",   # policies/sensitive_paths.json
-    "I-12_api_key_leak",     # dummy judge APPROVAL_TOOLS=send_email
-})
-
 # Donor → MVP decision vocabulary mapping.
 _DONOR_TO_MVP = {
     "allow": "ALLOW",
@@ -92,32 +86,10 @@ def _run_one(client: TestClient, tool: str, args: dict[str, Any]) -> dict[str, A
     return body
 
 
-def _xfail_for(name: str) -> pytest.MarkDecorator | None:
-    if name in _MVP_COVERED:
-        return None
-    return pytest.mark.xfail(
-        reason=(
-            f"{name}: rule lives in _donor/aegis-mvp/atmu/rules/ — porting "
-            "tracked under INTEGRATION_PLAN P1 D11 (cost_overflow / "
-            "malfunction_pattern + the 12-incident rule pack)."
-        ),
-        strict=False,
-    )
-
-
-_INCIDENT_PARAMS = [
-    pytest.param(
-        name, tool, args, donor_expected,
-        marks=([_xfail_for(name)] if _xfail_for(name) else []),
-        id=name,
-    )
-    for name, tool, args, donor_expected in DONOR_INCIDENTS
-]
-
-
 @pytest.mark.parametrize(
     ("name", "tool", "args", "donor_expected"),
-    _INCIDENT_PARAMS,
+    DONOR_INCIDENTS,
+    ids=[i[0] for i in DONOR_INCIDENTS],
 )
 def test_donor_incident_at_least_non_permissive(
     name: str,
@@ -128,9 +100,8 @@ def test_donor_incident_at_least_non_permissive(
 ) -> None:
     """Each donor block / require_approval incident must NOT be ALLOW under MVP.
 
-    Strict for the four incidents MVP already covers (rm -rf, DROP TABLE,
-    /etc/passwd, AKIA secret); xfail for the eight that depend on D11
-    rule ports.
+    All twelve incidents are now strict — D11 (step311_donor_rules)
+    closed the eight that previously needed xfail.
     """
     client = TestClient(aegis_app)
     body = _run_one(client, tool, args)

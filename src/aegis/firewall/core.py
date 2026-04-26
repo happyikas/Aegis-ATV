@@ -46,6 +46,7 @@ def default_steps() -> list[StepFn]:
     """Return the canonical ordered step list. Lazy-imported to avoid cycles."""
     from aegis.firewall import (
         step310_args,
+        step311_donor_rules,
         step312_normalize,
         step315_aid_auth,
         step320_blast,
@@ -56,6 +57,7 @@ def default_steps() -> list[StepFn]:
 
     return [
         step310_args.run,
+        step311_donor_rules.run,  # D11 — donor pattern rule pack (persona drift, exfil URL, sandbox escape, prompt/mcp injection, git --force, payment overflow)
         step312_normalize.run,   # DOGFOOD Rec #3 — canonicalize tool args before downstream steps
         step315_aid_auth.run,    # M14 — AID-region authorization + circuit breaker
         step320_blast.run,
