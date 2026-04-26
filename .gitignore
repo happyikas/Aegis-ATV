@@ -33,3 +33,6 @@ data/*.bin
 
 # Local dev tool configs
 .claude/
+
+# v2.0 integration: donor extraction (transient — assets are copied into MVP/ tree under D-numbered commits)
+_donor/
