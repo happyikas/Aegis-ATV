@@ -1418,7 +1418,7 @@ M17  TEE attestation (TDX/SEV-SNP/mock providers)  ← T3 Phase A 시작
 
 이 백서는 v1.0이며, T3 마일스톤 진행에 따라 분기마다 업데이트된다. 다음 버전(v1.1)은 M18–M19 (ML-DSA dual-signing + HW perf counter cost attestation) 완료 후 발행 예정.
 
-문의: [GitHub Issues](https://github.com/<your-handle>/aegis-mvp/issues) · [LinkedIn](#) · [이메일](#)
+문의: [GitHub Issues](https://github.com/happyikas/Aegis-ATV/issues) · [LinkedIn](#) · [이메일](#)
 
 ## 부록 D — 사고 대응 시나리오 실제 실행 결과
 

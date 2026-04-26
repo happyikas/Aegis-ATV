@@ -1,6 +1,6 @@
 # AegisData T2 MVP
 
-[![CI](https://github.com/chanikpark/aegis-mvp/actions/workflows/ci.yml/badge.svg)](https://github.com/chanikpark/aegis-mvp/actions/workflows/ci.yml)
+[![CI](https://github.com/happyikas/Aegis-ATV/actions/workflows/ci.yml/badge.svg)](https://github.com/happyikas/Aegis-ATV/actions/workflows/ci.yml)
 
 ![demo](demo/recording/demo.gif)
 
