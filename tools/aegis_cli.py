@@ -340,7 +340,7 @@ def cmd_cost_record(args: argparse.Namespace) -> int:
 
 def cmd_cost_import(args: argparse.Namespace) -> int:
     if args.source == "transcript":
-        from cost.transcript import import_into_wal  # type: ignore[import-not-found]
+        from aegis.cost.transcript import import_into_wal
 
         r = import_into_wal(Path(args.path))
         print(f"[cost-import transcript] {r}")
