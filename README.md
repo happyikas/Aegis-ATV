@@ -172,6 +172,7 @@ See [`tools/README.md`](tools/README.md) for install + tool mapping.
 | [`docs/DOGFOOD_PHASE_B.md`](docs/DOGFOOD_PHASE_B.md) | Dogfood report Phase B — same 10-call battery rerun against the post-Recommendations firewall. 4 stricter, 1 softer, 0 regressions; 71% noise floor eliminated; all 3 false negatives closed |
 | [`PLAN_v2.md`](PLAN_v2.md) | T2 patent-aligned re-plan (M8–M16) + claim coverage matrix |
 | [`PLAN_v3.md`](PLAN_v3.md) | T3 hardware tier design (M17–M26) — TEE attestation, ML-DSA dual-sign, FPGA judge, CSD integration |
+| [`SESSION_HANDOFF.md`](SESSION_HANDOFF.md) | **★ 새 챗 창 / 새 컨트리뷰터용 상태 스냅샷** — 한 파일에 마일스톤·디렉토리·명령어·트릭·옵션 모두. 새 세션 시작 시 이 파일 + CLAUDE.md + README 만 읽으면 충분. |
 | [`WHITEPAPER.md`](WHITEPAPER.md) | **(한국어) 기술 백서 — 마크다운 소스** — 11 sections, ~1,300 lines (시장 / 사고 / 기술 / **사고 대응 7 시나리오** / MVP / POC / 데모 / 피치 / GTM / C-level) |
 | [`docs/build/WHITEPAPER.pdf`](docs/build/WHITEPAPER.pdf) | **(한국어) 기술 백서 — PDF (49 pages, ~2.1 MB)** — A4 portrait, 디자인 커버 + 11 sections + 4 appendices (포함: **부록 D — 7 사고 시나리오 실제 실행 결과 9 pages**). `bash tools/whitepaper/build_pdf.sh` 로 재생성 |
 | [`docs/build/PITCH_DECK.pdf`](docs/build/PITCH_DECK.pdf) | **(한국어) 투자자 피치 덱 — PDF (13 slides, A4 landscape, ~900 KB)** — Cover · Problem · Why now · 사고 사례 · Solution · 차별화 · Proof · Market · Business model · GTM · Roadmap · Team · Closing. `bash tools/deck/build_pdf.sh` 로 재생성 |
