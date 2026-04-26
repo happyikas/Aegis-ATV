@@ -391,6 +391,10 @@ def test_build_pretool_command_local_includes_env() -> None:
     assert "aegis_local_hook.py" in cmd
     assert "AEGIS_POLICY_DIR=" in cmd
     assert "PYTHONPATH=" in cmd
+    # Solo Free contract: local mode must default to dummy providers so
+    # the hook does not require an OpenAI key.
+    assert "AEGIS_EMBEDDING_PROVIDER=dummy" in cmd
+    assert "AEGIS_JUDGE_PROVIDER=dummy" in cmd
 
 
 def test_pretool_hook_marker_distinguishes_modes() -> None:

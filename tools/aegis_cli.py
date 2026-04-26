@@ -262,12 +262,23 @@ def _build_pretool_command(mode: str) -> str:
 
     Sidecar mode uses the existing ``tools/aegis_hook.py`` (POST /evaluate);
     local mode uses ``tools/aegis_local_hook.py`` (in-process firewall) and
-    pre-pends ``AEGIS_POLICY_DIR`` and ``PYTHONPATH`` so the spawned
-    subprocess can resolve policies + the ``aegis`` package without the
-    user having to ``uv sync`` first.
+    pre-pends:
+
+    * ``AEGIS_EMBEDDING_PROVIDER=dummy``  — Solo Free runs without an
+      OpenAI key by default; users who explicitly want real embeddings
+      can edit settings.json by hand.
+    * ``AEGIS_JUDGE_PROVIDER=dummy``      — same rationale, dummy
+      regex judge instead of Claude Haiku.
+    * ``AEGIS_POLICY_DIR``                — absolute path to policies/
+      so step310 can find sensitive_paths.json from any cwd.
+    * ``PYTHONPATH``                      — absolute path to src/ so the
+      spawned subprocess resolves the ``aegis`` package without the
+      user having to ``uv sync`` first.
     """
     if mode == "local":
         return (
+            f"AEGIS_EMBEDDING_PROVIDER=dummy "
+            f"AEGIS_JUDGE_PROVIDER=dummy "
             f"AEGIS_POLICY_DIR={POLICIES_DIR} "
             f"PYTHONPATH={SRC_DIR} "
             f"python3 {LOCAL_HOOK_SCRIPT}"
