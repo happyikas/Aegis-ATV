@@ -39,7 +39,13 @@ from pathlib import Path
 
 DB = Path(".aegis/wal.db")
 HERE = Path(__file__).resolve().parent
-HOOK_SCRIPT = HERE / "aegis_hook.py"
+PROJECT_ROOT = HERE.parent
+HOOK_SCRIPT = HERE / "aegis_hook.py"               # sidecar mode (POST /evaluate)
+LOCAL_HOOK_SCRIPT = HERE / "aegis_local_hook.py"   # local mode (in-process)
+STOP_HOOK_SCRIPT = HERE / "hooks" / "session_end.py"
+PLUGIN_MANIFEST = PROJECT_ROOT / ".claude-plugin" / "plugin.json"
+POLICIES_DIR = PROJECT_ROOT / "policies"
+SRC_DIR = PROJECT_ROOT / "src"
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 
 
@@ -232,20 +238,82 @@ def cmd_snapshots(args: argparse.Namespace) -> int:
     return 0
 
 
+def _validate_plugin_manifest() -> tuple[bool, str]:
+    """Return ``(ok, message)``. message is the version on success or a reason."""
+    if not PLUGIN_MANIFEST.exists():
+        return False, f"plugin manifest not found: {PLUGIN_MANIFEST}"
+    try:
+        manifest = json.loads(PLUGIN_MANIFEST.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        return False, f"plugin manifest is not valid JSON: {e}"
+    if not isinstance(manifest, dict):
+        return False, "plugin manifest must be a JSON object"
+    name = manifest.get("name")
+    version = manifest.get("version")
+    if not name:
+        return False, "plugin manifest missing 'name' field"
+    if not version:
+        return False, "plugin manifest missing 'version' field"
+    return True, str(version)
+
+
+def _build_pretool_command(mode: str) -> str:
+    """Compose the shell command embedded into the PreToolUse hook.
+
+    Sidecar mode uses the existing ``tools/aegis_hook.py`` (POST /evaluate);
+    local mode uses ``tools/aegis_local_hook.py`` (in-process firewall) and
+    pre-pends ``AEGIS_POLICY_DIR`` and ``PYTHONPATH`` so the spawned
+    subprocess can resolve policies + the ``aegis`` package without the
+    user having to ``uv sync`` first.
+    """
+    if mode == "local":
+        return (
+            f"AEGIS_POLICY_DIR={POLICIES_DIR} "
+            f"PYTHONPATH={SRC_DIR} "
+            f"python3 {LOCAL_HOOK_SCRIPT}"
+        )
+    return f"python3 {HOOK_SCRIPT}"
+
+
+def _pretool_hook_marker(mode: str) -> str:
+    """Substring searched in existing settings to detect a prior install."""
+    return str(LOCAL_HOOK_SCRIPT) if mode == "local" else str(HOOK_SCRIPT)
+
+
 def cmd_install(args: argparse.Namespace) -> int:
     """Idempotently install Aegis hooks into ``~/.claude/settings.json``.
 
-    Absorbs the safety properties of the legacy ``tools/install_hook.py``:
-    backs up any existing settings.json before modification, preserves
-    unrelated keys verbatim, and no-ops if a PreToolUse entry already
-    points at this repo's aegis_hook.py.
+    Absorbs the safety properties of the legacy ``tools/install_hook.py``
+    (settings.json backup, JSON validation refusal, idempotency on the
+    Aegis-owned PreToolUse entry) and adds:
+
+    * ``--mode sidecar`` (default) — registers
+      ``tools/aegis_hook.py`` so the hook POSTs to ``localhost:8000/evaluate``.
+      Requires ``docker compose up -d`` to be running.
+    * ``--mode local`` — registers ``tools/aegis_local_hook.py`` so
+      the firewall pipeline runs in-process; no service required (Solo
+      Free tier).
+    * Stop hook — both modes also register
+      ``tools/hooks/session_end.py`` so transcript cost data is
+      back-filled when each Claude Code session ends (D6).
+    * Plugin manifest validation — refuses to install if
+      ``.claude-plugin/plugin.json`` is missing or malformed.
     """
-    if not HOOK_SCRIPT.exists():
-        print(_red(f"hook script not found: {HOOK_SCRIPT}"), file=sys.stderr)
+    mode = args.mode
+
+    ok, info = _validate_plugin_manifest()
+    if not ok:
+        print(_red(info), file=sys.stderr)
         return 1
-    if not HOOK_SCRIPT.stat().st_mode & 0o100:
-        print(_yellow(f"making {HOOK_SCRIPT.name} executable"))
-        HOOK_SCRIPT.chmod(HOOK_SCRIPT.stat().st_mode | 0o111)
+    print(f"[install] plugin v{info}, mode={mode}")
+
+    pretool_script = LOCAL_HOOK_SCRIPT if mode == "local" else HOOK_SCRIPT
+    if not pretool_script.exists():
+        print(_red(f"hook script not found: {pretool_script}"), file=sys.stderr)
+        return 1
+    if not pretool_script.stat().st_mode & 0o100:
+        print(_yellow(f"making {pretool_script.name} executable"))
+        pretool_script.chmod(pretool_script.stat().st_mode | 0o111)
 
     SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
 
@@ -268,10 +336,11 @@ def cmd_install(args: argparse.Namespace) -> int:
         existing = {}
         print(f"creating new {SETTINGS_PATH}")
 
-    cmd = f"python3 {HOOK_SCRIPT}"
-    new_entry = {
+    pretool_cmd = _build_pretool_command(mode)
+    pretool_marker = _pretool_hook_marker(mode)
+    pretool_entry = {
         "matcher": "*",
-        "hooks": [{"type": "command", "command": cmd}],
+        "hooks": [{"type": "command", "command": pretool_cmd}],
     }
 
     hooks_section = existing.setdefault("hooks", {})
@@ -279,19 +348,55 @@ def cmd_install(args: argparse.Namespace) -> int:
 
     for entry in pretooluse:
         for h in entry.get("hooks", []):
-            if str(HOOK_SCRIPT) in h.get("command", "") and not args.force:
+            if pretool_marker in h.get("command", "") and not args.force:
                 print(_green(f"already installed — {h['command']!r}"))
                 print("(re-run with --force to add anyway)")
                 return 0
 
-    pretooluse.append(new_entry)
+    pretooluse.append(pretool_entry)
+
+    # Always register the Stop hook (D6 cost auto-import); idempotent.
+    stop_hooks = hooks_section.setdefault("Stop", [])
+    stop_already = any(
+        str(STOP_HOOK_SCRIPT) in h.get("command", "")
+        for entry in stop_hooks
+        for h in entry.get("hooks", [])
+    )
+    if not stop_already:
+        stop_cmd = f"python3 {STOP_HOOK_SCRIPT}"
+        stop_hooks.append({"hooks": [{"type": "command", "command": stop_cmd}]})
+
     SETTINGS_PATH.write_text(json.dumps(existing, indent=2) + "\n")
 
-    print(_green(f"\u2713 installed PreToolUse hook → {SETTINGS_PATH}"))
-    print(f"  command: {cmd}")
+    print(_green(f"\u2713 installed Aegis hooks → {SETTINGS_PATH}"))
+    print(f"  PreToolUse:  {pretool_cmd}")
+    if not stop_already:
+        print(f"  Stop:        python3 {STOP_HOOK_SCRIPT}")
     print('  matcher: "*" (every tool — narrow this in settings.json if too noisy)')
     print()
-    print("Restart Claude Code for the hook to take effect.")
+    if mode == "sidecar":
+        print("Sidecar mode: start the Aegis service with `docker compose up -d`")
+        print("  (the hook POSTs to localhost:8000/evaluate)")
+    else:
+        print("Local mode: in-process firewall — no service needed.")
+    print()
+    print("Restart Claude Code for the hooks to take effect.")
+
+    legacy_present = any(
+        "install_hook.py" in h.get("command", "")
+        for entry in pretooluse
+        for h in entry.get("hooks", [])
+    )
+    if legacy_present:
+        print()
+        print(
+            _yellow(
+                "Note: detected legacy `tools/install_hook.py` entry in your "
+                "settings. The CLI's own entry is now installed alongside it; "
+                "you may remove the legacy line manually if no longer needed."
+            )
+        )
+
     return 0
 
 
@@ -446,6 +551,16 @@ def build_parser() -> argparse.ArgumentParser:
     bg.set_defaults(fn=cmd_budget)
 
     inst = sub.add_parser("install", help="Install hooks into ~/.claude/settings.json")
+    inst.add_argument(
+        "--mode",
+        choices=["sidecar", "local"],
+        default="sidecar",
+        help=(
+            "sidecar: hook POSTs to localhost:8000/evaluate (requires "
+            "`docker compose up -d`). local: hook runs the firewall "
+            "in-process (Solo Free, no service needed). default: sidecar"
+        ),
+    )
     inst.add_argument(
         "--force", action="store_true", help="add hook even if already installed"
     )
