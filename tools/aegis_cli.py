@@ -171,7 +171,7 @@ def cmd_health(_: argparse.Namespace) -> int:
 
 
 def cmd_rollback(args: argparse.Namespace) -> int:
-    from rollback.snapshot import bulk_restore, restore  # type: ignore[import-not-found]
+    from aegis.rollback.snapshot import bulk_restore, restore
 
     if args.session or args.since:
         out = bulk_restore(
@@ -216,7 +216,7 @@ def _parse_window_secs(spec: str) -> int:
 
 
 def cmd_snapshots(args: argparse.Namespace) -> int:
-    from rollback.snapshot import list_snapshots, prune  # type: ignore[import-not-found]
+    from aegis.rollback.snapshot import list_snapshots, prune
 
     if args.action == "prune":
         secs = _parse_window_secs(args.older_than)
