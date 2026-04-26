@@ -1,0 +1,66 @@
+{
+  "name": "aegis-mvp",
+  "version": "2.0.0",
+  "description": "AegisData \u2014 pre-commit safety, post-hoc proof, predictable cost for autonomous AI agents.",
+  "author": {
+    "name": "Chanik Shin",
+    "email": "chanik@aegisdata.ai",
+    "url": "https://aegisdata.ai"
+  },
+  "homepage": "https://aegisdata.ai",
+  "repository": "https://github.com/aegisdata/aegis-mvp",
+  "license": "Apache-2.0",
+  "keywords": [
+    "security",
+    "agent",
+    "audit",
+    "guardrails",
+    "hooks"
+  ],
+  "claude_code": {
+    "min_version": "1.0.0",
+    "hooks": [
+      "PreToolUse",
+      "PostToolUse",
+      "Stop"
+    ],
+    "commands": [
+      "sprint-0-kickoff",
+      "sprint-1-kickoff",
+      "sprint-2-kickoff",
+      "sprint-3-kickoff",
+      "sprint-4-kickoff",
+      "sprint-5-kickoff"
+    ],
+    "skills": [
+      "aegis-mvp"
+    ]
+  },
+  "config_schema": {
+    "tier": {
+      "type": "enum",
+      "values": [
+        "solo",
+        "smb",
+        "enterprise"
+      ],
+      "default": "solo",
+      "description": "Deployment tier \u2014 Solo (Free), SMB ($15/seat), Enterprise ($80/seat + HW)."
+    },
+    "policy_pack": {
+      "type": "string",
+      "default": "default.policy.yaml",
+      "description": "Path to ATMU policy YAML (must be TEE-signed in production)."
+    },
+    "burnin_baseline": {
+      "type": "string",
+      "default": "burnin/iforest_v1.pkl",
+      "description": "Pre-trained anomaly baseline model file."
+    },
+    "sllm_endpoint": {
+      "type": "string",
+      "default": "local://phi4-mini-q4",
+      "description": "sLLM verifier endpoint. Phi-4-mini-q4 local default."
+    }
+  }
+}
