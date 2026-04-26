@@ -1,8 +1,8 @@
 # AegisData MVP — 세션 핸드오프 (Session Handoff)
 
-**상태 스냅샷:** 2026-04-22
+**상태 스냅샷:** 2026-04-26 (v2.0.0)
 **대상:** 새 Claude Code 챗 창에서 이 프로젝트 작업을 이어가는 사람 (또는 새 Claude 인스턴스)
-**한 문장:** AegisData T2 (소프트웨어 티어) MVP 가 16+1 마일스톤 완성, 455 테스트 PASS, 한국어 백서 49페이지·투자자 덱 13장 PDF 까지 모두 commit 된 상태.
+**한 문장:** AegisData v2.0.0 — T2 sidecar + Claude Code plugin (`--mode sidecar|local`) 통합 완료, 650 테스트 PASS, 12/12 incident 차단 (live 검증), donor rule pack (step311) + ATV-2080 어댑터 + plugin packaging 모두 commit, branch `feat/v2.0-merge` 에서 v2.0 release tag 대기.
 
 ---
 
@@ -41,21 +41,25 @@ uv run mypy src 2>&1 | tail -2             # Success: no issues found in 63 sour
 
 ---
 
-## 2. 현재 상태 (2026-04-22 기준)
+## 2. 현재 상태 (2026-04-26 기준, v2.0.0)
 
 | 항목 | 값 |
 |---|---|
-| **마일스톤** | M1-M16 (T2) + M17 (T3 첫 단계) **완료** |
-| **자동 테스트** | **455 passed** (unit + integration + e2e) |
-| **mypy strict** | 63 source files clean |
+| **마일스톤** | M1-M16 (T2) + M17 (T3 첫 단계) + **v2.0 plugin integration** 완료 |
+| **자동 테스트** | **650 passed** (Phase 0 baseline 455 → +195 신규) |
+| **mypy strict** | 74 source files clean |
 | **ruff** | clean |
+| **12-incident donor KPI** | **12/12 strict pass** (live `/evaluate` 검증) |
+| **7-시나리오 회귀** | 7/7 PASS, 68초 (D11/Phase 5 추가 후 회귀 0) |
 | **CI** | GitHub Actions (Python 3.11/12/13 matrix + Docker build + demo e2e) |
 | **Docker** | `docker compose up -d` 한 줄로 부팅. 컨테이너 1개. 부팅 < 5초. |
-| **백서** | `WHITEPAPER.md` (1,709 lines, 한국어) → `docs/build/WHITEPAPER.pdf` (49p, 2.1 MB) |
-| **투자자 덱** | `tools/deck/deck.html` (13 슬라이드) → `docs/build/PITCH_DECK.pdf` (A4 landscape, 907 KB) |
+| **배포 모드** | sidecar (FastAPI) + plugin/local (in-process) 둘 다 지원 |
+| **CLI** | `aegis install --mode sidecar\|local`, 14 subcommands (5개 작동, 9개는 v2.1 backing 대기) |
+| **백서** | `WHITEPAPER.md` (1,818 lines, 한국어, §7A 추가) → `docs/build/WHITEPAPER.pdf` (49p, 2.3 MB) |
+| **투자자 덱** | `tools/deck/deck.html` (13 슬라이드) → `docs/build/PITCH_DECK.pdf` (A4 landscape, 907 KB) — v2.0 슬라이드 추가는 v2.1 |
 | **데모 영상** | `demo/recording/demo.gif` (884 KB, 25초 루프) |
-| **시나리오 자동 실행** | `bash demo/scenarios/run_all.sh` — 7개 시나리오, 총 92초, 7/7 PASS |
-| **자체 적용 (dogfood)** | 본 세션의 Claude Code 후크에 설치되어 28건 catch 검증 완료 |
+| **자체 적용 (dogfood)** | 본 세션의 Claude Code 후크에 설치되어 28건 catch 검증 완료 + v2.0 통합 작업 자체가 dogfood (haiku judge 가 self-mod BLOCK) |
+| **Branch / Tag** | `feat/v2.0-merge` (12 commits ahead of `main`) — v2.0.0 release tag 대기 |
 
 ---
 
@@ -186,10 +190,11 @@ MVP/
 
 ---
 
-## 4. 마일스톤 (M1-M17 한 줄씩)
+## 4. 마일스톤 + v2.0 통합 (한 줄씩)
 
-| # | 마일스톤 | 한 줄 |
+| # | 항목 | 한 줄 |
 |---|---|---|
+| **v2.0** | **aegis-mvp plugin merge** | **D1–D6 (plugin surface) + Phase 3 (ATV adapter) + D11 (step311 donor rule pack) + Phase 5 (`aegis install --mode sidecar\|local`)** |
 | M1 | FastAPI factory | `create_app()` + `/healthz` |
 | M2 | ATV-2080-v0 schema | 초기 8-subfield 스키마 |
 | M3 | Action Firewall 310-340 | 5-step pipeline |
@@ -390,18 +395,28 @@ dummy 모드로 강제하려면: `AEGIS_EMBEDDING_PROVIDER=dummy AEGIS_JUDGE_PRO
 
 ---
 
-## 10. 다음 작업 옵션
+## 10. 다음 작업 옵션 (v2.0.0 release 직후)
 
-이 세션에서 마지막으로 사용자에게 제시했던 4가지 옵션 (사용자가 4번 = pitch deck 선택, 그 다음에 이 핸드오프 요청):
+v2.0.0 → 다음 release 후보:
 
-1. **English version** — `WHITEPAPER_EN.md` + `deck_en.html` 작성. 같은 PDF 파이프라인 재사용.
-2. **시나리오 영상화** — `bash demo/scenarios/run_all.sh` 실행을 asciinema 녹화 → GIF.
-3. **CI scenarios job** — `.github/workflows/ci.yml` 에 7-시나리오 자동 실행 통합.
-4. **PoC outreach 패키지** — 덱 + 백서 + cover letter (e-mail template) + NDA template.
+### v2.0.x patch / 즉시
+- **PR + push origin** — `git push origin feat/v2.0-merge && git push origin v2.0.0` + GitHub Release.
+- **deck v2.0** — `tools/deck/deck.html` 13→15 슬라이드 (Plugin mode + v2.0 KPI).
+- **CI matrix 검증** — `.github/workflows/ci.yml` 가 v2.0 변경 후에도 green 인지 push 후 확인.
 
-또는 PLAN_v3 의 다음 마일스톤:
+### v2.1 (Phase 4 — backing 모듈 포팅)
+- **D7** `src/aegis/monitor/malfunction.py` — runtime error_rate / atv_loop / schema_drift 분류기.
+- **D8** `src/aegis/burnin/retrain.py` — sanity-check + revert wrapper (M11 Burn-in 위에).
+- **D9** `src/aegis/api/replay.py` 확장 — policy-replay engine.
+- **D10** `src/aegis/cost/budget.py` — hot-reloadable budget thresholds.
+- **step311 보강** — `cost_overflow` + `malfunction_pattern` 룰 (D7/D10 land 후).
+- **CLI 잔여 9개 subcommand** — `aegis status` / `health` / `policy-replay` / `burnin` / `budget` / `cost` / `cost-record` / `cost-import` / `verify-audit` 의 lazy import 가 동작.
+- 효과: `tests/plugin/` 50+ tests 추가, 누적 700+ pytest.
+
+### PLAN_v3 (T3 hardware tier)
 - **M18** ML-DSA dual-signing (oqs-python 통합, TEE 없이도 가능)
 - **M19** HW perf counter readout (RAPL/NVML, Linux 서버 필요)
+- **M20–M22** FPGA / HW tag comparator / CSD — 하드웨어 procurement 필요.
 
 ---
 
@@ -528,4 +543,8 @@ ddfb72b feat(atmu): Write-Ahead Intent Log + 2-phase commit + tool-outcome (M10)
 
 **문서 끝.** 새 세션에서 막힐 때 → §13 Q&A부터 보고, 그래도 안 풀리면 §3의 디렉토리 구조에서 찾기. 모든 답이 repo 안에 있다.
 
-마지막 commit: `58bf2b6` (PITCH_DECK.pdf). 다음 작업 시 §10 옵션 중 선택 또는 사용자에게 다시 질문.
+마지막 v2.0 commit: `b800b63` (Phase 6 docs). branch `feat/v2.0-merge`
+는 `main` 보다 12 commits 앞섬, v2.0.0 release tag 대기 중. 자세한
+변경 내역은 [`CHANGELOG.md`](CHANGELOG.md). 라이브 데모 스크립트는
+[`docs/RUNBOOK.md`](docs/RUNBOOK.md). 통합 계획 본문은
+[`INTEGRATION_PLAN.md`](INTEGRATION_PLAN.md).
