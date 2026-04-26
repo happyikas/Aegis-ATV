@@ -21,9 +21,19 @@ patent v7.10. The original 7-day MVP design is in [`PLAN.md`](PLAN.md);
 the patent-aligned re-plan and per-milestone status is in
 [`PLAN_v2.md`](PLAN_v2.md).
 
-**Status (2026-04-21):** M1–M16 complete — full T2 surface live.
-326 tests pass, ruff clean, mypy strict over 61 source files. Runs in
-Docker (`docker compose up`) and as a Claude Code `PreToolUse` hook.
+**Status (2026-04-26):** v2.0.0 — sidecar + Claude Code plugin
+unified. M1–M17 + step311 donor rule pack. **650 tests pass**, ruff
+clean, mypy strict over 74 source files. Two deployment modes:
+
+```bash
+uv run aegis install --mode sidecar    # multi-tenant FastAPI service
+uv run aegis install --mode local      # Solo Free in-process hook (no service)
+```
+
+12 / 12 known incident classes block (live verified against the real
+`/evaluate` endpoint). 10-minute runbook at
+[`docs/RUNBOOK.md`](docs/RUNBOOK.md); release notes in
+[`CHANGELOG.md`](CHANGELOG.md).
 
 ---
 
