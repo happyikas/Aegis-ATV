@@ -45,3 +45,40 @@
 - `AEGIS_EMBEDDING_PROVIDER=dummy` → 결정적 SHA3 기반 임베딩
 - `AEGIS_JUDGE_PROVIDER=dummy` → 결정적 룰 기반 verdict
 이 두 설정을 기본값으로 두고, 실제 키가 .env에 들어오면 openai/haiku로 전환.
+
+## v2.0 — Two Deployment Modes
+
+v2.0.0 부터 같은 코드베이스가 두 가지 배포 모드를 지원합니다 (자세한 내용은
+`CHANGELOG.md` v2.0.0 참조):
+
+- **Sidecar 모드** (default) — 멀티 테넌트 FastAPI 서비스. Claude Code 후크가
+  `localhost:8000/evaluate` 로 POST. 풀 M1–M17 surface (서명, ATMU, cost
+  ledger, HAM, Burn-in).
+- **Plugin (`local`) 모드** (신규, Solo Free) — 단일 개발자용 in-process 후크.
+  서비스 / HTTP / API 키 불필요. 후크가 firewall 파이프라인 (310→311→312→
+  320→330→335→340) 을 자체 프로세스에서 실행.
+
+설치:
+```bash
+uv run aegis install --mode sidecar   # 기본
+uv run aegis install --mode local     # Solo Free (dummy embedding+judge 강제)
+```
+
+두 모드는 같은 ATV-2080-v1 30-subfield 스키마와 같은 firewall 룰 (step310
++ step311 donor rules + step312 normalize + …) 을 공유합니다. v2.0.0 은
+12-incident donor KPI 를 sidecar 모드 기준 12/12 strict pass.
+
+## Plugin Mode 작업 시 알아둘 것
+
+- **Local hook 환경 변수 강제**: `aegis install --mode local` 은
+  `~/.claude/settings.json` 명령어에 `AEGIS_EMBEDDING_PROVIDER=dummy` +
+  `AEGIS_JUDGE_PROVIDER=dummy` 를 자동으로 prepend (Solo Free 컨트랙트).
+  사용자가 OpenAI / Haiku 를 쓰고 싶다면 settings.json 을 수동 편집.
+- **`tools/aegis_cli.py` 직접 수정 시**: 활성 hook 의 haiku judge 가
+  "self-modification of security infrastructure" 로 BLOCK 합니다 (정상
+  동작). SESSION_HANDOFF §8.3 의 protocol 따라 `docker compose stop` →
+  편집 → `docker compose start`.
+- **신규 step 추가 시**: `src/aegis/firewall/core.py default_steps()` 의
+  순서를 직접 편집해야 활성화됩니다 (`step311` 이 그 예시).
+- **donor 자산 이식 패턴**: 모든 v2.0 P0 자산은 D-번호 (D1~D6) 단위로
+  commit 분리. 상세 매핑은 `INTEGRATION_PLAN.md` §3.1 참조.
