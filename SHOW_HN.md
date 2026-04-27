@@ -30,12 +30,12 @@ Point at the repo root. The README's lead asset is the demo GIF, so the
 first thing a clicker sees is a 25-second screencast.
 
 ```
-https://github.com/<your-handle>/aegis-mvp
+https://github.com/happyikas/Aegis-ATV
 ```
 
 If you want the demo GIF to load even faster, link directly:
 ```
-https://github.com/<your-handle>/aegis-mvp#aegisdata-t2-mvp
+https://github.com/happyikas/Aegis-ATV#aegisdata-t2-mvp
 ```
 
 ---

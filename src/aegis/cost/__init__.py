@@ -22,6 +22,7 @@ from aegis.cost.model_flops import (
     expected_dollars,
     expected_flops,
 )
+from aegis.cost.transcript import import_into_wal, parse_transcript
 
 __all__ = [
     "CostAttestationLedger",
@@ -38,6 +39,8 @@ __all__ = [
     "evaluate_escalation",
     "expected_dollars",
     "expected_flops",
+    "import_into_wal",
     "memory_cost_divergence",
+    "parse_transcript",
     "token_to_flops_divergence",
 ]

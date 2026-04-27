@@ -7,7 +7,8 @@ services:
     ports:
       - "8000:8000"
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       AEGIS_AUDIT_DB: /app/data/audit.sqlite
       AEGIS_AUDIT_JSONL: /app/data/audit.jsonl
