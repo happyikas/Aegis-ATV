@@ -22,7 +22,12 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from aegis.atv.builder import build_atv
-from aegis.performance import get_default_store, kv_cache_advisor
+from aegis.performance import (
+    get_default_store,
+    kv_cache_advisor,
+    placement_advisor,
+    scheduling_advisor,
+)
 from aegis.schema import ATVInput
 
 
@@ -36,6 +41,34 @@ class AdvisoryResponse(BaseModel):
     reasons: list[str]
     latency_ms: float
     advisor_hash: str
+
+
+class SchedulingResponse(BaseModel):
+    priority_class: str
+    preempt_safe: bool
+    max_concurrent_in_cohort: int
+    deadline_ms: int
+    confidence: float
+    reasons: list[str]
+    latency_ms: float
+    advisor_hash: str
+
+
+class PlacementResponse(BaseModel):
+    layer_residency_plan: dict[int, str]
+    kv_quantisation_dtype: str
+    prefetch_window_tokens: int
+    swap_threshold_bytes: int
+    confidence: float
+    reasons: list[str]
+    latency_ms: float
+    advisor_hash: str
+
+
+class CombinedAdvisoryResponse(BaseModel):
+    kv_cache: AdvisoryResponse
+    scheduling: SchedulingResponse
+    placement: PlacementResponse
 
 
 def _backfill_perf_signals(payload: ATVInput) -> None:
@@ -70,5 +103,30 @@ def make_router() -> APIRouter:
         atv = build_atv(payload)
         advice = kv_cache_advisor(atv, payload)
         return asdict(advice)
+
+    @r.post("/advisory/scheduling", response_model=SchedulingResponse)
+    def advise_scheduling(payload: ATVInput) -> dict[str, Any]:
+        _backfill_perf_signals(payload)
+        atv = build_atv(payload)
+        advice = scheduling_advisor(atv, payload)
+        return asdict(advice)
+
+    @r.post("/advisory/placement", response_model=PlacementResponse)
+    def advise_placement(payload: ATVInput) -> dict[str, Any]:
+        _backfill_perf_signals(payload)
+        atv = build_atv(payload)
+        advice = placement_advisor(atv, payload)
+        return asdict(advice)
+
+    @r.post("/advisory/all", response_model=CombinedAdvisoryResponse)
+    def advise_all(payload: ATVInput) -> dict[str, Any]:
+        """One-shot — build the ATV once, fan out to all 3 advisors."""
+        _backfill_perf_signals(payload)
+        atv = build_atv(payload)
+        return {
+            "kv_cache":   asdict(kv_cache_advisor(atv, payload)),
+            "scheduling": asdict(scheduling_advisor(atv, payload)),
+            "placement":  asdict(placement_advisor(atv, payload)),
+        }
 
     return r

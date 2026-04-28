@@ -28,12 +28,24 @@ from aegis.performance.kv_cache_advisor import (
     KVCacheAdvice,
     kv_cache_advisor,
 )
+from aegis.performance.placement_advisor import (
+    PlacementAdvice,
+    placement_advisor,
+)
+from aegis.performance.scheduling_advisor import (
+    SchedulingAdvice,
+    scheduling_advisor,
+)
 
 __all__ = [
     "KVCacheAdvice",
     "PerfFeedback",
     "PerfFeedbackStore",
+    "PlacementAdvice",
+    "SchedulingAdvice",
     "get_default_store",
     "kv_cache_advisor",
+    "placement_advisor",
     "reset_default_store",
+    "scheduling_advisor",
 ]
