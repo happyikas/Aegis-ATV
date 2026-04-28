@@ -1,25 +1,31 @@
-"""Step 311 — Donor pattern rule pack (D11, partial).
+"""Step 311 — Donor pattern rule pack + v2.1.2 cloud destructive.
 
 Ports the 7 stdlib-only pattern rules from
-``_donor/aegis-mvp/atmu/rules/`` that close the eight gap incidents
-surfaced by the Phase 3 ``test_donor_incidents_e2e`` matrix:
+``_donor/aegis-mvp/atmu/rules/`` (D11) plus two v2.1.2 expansions:
 
-    persona_drift     I-01  → REQUIRE_APPROVAL
-    exfil_url         I-04  → BLOCK
-    sandbox_escape    I-06  → BLOCK
-    exfil_url (DNS)   I-07  → BLOCK  (same rule, different TLD)
-    prompt_injection  I-08  → REQUIRE_APPROVAL
-    mcp_injection     I-09  → BLOCK
-    git_destructive   I-10  → BLOCK
-    payment_overflow  I-11  → BLOCK
+    persona_drift       I-01  → REQUIRE_APPROVAL    (D11)
+    exfil_url           I-04  → BLOCK               (D11)
+    sandbox_escape      I-06  → BLOCK               (D11)
+    exfil_url (DNS)     I-07  → BLOCK               (D11, same rule)
+    prompt_injection    I-08  → REQUIRE_APPROVAL    (D11)
+    mcp_injection       I-09  → BLOCK               (D11)
+    git_destructive     I-10  → BLOCK               (D11)
+    payment_overflow    I-11  → BLOCK               (D11)
+    cloud_destructive         → BLOCK               (v2.1.2)
+    sql_unbounded             → BLOCK               (v2.1.2)
+
+cloud_destructive covers kubectl / terraform / aws / gcloud / az /
+helm / docker destructive operations — the Day-1 #2 expansion from
+the must-install backlog. sql_unbounded catches DELETE / UPDATE
+statements without a WHERE clause that would mutate every row.
 
 Two donor rules are intentionally NOT included here because they need
 runtime context that is not yet ported under Phase 2:
 
 * ``cost_overflow``      — depends on D10 ``cost.budget`` + per-day
-  spend tracker (P1 priority).
+  spend tracker (planned for v2.1.3 loop detector follow-up).
 * ``malfunction_pattern`` — depends on D7 ``monitor.malfunction``
-  (P1 priority).
+  (planned for v2.1.3).
 
 Step 311 runs immediately after step310 (the regex/sensitive-path
 gate) and before step312 (normalisation). The donor rules each scan
@@ -144,6 +150,53 @@ _GIT_REBASE_MAIN = re.compile(
     re.IGNORECASE,
 )
 
+# v2.1.2 — cloud destructive patterns (Day-1 #2 expansion)
+_CLOUD_DESTRUCTIVE = re.compile(
+    # Kubernetes
+    r"\bkubectl\s+delete\b"
+    r"|\bkubectl\s+drain\b"
+    r"|\bkubectl\s+(?:cordon|uncordon)\b\s+\S+\s+--force"
+    # Terraform
+    r"|\bterraform\s+(?:destroy|apply\s+-auto-approve)\b"
+    r"|\bterraform\s+state\s+rm\b"
+    # AWS CLI mutating
+    r"|\baws\s+s3\s+rm\s+s3://"
+    r"|\baws\s+s3\s+rb\s+s3://"
+    r"|\baws\s+iam\s+(?:delete|detach|put|create-access-key|create-user|attach-user-policy|update-assume-role-policy)\b"
+    r"|\baws\s+ec2\s+terminate-instances\b"
+    r"|\baws\s+rds\s+(?:delete-db-(?:instance|cluster|snapshot)|stop-db-cluster)\b"
+    # GCP / gcloud
+    r"|\bgcloud\s+iam\s+(?:roles|service-accounts)\s+delete\b"
+    r"|\bgcloud\s+iam\s+service-accounts\s+keys\s+create\b"
+    r"|\bgcloud\s+(?:compute|sql|kms)\s+\S+\s+delete\b"
+    r"|\bgcloud\s+projects\s+(?:delete|remove-iam-policy-binding)\b"
+    # Azure
+    r"|\baz\s+role\s+assignment\s+(?:create|delete)\b"
+    r"|\baz\s+(?:vm|sql|storage|keyvault)\s+\S*\s*delete\b"
+    # Helm
+    r"|\bhelm\s+(?:uninstall|delete)\b"
+    # Docker
+    r"|\bdocker\s+(?:rmi\s+-f|system\s+prune\s+-a|volume\s+rm\b)",
+    re.IGNORECASE,
+)
+
+# v2.1.2 — unbounded SQL mutations (DELETE / UPDATE without WHERE)
+# Permits the WHERE clause anywhere after the table name; flags only when
+# absent. Multi-line DOTALL so multiline SQL still trips.
+_SQL_UNBOUNDED_DELETE = re.compile(
+    r"\bDELETE\s+FROM\s+\S+(?!.*\bWHERE\b)(?:\s*;|\s*$)",
+    re.IGNORECASE | re.DOTALL,
+)
+_SQL_UNBOUNDED_UPDATE = re.compile(
+    r"\bUPDATE\s+\S+\s+SET\s+\S+\s*=\s*\S+(?!.*\bWHERE\b)(?:\s*;|\s*$)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+_SQL_TOOLS: frozenset[str] = frozenset({
+    "sql", "execute_sql", "database_query", "db_query", "query_db",
+    "db_mutation", "psql", "mysql",
+})
+
 # Default per-tool USD ceilings (donor: payment_overflow.DEFAULT_CEILINGS)
 _PAYMENT_CEILINGS: dict[str, float] = {
     "stripe_charge": 1_000.0,
@@ -216,6 +269,26 @@ def _check_git_destructive(tool: str, args_text: str) -> tuple[str, str] | None:
     return None
 
 
+def _check_cloud_destructive(tool: str, args_text: str) -> tuple[str, str] | None:
+    """v2.1.2 — kubectl/terraform/aws/gcloud/az/helm/docker destructive ops."""
+    if tool not in _SHELL_TOOLS:
+        return None
+    if _CLOUD_DESTRUCTIVE.search(args_text):
+        return ("BLOCK", "rule:cloud_destructive")
+    return None
+
+
+def _check_sql_unbounded(tool: str, args_text: str) -> tuple[str, str] | None:
+    """v2.1.2 — unbounded DELETE / UPDATE on SQL-class tools."""
+    if tool not in _SQL_TOOLS and tool not in _SHELL_TOOLS:
+        return None
+    if _SQL_UNBOUNDED_DELETE.search(args_text):
+        return ("BLOCK", "rule:sql_unbounded (DELETE without WHERE)")
+    if _SQL_UNBOUNDED_UPDATE.search(args_text):
+        return ("BLOCK", "rule:sql_unbounded (UPDATE without WHERE)")
+    return None
+
+
 def _check_payment_overflow(
     tool: str, args_obj: dict[str, Any]
 ) -> tuple[str, str] | None:
@@ -266,6 +339,8 @@ def run(
         _check_prompt_injection,
         _check_mcp_injection,
         _check_git_destructive,
+        _check_cloud_destructive,
+        _check_sql_unbounded,
     )
     for rule in text_rules:
         hit = rule(tool, args_text)
