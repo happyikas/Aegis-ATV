@@ -160,6 +160,32 @@ def create_app(
         def _stop_snapshotter() -> None:
             snapshotter.close()
 
+    # v3.9 — Tiered archive migrator. Disabled by default (empty cold_dir);
+    # production deployments enable via AEGIS_TIERED_ARCHIVE_COLD_DIR.
+    cold_dir = settings.aegis_tiered_archive_cold_dir
+    if cold_dir:
+        from aegis.audit.tiered_archive import (
+            ArchivePolicy,
+            FilesystemArchive,
+            TieredArchiveMigrator,
+        )
+        migrator = TieredArchiveMigrator(
+            live_path=Path(settings.aegis_journal_path),
+            backend=FilesystemArchive(cold_dir=Path(cold_dir)),
+            policy=ArchivePolicy(
+                rotate_bytes=settings.aegis_tiered_archive_rotate_bytes,
+                rotate_seconds=settings.aegis_tiered_archive_rotate_seconds,
+                hot_retention_segments=settings.aegis_tiered_archive_hot_retention_segments,
+                poll_seconds=settings.aegis_tiered_archive_poll_seconds,
+            ),
+        )
+        migrator.start()
+        app.state.tiered_archive_migrator = migrator
+
+        @app.on_event("shutdown")
+        def _stop_migrator() -> None:
+            migrator.stop()
+
     if _STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 

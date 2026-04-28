@@ -101,5 +101,15 @@ class Settings(BaseSettings):
     aegis_journal_group_commit_batch_size: int = 100
     aegis_journal_group_commit_interval_ms: float = 1.0
 
+    # v3.9 — Tiered archive of rotated journal segments. Empty ``cold_dir``
+    # disables the migrator. Production: set cold_dir to an NFS mount or
+    # to an S3 mount-point (s3fs). The S3ArchiveStub interface is
+    # available for native object-store backends.
+    aegis_tiered_archive_cold_dir: str = ""
+    aegis_tiered_archive_rotate_bytes: int = 100 * 1024 * 1024  # 100 MB
+    aegis_tiered_archive_rotate_seconds: float = 3600.0          # 1 hour
+    aegis_tiered_archive_hot_retention_segments: int = 3
+    aegis_tiered_archive_poll_seconds: float = 10.0
+
 
 settings = Settings()

@@ -4,6 +4,86 @@ All notable changes to AegisData MVP. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.9.0] — 2026-04-28  ·  Production durability — group-commit + tiered archive
+
+Bridges the gap between T2 demo (memory + per-call sync) and the four
+production durability patterns documented in
+`docs/WHITEPAPER_PERFORMANCE_KR.md` §2 (group commit / tiered / replicated
+WAL / Raft). v3.8 ships pattern A; v3.9 ships pattern B.
+
+### v3.8 — Group commit + persistent perf EWMA
+
+* `src/aegis/audit/group_commit.py` — `GroupCommitEncryptedJournal`
+  drop-in replacement for `EncryptedJournal`. Batches up to N records
+  or `interval_ms` ms into a single `open() / write_all / fsync /
+  close()` cycle. Each `append()` blocks until its batch is durable,
+  preserving caller contract. On-disk format is bit-identical so the
+  plain `EncryptedJournal` reads records group-committed earlier.
+  `make_journal()` factory + flag-driven via
+  `AEGIS_JOURNAL_GROUP_COMMIT`.
+* `src/aegis/audit/encrypted_journal.py` — split `encrypt(record)` and
+  `serialize(wrapper)` so wrappers can be staged without I/O. Plain
+  `append()` now does `os.fsync(fileno())` for true durability
+  (was previously `flush()` only).
+* `src/aegis/performance/feedback_snapshot.py` —
+  `PerfFeedbackSnapshotter` background daemon that periodically writes
+  the v3.2 EWMA store to SQLite. Trigger:
+  `min(interval_sec, updates_per_snapshot)` (default 30 s, 100).
+  `load_into_store()` restores prior EWMA on boot so advisor confidence
+  doesn't reset. Wired via `AEGIS_PERF_FEEDBACK_SNAPSHOT_DB`.
+
+### v3.9 — Tiered archive (hot → cold)
+
+* `src/aegis/audit/tiered_archive.py` —
+  `TieredArchiveMigrator` background coordinator that:
+  - Rotates the live journal file when it exceeds `rotate_bytes` or
+    `rotate_seconds`.
+  - Pushes closed segments to a pluggable `ArchiveBackend`:
+    `FilesystemArchive` (default — `cp` to `cold_dir/`) or
+    `S3ArchiveStub` (interface for S3/GCS/Azure Blob; production
+    impl plugs in boto3).
+  - Prunes hot tier after `hot_retention_segments` archived copies are
+    safe.
+* Encryption + commitment chain unchanged — replay still works against
+  cold-tier files with the same data key.
+* Wired via `AEGIS_TIERED_ARCHIVE_COLD_DIR`.
+
+### Config changes
+
+* `aegis_perf_feedback_snapshot_db` (path, default empty)
+* `aegis_perf_feedback_snapshot_interval_sec` (default 30.0)
+* `aegis_perf_feedback_snapshot_updates_threshold` (default 100)
+* `aegis_journal_group_commit` (default False)
+* `aegis_journal_group_commit_batch_size` (default 100)
+* `aegis_journal_group_commit_interval_ms` (default 1.0)
+* `aegis_tiered_archive_cold_dir` (path, default empty)
+* `aegis_tiered_archive_rotate_bytes` (default 100 MB)
+* `aegis_tiered_archive_rotate_seconds` (default 3600)
+* `aegis_tiered_archive_hot_retention_segments` (default 3)
+* `aegis_tiered_archive_poll_seconds` (default 10)
+
+### Tests
+
+* `tests/unit/test_feedback_snapshot.py` (11) — round-trip, trigger
+  logic, lifecycle, simulated-restart EWMA continuity.
+* `tests/unit/test_journal_group_commit.py` (10) — round-trip, durable-
+  on-return, factory, validation, concurrent appends, cross-compat
+  with plain journal, drain on close.
+* `tests/unit/test_tiered_archive.py` (16) — backend, rotation,
+  archive idempotency, hot-tier retention, lifecycle, encrypted-
+  journal cross-tier replay.
+
+### Numbers
+
+* **1019 tests PASS** (982 → 1019, +37), 1 skipped (llama-cpp).
+* **mypy 100 source files clean.**
+* **ruff clean.**
+* All new modules opt-in (off by default), so existing test surface
+  is unaffected. T3 hardware (M19+) will swap the filesystem backend
+  for a CSD-backed durable region.
+
+---
+
 ## [3.7.0] — 2026-04-28  ·  Context window advisor
 
 ATV-based **token-budget-aware** decision of which historical turns
