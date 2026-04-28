@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from aegis.atv.builder import build_atv
 from aegis.judge.unified_head import UnifiedHead, unified_advice_dict
 from aegis.performance import (
+    context_advisor,
     get_default_store,
     kv_cache_advisor,
     placement_advisor,
@@ -72,6 +73,39 @@ class CombinedAdvisoryResponse(BaseModel):
     kv_cache: AdvisoryResponse
     scheduling: SchedulingResponse
     placement: PlacementResponse
+
+
+class HistoryTurn(BaseModel):
+    turn_id: str
+    atv_input: ATVInput
+    token_cost: int
+
+
+class ContextRequest(BaseModel):
+    current: ATVInput
+    history: list[HistoryTurn] = []
+    token_budget: int
+
+
+class TurnAdviceResponse(BaseModel):
+    turn_id: str
+    decision: str
+    score: float
+    token_cost: int
+
+
+class ContextAdviceResponse(BaseModel):
+    keep_verbatim_turn_ids: list[str]
+    summarize_turn_ids: list[str]
+    replace_with_atv_turn_ids: list[str]
+    drop_turn_ids: list[str]
+    per_turn: list[TurnAdviceResponse]
+    expected_token_savings: int
+    total_token_cost_after: int
+    confidence: float
+    reasons: list[str]
+    latency_ms: float
+    advisor_hash: str
 
 
 def _backfill_perf_signals(payload: ATVInput) -> None:
@@ -141,5 +175,30 @@ def make_router() -> APIRouter:
         atv = build_atv(payload)
         uv = _UNIFIED_HEAD.evaluate_unified("", atv=atv, inp=payload)
         return unified_advice_dict(uv)
+
+    @r.post("/advisory/context", response_model=ContextAdviceResponse)
+    def advise_context(payload: ContextRequest) -> dict[str, Any]:
+        """v3.7 — context window advisor. Decide per historical turn
+        whether to keep verbatim, summarise, or drop, under a token budget.
+        Pure function of (current ATV, history ATVs, token costs)."""
+        _backfill_perf_signals(payload.current)
+        current_atv = build_atv(payload.current)
+
+        history_atvs = []
+        history_ids: list[str] = []
+        history_costs: list[int] = []
+        for turn in payload.history:
+            history_atvs.append(build_atv(turn.atv_input))
+            history_ids.append(turn.turn_id)
+            history_costs.append(turn.token_cost)
+
+        advice = context_advisor(
+            current_atv,
+            history_atvs,
+            history_ids,
+            history_costs,
+            token_budget=payload.token_budget,
+        )
+        return asdict(advice)
 
     return r

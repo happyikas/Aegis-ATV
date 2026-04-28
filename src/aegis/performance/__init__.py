@@ -18,6 +18,11 @@ placement, v3.6 unifies them under one M13-extended head.
 
 from __future__ import annotations
 
+from aegis.performance.context_advisor import (
+    ContextAdvice,
+    TurnAdvice,
+    context_advisor,
+)
 from aegis.performance.feedback import (
     PerfFeedback,
     PerfFeedbackStore,
@@ -38,11 +43,14 @@ from aegis.performance.scheduling_advisor import (
 )
 
 __all__ = [
+    "ContextAdvice",
     "KVCacheAdvice",
     "PerfFeedback",
     "PerfFeedbackStore",
     "PlacementAdvice",
     "SchedulingAdvice",
+    "TurnAdvice",
+    "context_advisor",
     "get_default_store",
     "kv_cache_advisor",
     "placement_advisor",

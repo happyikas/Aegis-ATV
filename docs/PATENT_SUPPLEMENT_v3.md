@@ -173,6 +173,52 @@
 **Note:** Claim 47 은 옵션 — federation 기능 자체는 v3.x 에 미구현,
 v4.x 의 milestone 으로 예약.
 
+### 3.8 Claim 48 — Context window 자문 헤드 (v3.7 신규)
+
+> **`Claim 48`**: 청구항 1 의 ATV 시퀀스 (현재 turn 의 ATV +
+> 과거 turn 의 ATV 리스트 + per-turn token cost) 를 입력으로
+> ``(keep_verbatim_turn_ids, summarize_turn_ids,
+> replace_with_atv_turn_ids, drop_turn_ids,
+> expected_token_savings, advisor_hash)`` 를 출력하는 결정론적
+> sub-millisecond 자문 함수로서, **per-turn relevance score** 는
+> 현재 ATV 의 ``agent_state_embedding`` 과 과거 ATV 의 cosine
+> similarity (가중치 0.45), ``cost_efficiency_metrics`` 의
+> ``task_progress_score`` (s-15) 매치 (0.20), ``novelty_score`` 의
+> ``composite_novelty`` 근접도 (0.10), 지수 감쇠
+> (half-life=8 turns) recency (0.25) 의 **가중 합** 으로 계산되며,
+> 상기 score 와 token_budget 제약으로부터 **그리디 ROI 정렬** 을
+> 통해 turn 단위 결정이 도출되는 시스템.
+
+**구현 참조:** [src/aegis/performance/context_advisor.py](../src/aegis/performance/context_advisor.py)
+
+**핵심 차별점:**
+- **트러스트 검증 + KV cache 자문 + scheduling 자문 + placement 자문 + context window 자문** 이 모두 동일 ATV-2080 위에 정의
+- LLM 자체 (Anthropic / OpenAI / 로컬) 의 자동 compaction 과 다르게,
+  **task-phase-aware** 결정 — 현재 phase 와 무관한 과거 phase 우선 압축
+- token_budget 제약 하 **결정론적 그리디 최적화** → audit replay 가능
+
+### 3.9 Claim 49 — Subfield-selective ATV 압축 (v3.x 예약)
+
+> **`Claim 49`**: 청구항 48 의 시스템에 있어, 과거 turn 의 ATV 들을
+> turn-to-turn delta 로 표현하여, 변하지 않은 subfield 는 reference +
+> 차이만 저장하는 **subfield-selective ATV diff 압축** 을 적용함으로써
+> 컨텍스트 메모리 사용량을 추가로 절감하는 시스템.
+
+**Note:** Claim 49 의 reference implementation 은 v3.8/v4.x 로 예약.
+
+### 3.10 Claim 50 — Unified head 5-output 통합 (v3.x 예약)
+
+> **`Claim 50`**: 청구항 45 의 unified head 를 확장하여,
+> (a) verdict, (b) KV cache 자문, (c) scheduling 자문,
+> (d) placement 자문, (e) **청구항 48 의 context window 자문**
+> 의 5 출력을 single ATV 입력 통과로 동시 생성하고,
+> 5 출력 의 advisor_hash 를 정렬-결합한 SHA3-256 을 신규
+> ``unified_hash_v2`` 로 발행하는 시스템.
+
+**Note:** Claim 50 의 reference implementation 은 v3.8 의 milestone.
+v3.7 에서는 context_advisor 가 standalone 으로 동작 — unified head 와
+endpoint 가 분리되어 있어, 호출자가 필요한 자문만 선택적으로 호출 가능.
+
 ---
 
 ## 4. 본 보강의 차별점 (Why This Is Novel)
@@ -268,19 +314,49 @@ tests/unit/test_unified_head.py               ←  8 unit tests (PASS)
 경로는 v2.5 AttributionHead 와 bit-identical
 (test_unified_verdict_path_matches_attribution_head 로 검증).
 
+### 5.6 v3.7 Context window advisor
+
+```
+src/aegis/performance/context_advisor.py      ←  Claim 48
+src/aegis/api/advisory.py                     ←  POST /advisory/context
+demo/context_advisor.py                       ←  12-turn 3-budget demo
+tests/unit/test_context_advisor.py            ←  14 unit tests (PASS)
+```
+
+**측정값** (M3 Mac, 2026-04):
+- 50-turn history: 평균 latency 0.087 ms (실측 대부분 <0.10 ms)
+- Token savings (12 turn 시뮬레이션):
+  - budget=5000: 6050→3005 tokens (50 % 절감)
+  - budget=2000: 6050→2000 tokens (67 % 절감)
+  - budget=800:  6050→795 tokens (87 % 절감)
+- Bit-determinism: 동일 input → 동일 output (test_deterministic_same_input_same_output 으로 검증)
+
+**Relevance score 가중치 (frozen in advisor_hash):**
+- agent_state_embedding cosine: 0.45
+- task_progress_score 매치: 0.20
+- composite_novelty 근접도: 0.10
+- recency (half-life 8 turns): 0.25
+
+**Threshold (frozen in advisor_hash):**
+- score ≥ 0.70 → keep_verbatim
+- 0.30 ≤ score < 0.70 → summarize (~30 % 압축 가정)
+- score < 0.30 → drop
+
 ---
 
 ## 6. 출원 전 체크리스트
 
 - [x] Reference implementation: `src/aegis/performance/`, `src/aegis/judge/unified_head.py`
-- [x] Unit tests: 968 passed (1 skipped — llama-cpp 미설치)
-- [x] Type-check clean: mypy 96 source files
+- [x] Unit tests: **982 passed** (905 → 982, +77, 1 skipped — llama-cpp 미설치)
+- [x] Type-check clean: mypy 97 source files
 - [x] Lint clean: ruff
-- [x] HTTP endpoints exposed: `/advisory/{kv_cache,scheduling,placement,all,unified}`
-- [x] Demo runnable: `demo/kv_cache_advisor.py`, `demo/runtime_closed_loop.py`
+- [x] HTTP endpoints exposed: `/advisory/{kv_cache,scheduling,placement,all,unified,context}`
+- [x] Demos: `demo/kv_cache_advisor.py`, `demo/runtime_closed_loop.py`, `demo/context_advisor.py`
 - [x] vLLM design doc: `docs/VLLM_INTEGRATION_DESIGN.md`
 - [ ] vLLM 실제 환경 벤치마크 (cache_hit_rate uplift) — v4.x milestone
 - [ ] 학습된 unified head 가중치 — v4.x milestone
+- [ ] Subfield-selective ATV diff 압축 (Claim 49) — v3.8/v4.x
+- [ ] Unified head v2 (5 outputs, Claim 50) — v3.8
 - [ ] T3 hardware 의 cost-attestation key 서명 통합 — M19+ 시점
 
 ---
