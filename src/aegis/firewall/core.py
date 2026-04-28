@@ -53,18 +53,20 @@ def default_steps() -> list[StepFn]:
         step320_blast,
         step330_human,
         step335_cost,
+        step336_loop,
         step340_policy,
     )
 
     return [
         step305_safe_allowlist.run,  # v2.1 Day-1 #1 — flag known-safe calls so step340 skips sLLM round-trip
         step310_args.run,
-        step311_donor_rules.run,  # D11 — donor pattern rule pack (persona drift, exfil URL, sandbox escape, prompt/mcp injection, git --force, payment overflow)
+        step311_donor_rules.run,  # D11 + v2.1.2 — donor pattern rule pack + cloud/sql_unbounded
         step312_normalize.run,   # DOGFOOD Rec #3 — canonicalize tool args before downstream steps
         step315_aid_auth.run,    # M14 — AID-region authorization + circuit breaker
         step320_blast.run,
         step330_human.run,
         step335_cost.run,
+        step336_loop.run,        # v2.1.3 Day-1 #6 — loop + redundant call saver
         step340_policy.run,
     ]
 
