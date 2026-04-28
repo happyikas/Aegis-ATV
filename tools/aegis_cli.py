@@ -315,6 +315,104 @@ def _pretool_hook_marker(mode: str) -> str:
     return str(LOCAL_HOOK_SCRIPT) if mode == "local" else str(HOOK_SCRIPT)
 
 
+def _default_baseline_path() -> Path:
+    """Where ``aegis baseline init`` writes by default — repo-local."""
+    return Path.cwd() / ".aegis" / "instruction_baseline.json"
+
+
+def cmd_baseline(args: argparse.Namespace) -> int:
+    """v2.2.1 Day-1 #3 — manage the instruction baseline manifest.
+
+    Three subactions:
+
+    * ``aegis baseline init``     — snapshot current CLAUDE.md /
+      AGENTS.md / .mcp.json / plugin & skill manifests into
+      ``.aegis/instruction_baseline.json``. Subsequent PreToolUse
+      calls verify against this file.
+    * ``aegis baseline status``   — show the diff between the live
+      tree and the baseline (additions, removals, modifications).
+    * ``aegis baseline reattest`` — re-snapshot and overwrite, after
+      a reviewed change. Drops the firewall's in-process cache so
+      the next PreToolUse picks up the new manifest.
+    """
+    from aegis.instruction_baseline import (
+        diff_baseline,
+        load_baseline,
+        snapshot,
+        write_baseline,
+    )
+
+    root = Path(args.root).resolve() if args.root else Path.cwd()
+    baseline_path = (
+        Path(args.baseline) if args.baseline else _default_baseline_path()
+    )
+
+    if args.action == "init":
+        if baseline_path.exists() and not args.force:
+            print(
+                _yellow(
+                    f"baseline already exists at {baseline_path} — re-run with "
+                    "--force to overwrite, or use `aegis baseline reattest`."
+                )
+            )
+            return 1
+        bl = snapshot(root)
+        write_baseline(bl, baseline_path)
+        print(_green(f"\u2713 instruction baseline written → {baseline_path}"))
+        print(f"  root:  {root}")
+        print(f"  files: {len(bl.files)} tracked")
+        for rel in sorted(bl.files):
+            print(f"    {bl.files[rel][:12]}…  {rel}")
+        print()
+        print(
+            f"Set AEGIS_INSTRUCTION_BASELINE_PATH={baseline_path} in your env "
+            "to enable step309 drift checking on every PreToolUse."
+        )
+        return 0
+
+    if args.action == "status":
+        if not baseline_path.exists():
+            print(
+                _red(
+                    f"no baseline at {baseline_path}. Run "
+                    "`aegis baseline init` first."
+                )
+            )
+            return 1
+        bl = load_baseline(baseline_path)
+        report = diff_baseline(bl, root)
+        if report.is_clean:
+            print(_green(f"\u2713 baseline intact ({len(bl.files)} files tracked)"))
+            return 0
+        print(_red(f"\u2717 instruction drift detected: {report.summary()}"))
+        for rel in report.added:
+            print(f"  + {rel}  (NEW)")
+        for rel in report.removed:
+            print(f"  - {rel}  (REMOVED)")
+        for rel, old, new in report.modified:
+            print(f"  ~ {rel}")
+            print(f"      was: {old[:16]}…")
+            print(f"      now: {new[:16]}…")
+        print()
+        print(
+            "Until reviewed, every PreToolUse is BLOCKed by step309. "
+            "If the change is intentional, run `aegis baseline reattest`."
+        )
+        return 1
+
+    if args.action == "reattest":
+        bl = snapshot(root)
+        write_baseline(bl, baseline_path)
+        from aegis.firewall.step309_instruction_drift import reset_baseline_cache
+
+        reset_baseline_cache()
+        print(_green(f"\u2713 baseline re-attested → {baseline_path}"))
+        print(f"  files: {len(bl.files)} tracked")
+        return 0
+
+    return 2
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     """Print a 5-line Agent Risk Report for the most recent session.
 
@@ -688,6 +786,30 @@ def build_parser() -> argparse.ArgumentParser:
     bg.add_argument("--daily", type=float)
     bg.add_argument("--per-call", type=float, dest="per_call")
     bg.set_defaults(fn=cmd_budget)
+
+    bl = sub.add_parser(
+        "baseline",
+        help="Manage the instruction baseline (CLAUDE.md / AGENTS.md / .mcp.json)",
+    )
+    bl.add_argument(
+        "action",
+        choices=["init", "status", "reattest"],
+        help="init: snapshot files; status: diff vs baseline; reattest: overwrite",
+    )
+    bl.add_argument(
+        "--root",
+        help="Repo root to walk (default: current working directory)",
+    )
+    bl.add_argument(
+        "--baseline",
+        help="Manifest path (default: .aegis/instruction_baseline.json under cwd)",
+    )
+    bl.add_argument(
+        "--force",
+        action="store_true",
+        help="(init) overwrite existing baseline manifest",
+    )
+    bl.set_defaults(fn=cmd_baseline)
 
     rep = sub.add_parser(
         "report",
