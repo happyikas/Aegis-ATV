@@ -22,7 +22,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from aegis.atv.builder import build_atv
-from aegis.performance import kv_cache_advisor
+from aegis.performance import get_default_store, kv_cache_advisor
 from aegis.schema import ATVInput
 
 
@@ -38,11 +38,35 @@ class AdvisoryResponse(BaseModel):
     advisor_hash: str
 
 
+def _backfill_perf_signals(payload: ATVInput) -> None:
+    """If the cost band's perf slots are still 0, pull from the EWMA
+    feedback store keyed by (tenant_id, aid). Mutates ``payload`` in-place.
+
+    This is the v3.2 closed-loop hook: a fresh ATV from a runtime
+    that hasn't measured yet inherits the rolling per-(tenant, aid)
+    averages so the advisor isn't blind on the first call after restart
+    or a new agent's first tool invocation.
+    """
+    store = get_default_store()
+    snap = store.get(tenant_id=payload.header.tenant_id, aid=payload.header.aid)
+    if snap.is_empty():
+        return
+    ce = payload.cost_estimate
+    if ce.cache_hit_rate == 0.0 and snap.cache_hit_rate > 0.0:
+        ce.cache_hit_rate = snap.cache_hit_rate
+    if ce.context_utilization_ratio == 0.0 and snap.context_utilization_ratio > 0.0:
+        ce.context_utilization_ratio = snap.context_utilization_ratio
+
+
 def make_router() -> APIRouter:
     r = APIRouter()
 
     @r.post("/advisory/kv_cache", response_model=AdvisoryResponse)
     def advise_kv_cache(payload: ATVInput) -> dict[str, Any]:
+        # v3.2 — if the host hasn't filled the cost band's perf slots,
+        # pull rolling EWMA from the feedback store. Host-supplied values
+        # are NEVER overwritten (host knows best when it provides signal).
+        _backfill_perf_signals(payload)
         atv = build_atv(payload)
         advice = kv_cache_advisor(atv, payload)
         return asdict(advice)

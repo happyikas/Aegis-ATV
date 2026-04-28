@@ -18,9 +18,22 @@ placement, v3.6 unifies them under one M13-extended head.
 
 from __future__ import annotations
 
+from aegis.performance.feedback import (
+    PerfFeedback,
+    PerfFeedbackStore,
+    get_default_store,
+    reset_default_store,
+)
 from aegis.performance.kv_cache_advisor import (
     KVCacheAdvice,
     kv_cache_advisor,
 )
 
-__all__ = ["KVCacheAdvice", "kv_cache_advisor"]
+__all__ = [
+    "KVCacheAdvice",
+    "PerfFeedback",
+    "PerfFeedbackStore",
+    "get_default_store",
+    "kv_cache_advisor",
+    "reset_default_store",
+]
