@@ -4,6 +4,95 @@ All notable changes to AegisData MVP. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.4.0] — 2026-04-28  ·  step337 HW band anomaly gate
+
+Closes the gap surfaced by v2.3's demo (3 / 6 attacks unblocked).
+Adds a new firewall step that reads the ATV HW band's normalized
+signals and converts clear-cut anomalies into BLOCK / REQUIRE_APPROVAL
+— complementing the M12 cost-divergence escalation (Claim 27) which
+only watches the j-14/j-15/j-16 cost axis. Together M12 + step337
+catch all 6 simulator attack modes.
+
+### Added — `step337_hw_anomaly`
+
+* **`src/aegis/firewall/step337_hw_anomaly.py`** — new firewall step
+  reading the ATV HW band directly:
+
+  Severity 1 (BLOCK):
+  * ``aid_tag_transitions[0]`` ≥ 0.20 → ``rule:hw_iommu_violation``
+    (IOMMU AID-tag breach, Claim 5 enforcement target).
+  * ``atmu_anomaly[2]``        ≥ 0.34 → ``rule:hw_hypervisor_violation``
+    (VM-to-host ring violation).
+  * ``network_telemetry[0]``   ≥ 0.20 AND tool ∉ ``_EGRESS_ALLOWED``
+    → ``rule:hw_network_exfil`` (≥10 MB egress on a non-egress tool).
+
+  Severity 2 (REQUIRE_APPROVAL):
+  * ``thermal_ecc_drift[3]`` == 1.0 → ``rule:hw_thermal_spike``
+    (sustained ≥90°C p95).
+  * ``dma_fanout[0]``        ≥ 0.50 → ``rule:hw_dma_fanout``
+    (≥16 distinct DMA peers in one call).
+  * ``atmu_anomaly[3]``      ≥ 1.0 → ``rule:hw_ecc_uncorrectable``
+    (uncorrectable ECC error — possible rowhammer probe).
+
+  ``_EGRESS_ALLOWED`` covers ``WebFetch``, ``WebSearch``, ``fetch``,
+  ``http_request``, ``curl``, ``browse``, ``render_image``,
+  ``embed_image``, ``send_email``, ``post_message``,
+  ``call_external_api`` so step337 doesn't BLOCK the legitimate
+  outbound use cases (step311's ``exfil_url`` rule still inspects
+  the URL itself).
+
+  Step short-circuits to no-op when the HW band is zero-filled
+  (T2 default + sidecar without ``AEGIS_HW_PROVIDER=sim``), so the
+  v2.0 / v2.2 / v2.3 surface is unaffected.
+
+### Changed
+
+* **`src/aegis/firewall/core.py`** — `default_steps()` inserts
+  step337 between step336 (loop) and step340 (sLLM judge).
+* **`_donor/smoke_hw_double_check.py`** — demo now runs both gates
+  (M12 escalation + step337) and prints a 7-column matrix. All 6
+  attack modes light up:
+
+  ```
+   scenario                      tok→FLOPS  mem    $    M12     s337   rule
+   ──────────────────────────── ────────── ───── ──── ──────── ───── ───────────────
+   ✓ honest agent (no attack)        0.05  0.08 0.05      ok    ok    -
+   ✗ attack: cost_underreport         1.00  0.08 1.00 ESCALATE  ok    token_to_flops
+   ✗ attack: hbm_exfil                0.05  1.00 0.05 ESCALATE  ok    memory_cost
+   ✗ attack: iommu_violation          0.05  0.08 0.05      ok BLOCK   rule:hw_iommu_violation
+   ✗ attack: network_exfil            0.05  0.08 0.05      ok BLOCK   rule:hw_network_exfil
+   ✗ attack: thermal_spike            0.05  0.08 0.05      ok   ASK   rule:hw_thermal_spike
+   ✗ attack: token_flops_mismatch     1.00  0.08 1.00 ESCALATE  ok    token_to_flops
+   ✗ multi: token+network+iommu       1.00  0.08 1.00 ESCALATE BLOCK  token_to_flops
+  ```
+
+### Tests
+
+* +20 unit tests (829 → **849** total). Coverage: T2 zero-band
+  short-circuit, honest-path no-op, each severity-1 and severity-2
+  rule fires individually, egress-allowed tools exempt from
+  ``hw_network_exfil`` (parametrised across 6 tools), priority
+  ordering (BLOCK before REQUIRE_APPROVAL, IOMMU before thermal),
+  threshold edge case (0.19 just below 0.20 doesn't fire),
+  ``ctx.extras`` audit hint contract, end-to-end through
+  `run_firewall` (step337 BLOCK propagates to Verdict).
+
+### Verified gates
+
+* `pytest -q`     → **849 passed** (was 829).
+* `mypy src`      → clean, **86 source files** (was 85).
+* `ruff check .`  → clean.
+* Live demo: every attack mode catches at one of two gates.
+
+### Migration from v2.3.x
+
+No breaking change. step337 is a no-op when the HW band is
+zero-filled, which is the default unless ``AEGIS_HW_PROVIDER=sim``
+is set. The user already-on-sim path picks up the new gate
+automatically — no env var changes needed.
+
+---
+
 ## [2.3.0] — 2026-04-27  ·  T3 hardware-emulation: SW/HW double-check live
 
 Brings the patent's two-axis double-check model (Claims 26 / 27 / 30 / 34)
