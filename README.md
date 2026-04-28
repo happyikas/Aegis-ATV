@@ -46,8 +46,9 @@ uv run aegis report                    # 5-line Agent Risk Report
 * **Local-mode signed audit chain** — SHA3-256 prev_hash / this_hash
   per line; `aegis verify-audit` catches mutations and re-orderings.
 
-10-minute runbook at [`docs/RUNBOOK.md`](docs/RUNBOOK.md); full
-release notes in [`CHANGELOG.md`](CHANGELOG.md).
+📖 **[v2.2 사용자 매뉴얼 (한국어)](docs/MANUAL_v2.2.md)** — 설치, CLI 레퍼런스, 시나리오, 트러블슈팅 14개 섹션.
+🎯 10분 라이브 데모: [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
+📋 변경 내역: [`CHANGELOG.md`](CHANGELOG.md).
 
 ---
 
