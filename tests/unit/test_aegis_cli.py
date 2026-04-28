@@ -527,6 +527,169 @@ def test_report_subcommand_default_args() -> None:
     assert args.verbose is False
 
 
+# ---- v2.2.1: dual-schema audit reader -----------------------------------
+
+
+def test_extract_audit_fields_local_schema() -> None:
+    rec = {
+        "ts_ns": 12345,
+        "tool": "Bash",
+        "decision": "BLOCK",
+        "reason": "rule:git_destructive",
+    }
+    out = aegis_cli._extract_audit_fields(rec)
+    assert out == {
+        "decision": "BLOCK",
+        "reason": "rule:git_destructive",
+        "tool": "Bash",
+        "ts_ns": 12345,
+    }
+
+
+def test_extract_audit_fields_sidecar_schema() -> None:
+    """Sidecar JSONL nests decision + tool_name in payload.header."""
+    rec = {
+        "payload": {
+            "header": {
+                "decision": "REQUIRE_APPROVAL",
+                "tool_name": "execute_shell",
+                "timestamp_ns": 99999,
+            },
+            "signed_at_ns": 100000,
+        },
+        "atv_id": "abc",
+    }
+    out = aegis_cli._extract_audit_fields(rec)
+    assert out["decision"] == "REQUIRE_APPROVAL"
+    assert out["tool"] == "execute_shell"
+    assert out["reason"] == ""  # sidecar JSONL has no reason
+    assert out["ts_ns"] == 99999
+
+
+def test_extract_audit_fields_top_level_decision_wins() -> None:
+    """Local-schema fields win over the sidecar nested fallback."""
+    rec = {
+        "decision": "ALLOW",
+        "tool": "Bash",
+        "payload": {
+            "header": {"decision": "BLOCK", "tool_name": "execute_shell"},
+        },
+    }
+    out = aegis_cli._extract_audit_fields(rec)
+    assert out["decision"] == "ALLOW"
+    assert out["tool"] == "Bash"
+
+
+def test_extract_audit_fields_falls_back_signed_at_ns() -> None:
+    """If header.timestamp_ns is missing, payload.signed_at_ns is used."""
+    rec = {
+        "payload": {
+            "header": {"decision": "BLOCK", "tool_name": "Bash"},
+            "signed_at_ns": 7777,
+        },
+    }
+    out = aegis_cli._extract_audit_fields(rec)
+    assert out["ts_ns"] == 7777
+
+
+def test_extract_audit_fields_robust_to_garbage() -> None:
+    """Non-dict payload / non-numeric ts_ns must not raise."""
+    rec_a = {"decision": "ALLOW", "ts_ns": "not a number"}
+    out_a = aegis_cli._extract_audit_fields(rec_a)
+    assert out_a["ts_ns"] == 0
+
+    rec_b = {"payload": "not a dict"}
+    out_b = aegis_cli._extract_audit_fields(rec_b)
+    assert out_b["decision"] == ""
+    assert out_b["tool"] == "?"
+
+
+def test_report_against_sidecar_jsonl(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    audit = tmp_path / "sidecar.jsonl"
+    _write_audit(
+        audit,
+        [
+            {
+                "payload": {
+                    "header": {
+                        "decision": "ALLOW",
+                        "tool_name": "read_file",
+                        "timestamp_ns": 1,
+                    }
+                }
+            },
+            {
+                "payload": {
+                    "header": {
+                        "decision": "BLOCK",
+                        "tool_name": "execute_shell",
+                        "timestamp_ns": 2,
+                    }
+                }
+            },
+            {
+                "payload": {
+                    "header": {
+                        "decision": "REQUIRE_APPROVAL",
+                        "tool_name": "write_file",
+                        "timestamp_ns": 3,
+                    }
+                }
+            },
+        ],
+    )
+    rc = aegis_cli.cmd_report(_audit_args(audit=str(audit), verbose=True))
+    assert rc == 0
+    out = capsys.readouterr().out
+    # Counts are accurate even without reason text.
+    assert "1 safe tool calls" in out
+    assert "1 high-risk actions" in out
+    assert "1 destructive commands" in out
+    # Sidecar warning surfaced.
+    assert "no `reason` text" in out
+    # Top-reasons fallback uses tool name.
+    assert "ALLOW read_file" in out
+    assert "BLOCK execute_shell" in out
+    assert "REQUIRE_APPROVAL write_file" in out
+
+
+def test_report_mixed_schemas_in_one_log(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    audit = tmp_path / "mixed.jsonl"
+    _write_audit(
+        audit,
+        [
+            # local-schema line
+            {
+                "ts_ns": 1,
+                "decision": "BLOCK",
+                "reason": "rule:git_destructive",
+                "tool": "Bash",
+            },
+            # sidecar-schema line
+            {
+                "payload": {
+                    "header": {
+                        "decision": "ALLOW",
+                        "tool_name": "read_file",
+                        "timestamp_ns": 2,
+                    }
+                }
+            },
+        ],
+    )
+    rc = aegis_cli.cmd_report(_audit_args(audit=str(audit)))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "1 safe tool calls" in out
+    assert "1 destructive commands" in out
+    # Mixed log → sidecar warning NOT shown (some records DID have reason).
+    assert "no `reason` text" not in out
+
+
 # ---- v2.2: aegis baseline ----------------------------------------------
 
 
