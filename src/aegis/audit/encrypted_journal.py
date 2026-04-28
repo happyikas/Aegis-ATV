@@ -71,13 +71,13 @@ class EncryptedJournal:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
 
-    def append(self, record: dict[str, Any]) -> dict[str, Any]:
-        """Encrypt + append one record. Returns the wrapper metadata."""
+    def encrypt(self, record: dict[str, Any]) -> dict[str, Any]:
+        """Pure: build the wrapper (encrypt + commitment + header) without
+        writing anything. Used by GroupCommitEncryptedJournal to amortise
+        the fsync cost across a batch."""
         nonce = secrets.token_bytes(NONCE_LEN)
         plaintext = json.dumps(record, separators=(",", ":")).encode("utf-8")
         commitment = hashlib.sha3_256(plaintext).hexdigest()
-        # Cleartext header travels with the record so a verifier can route +
-        # locate the key without first decrypting the body.
         cleartext_header = {
             "schema_version": "EJOURN-v1",
             "key_version": DATA_KEY_VERSION,
@@ -86,18 +86,32 @@ class EncryptedJournal:
             "atv_commitment": commitment,
             "ts_ns": time.time_ns(),
         }
-        # The cleartext header is also AAD so the auth tag binds it.
         aad = json.dumps(cleartext_header, sort_keys=True, separators=(",", ":")).encode()
         ciphertext = self._aead.encrypt(nonce, plaintext, aad)
-        wrapper = {
+        return {
             **cleartext_header,
             "nonce": base64.b64encode(nonce).decode(),
             "ciphertext": base64.b64encode(ciphertext).decode(),
         }
-        line = json.dumps(wrapper, separators=(",", ":")) + "\n"
+
+    @staticmethod
+    def serialize(wrapper: dict[str, Any]) -> str:
+        """Serialise a wrapper to its on-disk JSONL line (with newline)."""
+        return json.dumps(wrapper, separators=(",", ":")) + "\n"
+
+    def append(self, record: dict[str, Any]) -> dict[str, Any]:
+        """Encrypt + append one record durably. Returns the wrapper metadata.
+
+        Single-call API — for batched / group-commit appends use
+        :class:`aegis.audit.group_commit.GroupCommitEncryptedJournal`.
+        """
+        wrapper = self.encrypt(record)
+        line = self.serialize(wrapper)
         with self._lock, self.path.open("a", encoding="utf-8") as f:
             f.write(line)
             f.flush()
+            import os as _os
+            _os.fsync(f.fileno())
         return wrapper
 
     def decrypt_record(self, wrapper: dict[str, Any]) -> dict[str, Any]:

@@ -29,6 +29,10 @@ from aegis.performance.feedback import (
     get_default_store,
     reset_default_store,
 )
+from aegis.performance.feedback_snapshot import (
+    PerfFeedbackSnapshotter,
+    SnapshotterConfig,
+)
 from aegis.performance.kv_cache_advisor import (
     KVCacheAdvice,
     kv_cache_advisor,
@@ -46,9 +50,11 @@ __all__ = [
     "ContextAdvice",
     "KVCacheAdvice",
     "PerfFeedback",
+    "PerfFeedbackSnapshotter",
     "PerfFeedbackStore",
     "PlacementAdvice",
     "SchedulingAdvice",
+    "SnapshotterConfig",
     "TurnAdvice",
     "context_advisor",
     "get_default_store",

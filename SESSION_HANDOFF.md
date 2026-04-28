@@ -1,11 +1,30 @@
 # AegisData MVP — 세션 핸드오프 (Session Handoff)
 
-**상태 스냅샷:** 2026-04-28 (**v3.7.0**)
+**상태 스냅샷:** 2026-04-28 (**v3.9.0**)
 **Repo:** [happyikas/Aegis-ATV](https://github.com/happyikas/Aegis-ATV) (private)
 **대상:** 새 Claude Code 챗 창에서 이 프로젝트 작업을 이어가는 사람 (또는 새 Claude 인스턴스)
-**한 문장:** AegisData v3.7.0 — **context window advisor 추가**. 동일 ATV-2080 이 (트러스트 verdict / KV cache / scheduling / placement / **context window** = 5축) 모두 driven. **982 tests PASS (+14)**, mypy 97 source files clean, ruff clean.
+**한 문장:** AegisData v3.9.0 — **production durability 도입** (group commit + 영속 perf snapshot + tiered archive). T2 demo 가 commercial-grade durability 패턴으로 진화. **1019 tests PASS (+37)**, mypy 100 source files clean, ruff clean.
 
-**v3.7 까지 release 완료:** v2.0.0 / v2.2.0 / v2.3.0 / v2.4.0 / v3.0.0 / v3.6.0 / **v3.7.0** 모두 GitHub tag + Release 발행됨.
+**v3.9 까지 release 완료:** v2.0.0 / v2.2.0 / v2.3.0 / v2.4.0 / v3.0.0 / v3.6.0 / v3.7.0 / **v3.9.0** 모두 GitHub tag + Release 발행됨.
+
+## 0-X. v3.8 + v3.9 (이 세션 후속, 2026-04-28)
+
+WHITEPAPER_PERFORMANCE_KR.md §2 의 4 production 패턴 중 **A (group commit) +
+B (tiered durability)** 채택. 모든 신규 기능은 **opt-in** (default off).
+
+| 기능 | 모듈 | 설정 | Claim |
+|---|---|---|---|
+| Group-commit encrypted journal | `audit/group_commit.py` | `AEGIS_JOURNAL_GROUP_COMMIT` | 51 |
+| Persistent perf EWMA snapshot | `performance/feedback_snapshot.py` | `AEGIS_PERF_FEEDBACK_SNAPSHOT_DB` | 53 |
+| Tiered archive (hot/warm/cold) | `audit/tiered_archive.py` | `AEGIS_TIERED_ARCHIVE_COLD_DIR` | 52 |
+
+**Tests:** +37 (982 → 1019). **mypy:** 100 files clean. **ruff:** clean.
+
+**상업화 의의:**
+- Group commit: throughput ~N× (batch_size 만큼)
+- Snapshot: advisor cold-start 비용 제거 (warm-up 5 turn → 0)
+- Tiered archive: storage 비용 5–10× 절감 (cold tier 가 SSD 보다 30–50× 저렴)
+- 모든 변경은 RPO=0 audit 의 caller-side semantic 보존
 
 ## 0-Y. v3.7 (이 세션 후속, 2026-04-28)
 

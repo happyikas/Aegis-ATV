@@ -81,12 +81,23 @@ def create_app(
             signing_key=cost_key,
         )
     # M15 — encrypted ATV journal. Auto-create the data key on first run.
+    # v3.8 — Optional group-commit wrapper for higher throughput.
     if encrypted_journal is None:
         data_key = load_or_create_data_key(Path(settings.aegis_journal_data_key_path))
-        encrypted_journal = EncryptedJournal(
-            path=Path(settings.aegis_journal_path),
-            data_key=data_key,
-        )
+        if settings.aegis_journal_group_commit:
+            from aegis.audit.group_commit import make_journal
+            encrypted_journal = make_journal(  # type: ignore[assignment]
+                path=Path(settings.aegis_journal_path),
+                data_key=data_key,
+                group_commit=True,
+                batch_size=settings.aegis_journal_group_commit_batch_size,
+                interval_ms=settings.aegis_journal_group_commit_interval_ms,
+            )
+        else:
+            encrypted_journal = EncryptedJournal(
+                path=Path(settings.aegis_journal_path),
+                data_key=data_key,
+            )
     # M16 — Hierarchical Agent Memory (T2 L3+L4 emulation).
     if ham_store is None:
         ham_key = load_or_create_data_key(Path(settings.aegis_ham_data_key_path))
@@ -122,6 +133,58 @@ def create_app(
     app.include_router(_replay_router(journal=encrypted_journal))
     app.include_router(_ham_router(store=ham_store))
     app.include_router(_advisory_router())
+
+    # v3.8 — Persistent perf-feedback snapshotter. Disabled by default
+    # (empty path); production deployments enable it via
+    # AEGIS_PERF_FEEDBACK_SNAPSHOT_DB.
+    snap_db = settings.aegis_perf_feedback_snapshot_db
+    if snap_db:
+        from aegis.performance import (
+            PerfFeedbackSnapshotter,
+            SnapshotterConfig,
+            get_default_store,
+        )
+        snapshotter = PerfFeedbackSnapshotter(
+            store=get_default_store(),
+            db_path=snap_db,
+            config=SnapshotterConfig(
+                interval_sec=settings.aegis_perf_feedback_snapshot_interval_sec,
+                updates_per_snapshot=settings.aegis_perf_feedback_snapshot_updates_threshold,
+            ),
+        )
+        snapshotter.load_into_store()  # restore prior EWMA on boot
+        snapshotter.start()
+        app.state.perf_feedback_snapshotter = snapshotter
+
+        @app.on_event("shutdown")
+        def _stop_snapshotter() -> None:
+            snapshotter.close()
+
+    # v3.9 — Tiered archive migrator. Disabled by default (empty cold_dir);
+    # production deployments enable via AEGIS_TIERED_ARCHIVE_COLD_DIR.
+    cold_dir = settings.aegis_tiered_archive_cold_dir
+    if cold_dir:
+        from aegis.audit.tiered_archive import (
+            ArchivePolicy,
+            FilesystemArchive,
+            TieredArchiveMigrator,
+        )
+        migrator = TieredArchiveMigrator(
+            live_path=Path(settings.aegis_journal_path),
+            backend=FilesystemArchive(cold_dir=Path(cold_dir)),
+            policy=ArchivePolicy(
+                rotate_bytes=settings.aegis_tiered_archive_rotate_bytes,
+                rotate_seconds=settings.aegis_tiered_archive_rotate_seconds,
+                hot_retention_segments=settings.aegis_tiered_archive_hot_retention_segments,
+                poll_seconds=settings.aegis_tiered_archive_poll_seconds,
+            ),
+        )
+        migrator.start()
+        app.state.tiered_archive_migrator = migrator
+
+        @app.on_event("shutdown")
+        def _stop_migrator() -> None:
+            migrator.stop()
 
     if _STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")

@@ -86,5 +86,30 @@ class Settings(BaseSettings):
     aegis_ham_db: str = "./data/ham.sqlite"
     aegis_ham_data_key_path: str = "./keys/ham_data.key"
 
+    # v3.8 — Persistent perf-feedback EWMA snapshot.
+    # Empty string disables the periodic snapshotter (default for tests
+    # so they run hermetically). Production deployments set this to a
+    # path under ./data/ to survive restarts.
+    aegis_perf_feedback_snapshot_db: str = ""
+    aegis_perf_feedback_snapshot_interval_sec: float = 30.0
+    aegis_perf_feedback_snapshot_updates_threshold: int = 100
+
+    # v3.8 — Group-commit on the encrypted ATV journal. ``False`` keeps
+    # the v3.0 sync-per-append path. ``True`` enables batched fsync
+    # (one fsync per up-to-batch_size records OR every interval_ms).
+    aegis_journal_group_commit: bool = False
+    aegis_journal_group_commit_batch_size: int = 100
+    aegis_journal_group_commit_interval_ms: float = 1.0
+
+    # v3.9 — Tiered archive of rotated journal segments. Empty ``cold_dir``
+    # disables the migrator. Production: set cold_dir to an NFS mount or
+    # to an S3 mount-point (s3fs). The S3ArchiveStub interface is
+    # available for native object-store backends.
+    aegis_tiered_archive_cold_dir: str = ""
+    aegis_tiered_archive_rotate_bytes: int = 100 * 1024 * 1024  # 100 MB
+    aegis_tiered_archive_rotate_seconds: float = 3600.0          # 1 hour
+    aegis_tiered_archive_hot_retention_segments: int = 3
+    aegis_tiered_archive_poll_seconds: float = 10.0
+
 
 settings = Settings()

@@ -14,6 +14,7 @@ RUN uv sync --frozen --no-install-project || uv sync --no-install-project
 
 COPY src /app/src
 COPY policies /app/policies
+COPY models /app/models
 RUN uv sync --frozen || uv sync
 
 EXPOSE 8000
