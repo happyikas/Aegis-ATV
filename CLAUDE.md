@@ -46,6 +46,25 @@
 - `AEGIS_JUDGE_PROVIDER=dummy` → 결정적 룰 기반 verdict
 이 두 설정을 기본값으로 두고, 실제 키가 .env에 들어오면 openai/haiku로 전환.
 
+## v2.2 — must-install surface (since 2026-04-27)
+
+v2.1 + v2.2 added five "must-install" features on top of v2.0:
+
+- **step305 safe allowlist** (`policies/safe_actions.json`) → step340
+  skips sLLM judge for known-safe ops. Latency <5 ms.
+- **step311 cloud destructive** patterns (kubectl / terraform / aws iam
+  / gcloud / az / helm / docker) + `sql_unbounded` rule.
+- **step336 loop detector** — same call ≥3× → REQUIRE_APPROVAL;
+  read-only repeats deduped.
+- **step309 instruction drift** — CLAUDE.md / AGENTS.md / .mcp.json /
+  plugin & skill manifests baselined; any drift BLOCKs every
+  PreToolUse until `aegis baseline reattest`.
+- **`aegis report`** — 5-line session risk summary. **`aegis verify-audit`**
+  walks the local SHA3 chain.
+
+New runtime config: `AEGIS_INSTRUCTION_BASELINE_PATH` (opt-in for
+step309). Default empty → no-op.
+
 ## v2.0 — Two Deployment Modes
 
 v2.0.0 부터 같은 코드베이스가 두 가지 배포 모드를 지원합니다 (자세한 내용은
