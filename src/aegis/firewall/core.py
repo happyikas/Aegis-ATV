@@ -55,6 +55,7 @@ def default_steps() -> list[StepFn]:
         step330_human,
         step335_cost,
         step336_loop,
+        step337_hw_anomaly,
         step340_policy,
     )
 
@@ -69,6 +70,7 @@ def default_steps() -> list[StepFn]:
         step330_human.run,
         step335_cost.run,
         step336_loop.run,        # v2.1.3 Day-1 #6 — loop + redundant call saver
+        step337_hw_anomaly.run,  # v2.4 — HW band anomaly gate (no-op when AEGIS_HW_PROVIDER!=sim)
         step340_policy.run,
     ]
 
