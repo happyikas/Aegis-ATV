@@ -4,6 +4,139 @@ All notable changes to AegisData MVP. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.0.0] — 2026-04-28  ·  ATV-native sLLM stack: M13 + Phi + hybrid combiner
+
+The patent's three-tier sLLM vision (Claims 8 / 9) lands as a working
+hybrid stack. v2.5 + v2.6 + v3.0 ship together as v3.0.0.
+
+### Added — v2.5 M13 AttributionHead
+
+* **`src/aegis/judge/attribution_head.py`** — frozen 30-feature linear
+  classifier that reads the 2080-D ATV vector directly (not a text
+  summary). Hand-tuned weights in `models/m13_attribution_head_v1.json`,
+  SHA3-256 hashed at load time as `model_hash`.
+* `evaluate_full(summary, atv, inp)` returns a `JudgeVerdict` with the
+  full 30-key `subfield_attribution` map populated for the first time
+  (Dummy / Haiku had returned empty dicts).
+* <1ms inference, IEEE-754 deterministic, auditable via the frozen
+  weights' SHA3 hash.
+
+### Added — v2.6 LocalPhiJudge
+
+* **`src/aegis/judge/local_phi.py`** — Phi-4-mini-q4 / Llama-family
+  local sLLM with three-mode dispatch:
+  * **Real** — `AEGIS_JUDGE_MODEL_PATH=/path/to/phi.gguf` + `llama-cpp-
+    python` installed: GGUF-loaded greedy-decode (T=0, top_k=1).
+    `model_hash` = SHA3-256 of the GGUF file.
+  * **Stub** — no path / `AEGIS_JUDGE_LOCAL_PHI_STUB=1`: delegates to
+    M13 AttributionHead and re-labels the reason. Deterministic,
+    audit-clean, CI-friendly.
+  * **Disabled** — env points at missing file or llama-cpp-python
+    missing: returns confidence=0.0 ALLOW so the v3.0 HybridJudge
+    routes past it.
+* Prompt embeds the M13 attribution top-5 contributors so the LM
+  has structured signal alongside the summary.
+* `_parse_real_decode` accepts both strict JSON output and keyword-
+  fallback for robust small-model inference.
+
+### Added — v3.0 HybridJudge
+
+* **`src/aegis/judge/hybrid.py`** — confidence-routing combiner over a
+  layered Judge stack. Default tiers, in increasing latency × cost ×
+  non-determinism order:
+
+  | Tier | Judge | Latency | Determinism |
+  |---|---|---:|---|
+  | 1 | `m13_attribution` (AttributionHead) | <1 ms | bit-identical |
+  | 2 | `local_phi` (stub or real Phi-4-mini-q4) | <1ms / ~50 ms | bit-identical (stub) / attestable (real) |
+  | 3 | `haiku` (Anthropic API, only when `ANTHROPIC_API_KEY` set) | ~150 ms | "approximately stable" |
+  | 4 | `dummy` (regex) | <1 ms | bit-identical |
+
+* Routing rule: a tier "commits" on BLOCK / REQUIRE_APPROVAL OR on
+  ALLOW with `confidence ≥ allow_threshold`. Low-confidence ALLOW
+  escalates to the next tier — the "fail-safe escalation" pattern.
+* `JudgeVerdict.layer_traces` records each consulted tier's
+  ``"name: decision conf=X.XX (T.Tms)"``. `model_hash` set to the
+  *deciding* tier's hash so `aegis verify-audit` can re-run the
+  exact path. `latency_ms` is the cumulative wall-clock.
+
+### Changed
+
+* **`src/aegis/judge/base.py`** — `JudgeVerdict` gains optional
+  `model_hash`, `latency_ms`, `layer_traces` fields (default values
+  preserve all existing tests). `Judge` gains `evaluate_full(summary,
+  *, atv, inp)` with default fallback to `evaluate(summary)` —
+  backward compatible.
+* **`src/aegis/judge/__init__.py`** — `get_judge()` routes
+  `attribution_head`, `local-phi`, and `hybrid` providers.
+* **`src/aegis/firewall/step340_policy.py`** — calls `judge.evaluate_full(
+  summary, atv=atv, inp=inp)` so M13-style judges get the structured
+  signal. Backward compatible (legacy judges fall back to `evaluate`).
+* **`src/aegis/config.py`** — `aegis_judge_provider` Literal extended
+  with `attribution_head`, `hybrid`. New env vars:
+  `AEGIS_JUDGE_MODEL_PATH`, `AEGIS_JUDGE_LOCAL_PHI_STUB`.
+
+### Demo
+
+* **`demo/judge_stack.py`** (new) — runs the same 5 canonical tool
+  calls through both M13 alone and the v3.0 hybrid stack. Prints
+  per-tier decision / confidence / latency + final verdict + reason.
+  Live verified: every scenario decides at M13 (Tier 1) with
+  cumulative latency <1 ms.
+
+### Tests
+
+* +56 unit tests (849 → 905 total). Coverage:
+  * Attribution head (21): weights file SHA3, model_hash determinism,
+    text fallback, evaluate_full populates 30-key map, latency, blast
+    discrimination, destructive-arg → top contributor, HW anomaly →
+    HW subfields in top-3, innocent read → ALLOW < 0.40, score clamping.
+  * LocalPhiJudge (19, 1 skipped): mode detection (stub default,
+    explicit stub, missing model → disabled), real-file SHA3 hash,
+    stub block on destructive args + allow on innocent read, text-only
+    fallback, deterministic same-input, _parse_real_decode JSON +
+    keyword fallback + unparseable → ALLOW.
+  * HybridJudge (16): default-layer construction with/without Anthropic
+    key, BLOCK short-circuits, high-confidence ALLOW commits, low-
+    confidence ALLOW escalates, REQUIRE_APPROVAL commits, fall-through
+    to last tier, layer_traces / model_hash / cumulative latency, real
+    default stack catches `rm -rf`, deterministic same-input.
+
+### Verified gates
+
+* `pytest -q`     → **905 passed** + 1 skipped (was 849).
+* `mypy src`      → clean, **89 source files** (was 86).
+* `ruff check .`  → clean.
+* Live demo: 5 / 5 scenarios decided at Tier 1 in <1 ms aggregate.
+
+### Migration from v2.4.x
+
+No breaking changes. `aegis_judge_provider` defaults to `dummy` so the
+existing surface is unchanged. To opt in to ATV-native judging:
+
+```bash
+export AEGIS_JUDGE_PROVIDER=attribution_head    # M13 only, fastest
+# or
+export AEGIS_JUDGE_PROVIDER=hybrid               # full stack with fallback
+# Optional: real Phi-4-mini-q4
+export AEGIS_JUDGE_MODEL_PATH=/path/to/phi-4-mini-q4.gguf
+uv pip install llama-cpp-python
+```
+
+### What is NOT done
+
+* Real Phi-4-mini-q4 model file is **not bundled** — multi-GB GGUF
+  files don't fit in the repo. Stub mode covers the contract; real
+  mode activates when the user downloads the model.
+* M13 weights are **hand-tuned**, not learned. v3.x will replace with
+  weights trained from labelled (ATV, verdict) pairs collected via
+  the Burn-in Shadow phase (M11).
+* Cross-hardware quantized determinism (Apple Metal vs CUDA vs CPU)
+  is "attestable per (model, backend, hw)" — addressed by storing
+  backend hash alongside `model_hash` in v3.x.
+
+---
+
 ## [2.4.0] — 2026-04-28  ·  step337 HW band anomaly gate
 
 Closes the gap surfaced by v2.3's demo (3 / 6 attacks unblocked).

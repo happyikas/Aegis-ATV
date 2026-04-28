@@ -84,7 +84,11 @@ def run(atv: np.ndarray, inp: ATVInput, ctx: FirewallContext) -> StepResult:
         )
 
     judge = get_judge()
-    jv = judge.evaluate(atv_summary_for_llm(inp))
+    # v2.5+: pass the live ATV vector + ATVInput so M13-style judges
+    # (AttributionHead / Hybrid) can read the 30 named subfields directly.
+    # Legacy judges (Dummy / Haiku) inherit Judge.evaluate_full's default
+    # which falls back to ``evaluate(summary)`` — backward compatible.
+    jv = judge.evaluate_full(atv_summary_for_llm(inp), atv=atv, inp=inp)
 
     # M13: surface top-3 attributed subfields in the trace so dashboards
     # and the Theater pipeline panel can render the attention head.

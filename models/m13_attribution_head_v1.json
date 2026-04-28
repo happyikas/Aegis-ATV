@@ -1,0 +1,83 @@
+{
+  "_comment": "M13 attribution head — frozen linear classifier over 30 ATV subfields. Hand-tuned weights matching observed v2.x firewall verdicts; v3.x will replace with weights learned from labelled (ATV, verdict) pairs collected via Burn-in Shadow phase. Bit-identical inference once frozen — IEEE-754 float32 dot product + max + threshold.",
+  "version": 1,
+  "schema_version": "ATV-2080-v1",
+  "feature_aggregator": "sum_of_named_slots",
+  "subfield_weights": {
+    "agent_state_embedding":         0.00,
+    "action_history":                0.02,
+    "inter_agent_graph":             0.05,
+    "memory_provenance":             0.02,
+    "qom_scores":                    0.05,
+    "resource_access_pattern":       0.05,
+    "prompt_structure":              0.18,
+    "aid_ats_scalars":               0.00,
+    "encryption_metadata":           0.00,
+    "output_content_fingerprint":    0.20,
+    "tool_arg_inspection":           0.30,
+    "action_blast_radius":           0.25,
+    "output_channel_diversity":      0.10,
+    "session_behavioral_drift":      0.15,
+    "mcp_trust_signals":             0.20,
+    "grounding_metrics":             0.05,
+    "novelty_score":                 0.18,
+    "human_oversight_state":         0.05,
+    "cost_efficiency_metrics":       0.10,
+    "memory_timing_histograms":      0.05,
+    "aid_tag_transitions":           0.40,
+    "atmu_anomaly":                  0.35,
+    "dma_fanout":                    0.20,
+    "thermal_ecc_drift":             0.15,
+    "watchdog_signals":              0.10,
+    "network_telemetry":             0.30,
+    "gpu_accelerator_state":         0.05,
+    "hypervisor_signals":            0.40,
+    "hw_cost_attestation":           0.25,
+    "linkage_consistency_features":  0.20
+  },
+  "named_slot_weights": {
+    "_comment": "Aggregator boost for slots with semantic meaning — multiplicative on the slot value before subfield sum.",
+    "tool_arg_inspection": [
+      ["destructive_verb",   1.00],
+      ["path_traversal",     0.85],
+      ["encoded_payload",    0.80],
+      ["sql_keyword",        0.75],
+      ["shell_special",      0.40],
+      ["url_count",          0.20],
+      ["filesystem_write",   0.30],
+      ["binary_blob",        0.50],
+      ["credential_pattern", 1.00],
+      ["regex_complexity",   0.10],
+      ["unicode_invisible",  0.85],
+      ["base64_blob",        0.30]
+    ],
+    "action_blast_radius": [
+      ["blast_radius_norm",  1.00],
+      ["reversibility",     -0.50],
+      ["scope",              0.80],
+      ["criticality",        1.00],
+      ["external_side_effects", 0.60],
+      ["data_loss_risk",     0.70]
+    ],
+    "prompt_structure": [
+      ["length_norm",        0.10],
+      ["line_density",       0.05],
+      ["uppercase_ratio",    0.10],
+      ["punctuation_density",0.10],
+      ["ignore_keyword",     1.00],
+      ["system_keyword",     0.50],
+      ["code_block",         0.10],
+      ["url_count_proxy",    0.20]
+    ]
+  },
+  "thresholds": {
+    "block":             0.70,
+    "require_approval":  0.40
+  },
+  "model_hash_seed": "m13-attribution-head-v1-2026-04-28",
+  "_provenance": {
+    "tuned_by": "hand-tuned to match v2.4 12-incident KPI + v2.3 hw simulator attacks",
+    "training_data": "none (rule-based scaffold for v3.0 hybrid combiner)",
+    "intended_replacement": "weights learned from labelled audit/intent_log pairs in v3.x"
+  }
+}
