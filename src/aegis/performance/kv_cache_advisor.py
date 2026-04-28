@@ -266,11 +266,16 @@ def kv_cache_advisor(
     )
 
     # Confidence: weighted by how much *signal* the cost band carries.
-    # If s-10/s-11/s-15 are all 0 (host hasn't filled them), confidence
-    # collapses → runtime should fall back to its own heuristic.
+    # If s-10/s-11/s-15 + novelty are all 0 (host hasn't filled them),
+    # confidence collapses → runtime should fall back to its own heuristic.
+    # Once any signal exists, confidence rises monotonically; absence of
+    # novelty is itself signal (stable workload), not negative signal.
+    has_cost_signal = (cache_hit_rate + context_util + progress) > 0.0
+    has_novelty_signal = composite_novelty > 0.0
     signal_strength = (
         min(1.0, cache_hit_rate + context_util + progress)
-        + min(1.0, composite_novelty * 2.0)
+        + (0.5 if has_cost_signal else 0.0)
+        + (0.2 if has_novelty_signal else 0.0)
     ) / 2.0
     confidence = float(min(1.0, max(0.0, signal_strength)))
 
