@@ -72,6 +72,22 @@ def _evaluate_impl(
 
     hw_counters = simulate_from_env(inp)
 
+    # v3.2 closed loop — backfill cost band's s-10/s-11 from the rolling
+    # per-(tenant, aid) EWMA when the host hasn't measured them. Host
+    # values are never overwritten.
+    from aegis.performance import get_default_store
+    _perf = get_default_store().get(
+        tenant_id=inp.header.tenant_id, aid=inp.header.aid,
+    )
+    if not _perf.is_empty():
+        if inp.cost_estimate.cache_hit_rate == 0.0 and _perf.cache_hit_rate > 0.0:
+            inp.cost_estimate.cache_hit_rate = _perf.cache_hit_rate
+        if (
+            inp.cost_estimate.context_utilization_ratio == 0.0
+            and _perf.context_utilization_ratio > 0.0
+        ):
+            inp.cost_estimate.context_utilization_ratio = _perf.context_utilization_ratio
+
     # M8: build the 30-subfield ATV (HW band stays zero unless hw is given).
     atv = build_atv(inp, hw=hw_counters)
     atv_id = str(uuid.uuid4())

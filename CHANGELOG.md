@@ -4,6 +4,83 @@ All notable changes to AegisData MVP. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.6.0] — 2026-04-28  ·  Performance advisory surface (v3.1 → v3.6)
+
+The same ATV-2080 that powers the trust firewall now drives **out-of-band
+performance advisory** for LLM serving runtimes. Six chained releases
+land in one milestone.
+
+### v3.1 — KV cache advisor
+
+* `src/aegis/performance/kv_cache_advisor.py` — pure function
+  `(atv, inp) → KVCacheAdvice` with `prefetch_segment_ids`,
+  `evict_candidates`, `residency_class` (hot/warm/cold), `batch_key`,
+  `speculative_decode`, `confidence`, `advisor_hash`.
+* `src/aegis/api/advisory.py` — `POST /advisory/kv_cache`.
+* Sub-millisecond, deterministic, advisory-only (runtime is the enforcer).
+
+### v3.2 — Closed-loop perf feedback
+
+* `src/aegis/performance/feedback.py` — thread-safe per-(tenant, aid)
+  EWMA store (α=0.30). Process-wide singleton.
+* `src/aegis/api/tool_outcome.py` — extended with optional
+  `cache_hit_rate` / `context_utilization_ratio` / `tokens_per_second` /
+  `runtime_latency_ms` / `memory_peak_bytes`. Updates the EWMA on
+  receipt; returns the snapshot.
+* `src/aegis/api/{advisory,evaluate}.py` — backfill `s-10/s-11` when
+  the host hasn't measured. Host-supplied values are NEVER overwritten.
+
+### v3.3 — Runtime adapters
+
+* `integrations/mlx_lm/__init__.py` — `MLXLMAegisAdvisor`: residency →
+  sliding_window (hot=16k, warm=4k, cold=2k); speculative → draft model.
+* `integrations/llama_cpp/__init__.py` — `LlamaCppAegisAdvisor`:
+  residency → kv_cache_dtype (f16/q8_0) + n_gpu_layers delta.
+* `demo/runtime_closed_loop.py` — 8-turn simulated runtime, watches
+  EWMA + advice confidence climb.
+
+### v3.4 — Scheduling + Placement advisors
+
+* `src/aegis/performance/scheduling_advisor.py` — `(priority_class,
+  preempt_safe, max_concurrent_in_cohort, deadline_ms)`.
+* `src/aegis/performance/placement_advisor.py` — `(layer_residency_plan,
+  kv_quantisation_dtype, prefetch_window_tokens, swap_threshold_bytes)`.
+  Demotes middle blocks under high pressure; T3 routes cold layers
+  to CSD instead of CPU.
+* New endpoints: `/advisory/scheduling`, `/advisory/placement`,
+  `/advisory/all` (one-shot fan-out).
+
+### v3.5 — vLLM integration shim + design doc
+
+* `integrations/vllm/__init__.py` — `VLLMAegisAdvisor` posts to
+  `/advisory/all` and projects onto `VLLMAdvice`.
+* `docs/VLLM_INTEGRATION_DESIGN.md` — three plug points
+  (`AegisAwareBlockManager`, `AegisAwareScheduler`, `AegisAwarePrefetcher`).
+
+### v3.6 — M13 unified head
+
+* `src/aegis/judge/unified_head.py` — `UnifiedHead.evaluate_unified()`
+  composes the v2.5 AttributionHead with the v3.1 / v3.4 advisors
+  in one ATV pass. `unified_hash` = SHA3-256 over the four advisor
+  versions — audit replay catches any head change. Trust path is
+  bit-identical to standalone AttributionHead.
+* `POST /advisory/unified` — runtime gets trust + perf in one call.
+
+### Patent
+
+* `docs/PATENT_SUPPLEMENT_v3.md` (Korean) — provisional supplement
+  proposing Claims 41–47 extending the existing `ATV_v7_10` filing
+  with the perf-advisory surface, closed-loop attestation, unified
+  head, and advisor-as-hint protocol.
+
+### Tests / lint / types
+
+* **968 tests PASS** (905 → 968, +63), 1 skipped (llama-cpp).
+* **mypy 96 source files clean.**
+* **ruff clean.**
+
+---
+
 ## [3.0.0] — 2026-04-28  ·  ATV-native sLLM stack: M13 + Phi + hybrid combiner
 
 The patent's three-tier sLLM vision (Claims 8 / 9) lands as a working
