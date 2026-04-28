@@ -4,6 +4,131 @@ All notable changes to AegisData MVP. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.3.0] — 2026-04-27  ·  T3 hardware-emulation: SW/HW double-check live
+
+Brings the patent's two-axis double-check model (Claims 26 / 27 / 30 / 34)
+on-line *without* needing real T3 silicon (M19 RAPL/NVML, M20 FPGA, M21
+IOMMU, M22 CSD all stay deferred). Adds a deterministic SW emulator
+that populates the 200-D ATV HW band so the M12 cost-divergence
+escalation gate becomes a working defence layer instead of a 0÷0
+placeholder.
+
+### Added — HW telemetry simulator
+
+* **`src/aegis/hw_telemetry/`** (new package):
+  * `simulator.py` — `HWCounters` dataclass + `simulate(inp, attack="")`
+    function. Deterministic via SHA3-seeded `_seeded_floats(...)`
+    keyed on (tool, args, aid). Honest path = SW-expected baseline
+    (`expected_flops` from `cost.model_flops`) jittered ±10% so all
+    three j-14 / j-15 / j-16 divergence metrics stay <0.30 escalation
+    threshold.
+  * `simulate_from_env(inp)` — env-driven on/off + attack injection.
+    `AEGIS_HW_PROVIDER=sim` switches on; `AEGIS_HW_INJECT_ATTACK=...`
+    rewrites counters to make the gate fire.
+  * Six attack modes (the SW emulation of compromised silicon):
+    * `token_flops_mismatch` — HW FLOPS = 50× SW expected → catches
+      model substitution / hidden background work.
+    * `hbm_exfil` — HBM bytes = 30× SW expected → side-channel via
+      KV cache / activations.
+    * `cost_underreport` — HW FLOPS = 100× while SW dollar stays the
+      same → billing-evasion compromise.
+    * `thermal_spike` — sustained 95°C p95 + ECC spikes.
+    * `network_exfil` — 50 MB egress on a "read_file" call.
+    * `iommu_violation` — IOMMU AID-tag breaches (Claim 5
+      enforcement target).
+* **`src/aegis/atv/hw_encoders.py`** (new) — 11 deterministic
+  projections from `HWCounters` to ATV HW band subfields:
+  `memory_timing_histograms` (32-D), `aid_tag_transitions` (24-D),
+  `atmu_anomaly` (16-D), `dma_fanout` (16-D), `thermal_ecc_drift`
+  (16-D), `watchdog_signals` (12-D), `network_telemetry` (24-D),
+  `gpu_accelerator_state` (16-D), `hypervisor_signals` (8-D),
+  `hw_cost_attestation` (16-D), `linkage_consistency` (20-D).
+  Per Claim 26, slots 13/14/15 of `hw_cost_attestation` carry the
+  j-14/j-15/j-16 divergence values directly so the cryptographic
+  audit record is self-attesting.
+
+### Changed
+
+* **`src/aegis/atv/builder.py`** — `build_atv(inp, *, hw=None)` accepts
+  an optional `HWCounters`. When absent (default) the HW band stays
+  zero-filled (T2 contract); when present, the encoders fire and the
+  HW band carries real signal.
+* **`src/aegis/api/evaluate.py`** — calls `simulate_from_env(inp)`
+  early, threads the result into both `build_atv(inp, hw=...)` and
+  `compute_divergence(..., hw_flops_observed=hw.flops_observed,
+  hw_hbm_bytes_observed=hw.hbm_bytes_observed)`. Existing M12
+  escalation gate (Claim 27) now lights up under attack injection
+  without any code change to the firewall pipeline.
+* **`src/aegis/config.py`** — two new settings (default `none` /
+  empty string so the v2.0/v2.1/v2.2 surface is unaffected):
+  `aegis_hw_provider: Literal["none", "sim"] = "none"` and
+  `aegis_hw_inject_attack: str = ""`.
+
+### Tests
+
+* +30 unit tests (792 + v2.2.1's 7 → 829 total). Coverage: simulator
+  determinism, aid-isolated jitter, every attack mode produces an
+  observable counter change, three "guaranteed escalation" attacks
+  trigger the M12 gate, env-var on/off + attack pickup, every
+  encoder's shape + clamp + slot semantics, builder integration with
+  HW-cost-attestation slot 13 numerically equal to compute_divergence
+  output.
+
+### Demo
+
+* `_donor/smoke_hw_double_check.py` — runs the same synthetic SW
+  request through honest + each of 6 attack modes + a multi-attack
+  combination, prints the `(token_to_flops, memory, dollar, gate,
+  metric)` matrix. 3 / 6 attack modes (`token_flops_mismatch`,
+  `hbm_exfil`, `cost_underreport`) trip the M12 cost-axis gate; the
+  other 3 are visible in the ATV HW band (subfields populated as
+  expected) but require their own firewall step for BLOCK conversion
+  — clean roadmap for a future step `step337_hw_anomaly`.
+
+### What is still NOT done
+
+This is **SW emulation, not real T3**. The hardware procurement
+roadmap is unchanged:
+
+* M18 ML-DSA dual-signing (oqs-python) — pure SW, can land any time.
+* M19 RAPL/NVML — needs Linux server + GPU.
+* M20 FPGA sLLM — Xilinx Versal AI Edge VEK280.
+* M21 HW tag comparator — bare-metal IOMMU.
+* M22 CSD — Solidigm D7-PS1010 eval kit.
+
+The simulator's `HWCounters` envelope matches the data shape M19–M22
+will deliver, so the wire from `evaluate.py` → `compute_divergence`
+→ M12 ledger is *already correct*. Replacing `simulate(...)` with a
+real driver per provider is a one-file swap when silicon shows up.
+
+### Verified gates
+
+* `pytest -q`                                       **829 passed**
+                                                     (was 799).
+* `mypy src` — clean, **85 source files** (was 82).
+* `ruff check .` — clean.
+* HW band non-zero in audit records when `AEGIS_HW_PROVIDER=sim`.
+* M12 escalation flips ALLOW → REQUIRE_APPROVAL on attack injection
+  (verified live by `_donor/smoke_hw_double_check.py`).
+
+### Migration from v2.2.x
+
+No breaking change. Sidecar service installs continue to use HW
+band = 0 unless `AEGIS_HW_PROVIDER=sim` is set in their environment.
+For demos / dogfood:
+
+```bash
+docker compose down
+echo 'AEGIS_HW_PROVIDER=sim' >> .env
+echo 'AEGIS_HW_INJECT_ATTACK=token_flops_mismatch' >> .env  # optional
+docker compose up -d
+```
+
+After this, every `/evaluate` request gets a populated HW band and
+divergence-triggered REQUIRE_APPROVAL on the chosen attack mode.
+
+---
+
 ## [2.2.0] — 2026-04-27  ·  must-install: Safe Auto-Run + Poisoned Instruction Detector
 
 This release closes the "must-install" gap from the v2.0 strategy
