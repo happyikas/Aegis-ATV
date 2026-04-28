@@ -1,0 +1,50 @@
+"""POST /advisory/kv_cache — out-of-band KV cache advice endpoint (v3.1).
+
+The runtime (vLLM / MLX-LM / llama.cpp / SGLang) posts the same
+``ATVInput`` it would post to ``/evaluate``, and gets back a
+``KVCacheAdvice`` payload it can apply (or ignore) in its block
+manager / scheduler.
+
+Contract — advisory only
+------------------------
+* This endpoint returns NO verdict. It is independent of the trust
+  firewall. The runtime is the enforcer; Aegis is only the advisor.
+* Same ATV → same advice (no global state, deterministic).
+* Latency budget: ≤ 5 ms p99. Pure numpy slicing.
+"""
+
+from __future__ import annotations
+
+from dataclasses import asdict
+from typing import Any
+
+from fastapi import APIRouter
+from pydantic import BaseModel
+
+from aegis.atv.builder import build_atv
+from aegis.performance import kv_cache_advisor
+from aegis.schema import ATVInput
+
+
+class AdvisoryResponse(BaseModel):
+    prefetch_segment_ids: list[str]
+    evict_candidates: list[str]
+    residency_class: str
+    batch_key: str
+    speculative_decode: bool
+    confidence: float
+    reasons: list[str]
+    latency_ms: float
+    advisor_hash: str
+
+
+def make_router() -> APIRouter:
+    r = APIRouter()
+
+    @r.post("/advisory/kv_cache", response_model=AdvisoryResponse)
+    def advise_kv_cache(payload: ATVInput) -> dict[str, Any]:
+        atv = build_atv(payload)
+        advice = kv_cache_advisor(atv, payload)
+        return asdict(advice)
+
+    return r
