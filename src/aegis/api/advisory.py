@@ -22,6 +22,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from aegis.atv.builder import build_atv
+from aegis.judge.unified_head import UnifiedHead, unified_advice_dict
 from aegis.performance import (
     get_default_store,
     kv_cache_advisor,
@@ -29,6 +30,8 @@ from aegis.performance import (
     scheduling_advisor,
 )
 from aegis.schema import ATVInput
+
+_UNIFIED_HEAD = UnifiedHead()
 
 
 class AdvisoryResponse(BaseModel):
@@ -128,5 +131,15 @@ def make_router() -> APIRouter:
             "scheduling": asdict(scheduling_advisor(atv, payload)),
             "placement":  asdict(placement_advisor(atv, payload)),
         }
+
+    @r.post("/advisory/unified")
+    def advise_unified(payload: ATVInput) -> dict[str, Any]:
+        """v3.6 unified head — trust verdict + all 3 perf advices in
+        a single ATV pass. Bound by ``unified_hash`` so audit replay
+        catches any head change."""
+        _backfill_perf_signals(payload)
+        atv = build_atv(payload)
+        uv = _UNIFIED_HEAD.evaluate_unified("", atv=atv, inp=payload)
+        return unified_advice_dict(uv)
 
     return r
