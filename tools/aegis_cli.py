@@ -291,6 +291,102 @@ def _pretool_hook_marker(mode: str) -> str:
     return str(LOCAL_HOOK_SCRIPT) if mode == "local" else str(HOOK_SCRIPT)
 
 
+def cmd_report(args: argparse.Namespace) -> int:
+    """Print a 5-line Agent Risk Report for the most recent session.
+
+    Reads ``~/.aegis/audit.jsonl`` (local mode) or the path passed via
+    ``--audit``. Aggregates by decision + reason + redundant flag and
+    prints an emoji-led summary mirroring the report shape from the
+    must-install strategy doc:
+
+        ✅ N safe tool calls auto-approved
+        ⚠️ K high-risk actions required approval
+        ⛔ B destructive commands blocked
+        ⛔ P poisoned-instruction sources detected
+        💸 D redundant calls deduplicated
+        🔁 L potential loops aborted
+        🧾 Full signed local audit: <path>
+    """
+    audit_path = (
+        Path(args.audit) if args.audit
+        else Path.home() / ".aegis" / "audit.jsonl"
+    )
+    since_secs = _parse_window_secs(args.since) if args.since else None
+
+    if not audit_path.exists():
+        print(f"[report] no audit log at {audit_path}")
+        print("        (start a Claude Code session with `aegis install --mode local`")
+        print("         or `--mode sidecar` so the hook can append decisions.)")
+        return 1
+
+    cutoff_ns = int(time.time() - since_secs) * 1_000_000_000 if since_secs else 0
+
+    n_total = 0
+    n_safe = 0
+    n_approval = 0
+    n_block_destructive = 0
+    n_block_poisoned = 0
+    n_loop_aborted = 0
+    n_redundant = 0
+    by_reason: dict[str, int] = {}
+
+    with audit_path.open(encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            ts = int(rec.get("ts_ns") or 0)
+            if cutoff_ns and ts and ts < cutoff_ns:
+                continue
+            decision = (rec.get("decision") or "").upper()
+            reason = (rec.get("reason") or "").lower()
+            n_total += 1
+
+            if decision == "ALLOW":
+                n_safe += 1
+                if "redundant" in reason:
+                    n_redundant += 1
+            elif decision == "REQUIRE_APPROVAL":
+                n_approval += 1
+                if "loop" in reason or "step336" in reason:
+                    n_loop_aborted += 1
+            elif decision == "BLOCK":
+                if "instruction_drift" in reason or "poisoned" in reason:
+                    n_block_poisoned += 1
+                else:
+                    n_block_destructive += 1
+
+            tag = reason[:60] if reason else f"{decision} (no reason)"
+            by_reason[tag] = by_reason.get(tag, 0) + 1
+
+    print("AegisData Agent Risk Report")
+    print("===========================")
+    if since_secs:
+        print(f"  window:    last {args.since}")
+    print(f"  audit log: {audit_path}  ({n_total} entries)")
+    print()
+    print(f"  ✅  {n_safe:>4} safe tool calls auto-approved")
+    print(f"  ⚠️   {n_approval:>4} high-risk actions required approval")
+    print(f"  ⛔  {n_block_destructive:>4} destructive commands blocked")
+    print(f"  ⛔  {n_block_poisoned:>4} poisoned-instruction sources detected")
+    print(f"  💸  {n_redundant:>4} redundant calls deduplicated")
+    print(f"  🔁  {n_loop_aborted:>4} potential loops aborted")
+    print(f"  🧾  Full signed local audit: {audit_path}")
+
+    if args.verbose and by_reason:
+        print()
+        print("  Top reasons (count × tag):")
+        top = sorted(by_reason.items(), key=lambda kv: -kv[1])[:10]
+        for tag, c in top:
+            print(f"    {c:>4} × {tag}")
+
+    return 0
+
+
 def cmd_install(args: argparse.Namespace) -> int:
     """Idempotently install Aegis hooks into ``~/.claude/settings.json``.
 
@@ -560,6 +656,24 @@ def build_parser() -> argparse.ArgumentParser:
     bg.add_argument("--daily", type=float)
     bg.add_argument("--per-call", type=float, dest="per_call")
     bg.set_defaults(fn=cmd_budget)
+
+    rep = sub.add_parser(
+        "report",
+        help="5-line Agent Risk Report from the local audit log",
+    )
+    rep.add_argument(
+        "--audit",
+        help="Path to audit JSONL (default: ~/.aegis/audit.jsonl, the local-mode log)",
+    )
+    rep.add_argument(
+        "--since",
+        help="Time window: '24h', '7d', '3600' (seconds)",
+    )
+    rep.add_argument(
+        "--verbose", "-v", action="store_true",
+        help="Show top reasons table",
+    )
+    rep.set_defaults(fn=cmd_report)
 
     inst = sub.add_parser("install", help="Install hooks into ~/.claude/settings.json")
     inst.add_argument(

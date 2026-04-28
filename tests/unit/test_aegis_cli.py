@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -403,3 +404,124 @@ def test_pretool_hook_marker_distinguishes_modes() -> None:
     assert side != local
     assert "aegis_hook.py" in side and "aegis_local_hook.py" not in side
     assert "aegis_local_hook.py" in local
+
+
+# ---- v2.1.4: aegis report -----------------------------------------------
+
+
+def _audit_args(  # type: ignore[no-untyped-def]
+    audit: str | None = None,
+    since: str | None = None,
+    verbose: bool = False,
+):
+    import argparse
+
+    return argparse.Namespace(audit=audit, since=since, verbose=verbose)
+
+
+def _write_audit(path: Path, records: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+
+
+def test_report_no_audit_returns_one(tmp_path: Path) -> None:
+    rc = aegis_cli.cmd_report(_audit_args(audit=str(tmp_path / "absent.jsonl")))
+    assert rc == 1
+
+
+def test_report_counts_decisions(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    audit = tmp_path / "audit.jsonl"
+    _write_audit(
+        audit,
+        [
+            {"ts_ns": 1, "decision": "ALLOW", "reason": "all firewall steps passed"},
+            {"ts_ns": 2, "decision": "ALLOW", "reason": "redundant read-only Read"},
+            {"ts_ns": 3, "decision": "BLOCK", "reason": "rule:git_destructive"},
+            {"ts_ns": 4, "decision": "BLOCK", "reason": "instruction_drift: CLAUDE.md mutated"},
+            {"ts_ns": 5, "decision": "REQUIRE_APPROVAL", "reason": "loop (3× seen)"},
+            {"ts_ns": 6, "decision": "REQUIRE_APPROVAL", "reason": "rule:persona_drift"},
+        ],
+    )
+    rc = aegis_cli.cmd_report(_audit_args(audit=str(audit)))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "2 safe tool calls" in out
+    assert "2 high-risk actions" in out
+    assert "1 destructive commands" in out
+    assert "1 poisoned-instruction sources" in out
+    assert "1 redundant calls" in out
+    assert "1 potential loops" in out
+    assert str(audit) in out
+
+
+def test_report_skips_blank_and_malformed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    audit = tmp_path / "audit.jsonl"
+    audit.write_text(
+        '\n{"decision": "ALLOW", "reason": "ok"}\nnot json\n'
+        '{"decision": "BLOCK", "reason": "rule:rm"}\n\n'
+    )
+    rc = aegis_cli.cmd_report(_audit_args(audit=str(audit)))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "1 safe" in out
+    assert "1 destructive" in out
+
+
+def test_report_with_since_window_filters(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    audit = tmp_path / "audit.jsonl"
+    now_ns = int(time.time() * 1_000_000_000)
+    old_ns = now_ns - 7 * 24 * 3600 * 1_000_000_000  # 7 days ago
+    _write_audit(
+        audit,
+        [
+            {"ts_ns": old_ns, "decision": "ALLOW", "reason": "old"},
+            {"ts_ns": now_ns, "decision": "ALLOW", "reason": "fresh"},
+        ],
+    )
+    rc = aegis_cli.cmd_report(_audit_args(audit=str(audit), since="24h"))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "1 safe" in out  # only the fresh one
+
+
+def test_report_verbose_shows_top_reasons(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    audit = tmp_path / "audit.jsonl"
+    _write_audit(
+        audit,
+        [
+            {"ts_ns": i, "decision": "BLOCK", "reason": "rule:git_destructive"}
+            for i in range(5)
+        ]
+        + [
+            {"ts_ns": 100, "decision": "ALLOW", "reason": "all firewall steps passed"},
+        ],
+    )
+    rc = aegis_cli.cmd_report(_audit_args(audit=str(audit), verbose=True))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Top reasons" in out
+    assert "rule:git_destructive" in out
+
+
+def test_report_subcommand_argparse() -> None:
+    parser = aegis_cli.build_parser()
+    args = parser.parse_args(["report", "--audit", "/tmp/a.jsonl", "--since", "24h", "-v"])
+    assert args.fn.__name__ == "cmd_report"
+    assert args.audit == "/tmp/a.jsonl"
+    assert args.since == "24h"
+    assert args.verbose is True
+
+
+def test_report_subcommand_default_args() -> None:
+    parser = aegis_cli.build_parser()
+    args = parser.parse_args(["report"])
+    assert args.fn.__name__ == "cmd_report"
+    assert args.audit is None
+    assert args.since is None
+    assert args.verbose is False
