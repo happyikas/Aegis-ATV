@@ -334,8 +334,21 @@ def encode_cost_efficiency_metrics(inp: ATVInput) -> np.ndarray:
 # ─────────────────────────────────────────────────────────────────────
 # Top-level builder
 # ─────────────────────────────────────────────────────────────────────
-def build_atv(inp: ATVInput) -> np.ndarray:
-    """Assemble the 2080-D ATV-2080-v1 tensor from ``inp``."""
+def build_atv(
+    inp: ATVInput,
+    *,
+    hw: object | None = None,
+) -> np.ndarray:
+    """Assemble the 2080-D ATV-2080-v1 tensor from ``inp``.
+
+    ``hw`` is an optional :class:`aegis.hw_telemetry.HWCounters`
+    instance (typed as ``object`` here to avoid a circular import).
+    When provided, the 200-D HW band is populated by
+    :func:`aegis.atv.hw_encoders.fill_hw_band` instead of being zero-
+    filled. Caller is responsible for sourcing the counters — under
+    sidecar mode, :func:`aegis.api.evaluate._evaluate_impl` calls
+    :func:`aegis.hw_telemetry.simulate_from_env`.
+    """
     atv = np.zeros(ATV_DIM, dtype=np.float32)
 
     # SW band
@@ -359,8 +372,19 @@ def build_atv(inp: ATVInput) -> np.ndarray:
     atv[SLICE_HUMAN_OVERSIGHT_STATE]      = encode_human_oversight_state(inp)
     atv[SLICE_COST_EFFICIENCY_METRICS]    = encode_cost_efficiency_metrics(inp)
 
-    # HW band — T2 zero-fill per ¶[0042]; T3 will populate from physical telemetry
+    # HW band — T2 default is zero-fill per ¶[0042]. v2.3 emulator path:
+    # caller passes a pre-built HWCounters from aegis.hw_telemetry.simulate.
     atv[SLICE_HW_BAND] = 0.0
+    if hw is not None:
+        # Lazy import to avoid a circular import at module load time.
+        from aegis.atv.hw_encoders import fill_hw_band
+        from aegis.hw_telemetry import HWCounters
+
+        if not isinstance(hw, HWCounters):
+            raise TypeError(
+                f"build_atv: hw must be HWCounters or None, got {type(hw).__name__}"
+            )
+        fill_hw_band(atv, inp, hw)
 
     # paranoia: confirm we hit exactly 2080
     if atv.shape != (ATV_DIM,):

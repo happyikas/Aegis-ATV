@@ -63,8 +63,17 @@ def _evaluate_impl(
             update={"header": inp.header.model_copy(update={"burn_in_id": burn_in_id})}
         )
 
-    # M8: build the 30-subfield ATV
-    atv = build_atv(inp)
+    # v2.3: HW telemetry simulator. AEGIS_HW_PROVIDER=sim populates the
+    # 200-D HW band from a deterministic emulator (the bridge between v2.2
+    # zero-fill and a real T3 hardware path). AEGIS_HW_INJECT_ATTACK can
+    # rewrite specific counters so the M12 cost-divergence escalation
+    # (Claim 27) fires for demo / testing.
+    from aegis.hw_telemetry import simulate_from_env
+
+    hw_counters = simulate_from_env(inp)
+
+    # M8: build the 30-subfield ATV (HW band stays zero unless hw is given).
+    atv = build_atv(inp, hw=hw_counters)
     atv_id = str(uuid.uuid4())
     atv_commitment = hashlib.sha3_256(atv.tobytes()).hexdigest()
     args_hash = hashlib.sha3_256(inp.tool_args_json.encode("utf-8")).hexdigest()
@@ -132,12 +141,18 @@ def _evaluate_impl(
     # 'cost_attestation_hint' marker on the audit record (M9) signals
     # which audit entries were cost-influenced for downstream indexing.
     if cost_ledger is not None:
+        # v2.3: when AEGIS_HW_PROVIDER=sim is on, feed the simulated HW
+        # counters into compute_divergence so the j-14 / j-15 / j-16
+        # metrics light up (Claim 26). Honest agents diverge <0.10 →
+        # well below the 0.30 escalation threshold; attack-injection
+        # rewrites a counter so the gate fires (Claim 27).
+        hw_flops = hw_counters.flops_observed if hw_counters is not None else 0.0
+        hw_hbm = hw_counters.hbm_bytes_observed if hw_counters is not None else 0.0
         divergence = compute_divergence(
             inp.cost_estimate,
             model_name=(inp.header.model_hash or "default"),
-            # T2: HW values are 0; T3 will populate from per-AID HW counters.
-            hw_flops_observed=0.0,
-            hw_hbm_bytes_observed=0.0,
+            hw_flops_observed=hw_flops,
+            hw_hbm_bytes_observed=hw_hbm,
         )
         cost_ledger.append(
             atv_commitment=atv_commitment,

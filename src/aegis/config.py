@@ -63,6 +63,17 @@ class Settings(BaseSettings):
     aegis_instruction_baseline_path: str = ""
     aegis_instruction_root: str = "."
 
+    # v2.3 — HW telemetry emulation (T3 SW-emulated double-check).
+    # ``none`` (default) keeps the v2.2 zero-fill path and 650-test
+    # surface untouched. ``sim`` switches on the deterministic
+    # SHA3-seeded simulator in aegis.hw_telemetry, populating the
+    # 200-D ATV HW band and feeding M12's cost-divergence escalation.
+    aegis_hw_provider: Literal["none", "sim"] = "none"
+    # Comma-separated attack mode list for demos / tests
+    # (token_flops_mismatch, hbm_exfil, cost_underreport, thermal_spike,
+    # network_exfil, iommu_violation). Unknown modes silently ignored.
+    aegis_hw_inject_attack: str = ""
+
     # M15 — encrypted ATV journal (AES-GCM AEAD). The data key is
     # auto-generated on first run if the file is missing. T3 will seal
     # this under the hardware TEE.
