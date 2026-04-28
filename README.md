@@ -21,10 +21,15 @@ patent v7.10. The original 7-day MVP design is in [`PLAN.md`](PLAN.md);
 the patent-aligned re-plan and per-milestone status is in
 [`PLAN_v2.md`](PLAN_v2.md).
 
-**Status (2026-04-27):** v2.2.0 — **must-install for Claude Code &
-Codex**. M1–M17 + step311 donor rule pack + v2.1 Safe Auto-Run + v2.2
-Poisoned Instruction Detector. **792 tests pass**, ruff clean, mypy
-strict over 82 source files.
+**Status (2026-04-27):** v2.3.0 — **must-install + T3 hardware-emulated**.
+M1–M17 + step311 donor rule pack + v2.1 Safe Auto-Run + v2.2 Poisoned
+Instruction Detector + **v2.3 SW emulation of HW/SW double-check**.
+**829 tests pass**, ruff clean, mypy strict over 85 source files.
+
+```bash
+AEGIS_HW_PROVIDER=sim                              # T3 emulation on (HW band populated)
+AEGIS_HW_INJECT_ATTACK=token_flops_mismatch        # demo: M12 escalation fires
+```
 
 ```bash
 uv run aegis install --mode sidecar    # multi-tenant FastAPI service
