@@ -59,10 +59,17 @@ def _emit(msg: str) -> None:
 
 
 def _append_audit(record: dict[str, Any]) -> None:
+    """Append a chained audit record (v2.1.5 local-mode integrity).
+
+    Each line carries ``prev_hash`` linking to the previous line's
+    ``this_hash``, plus its own SHA3-256 ``this_hash``. Tampering
+    with any historical line breaks every subsequent recompute, so
+    ``aegis verify-audit`` (local mode) catches mutations.
+    """
     try:
-        LOCAL_AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with LOCAL_AUDIT_PATH.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, default=str) + "\n")
+        from aegis.audit.local_chain import append as chain_append
+
+        chain_append(LOCAL_AUDIT_PATH, record)
     except OSError:
         # Audit failure must never block the user's tool call.
         pass

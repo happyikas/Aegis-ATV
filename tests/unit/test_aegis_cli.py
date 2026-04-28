@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -403,3 +404,270 @@ def test_pretool_hook_marker_distinguishes_modes() -> None:
     assert side != local
     assert "aegis_hook.py" in side and "aegis_local_hook.py" not in side
     assert "aegis_local_hook.py" in local
+
+
+# ---- v2.1.4: aegis report -----------------------------------------------
+
+
+def _audit_args(  # type: ignore[no-untyped-def]
+    audit: str | None = None,
+    since: str | None = None,
+    verbose: bool = False,
+):
+    import argparse
+
+    return argparse.Namespace(audit=audit, since=since, verbose=verbose)
+
+
+def _write_audit(path: Path, records: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+
+
+def test_report_no_audit_returns_one(tmp_path: Path) -> None:
+    rc = aegis_cli.cmd_report(_audit_args(audit=str(tmp_path / "absent.jsonl")))
+    assert rc == 1
+
+
+def test_report_counts_decisions(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    audit = tmp_path / "audit.jsonl"
+    _write_audit(
+        audit,
+        [
+            {"ts_ns": 1, "decision": "ALLOW", "reason": "all firewall steps passed"},
+            {"ts_ns": 2, "decision": "ALLOW", "reason": "redundant read-only Read"},
+            {"ts_ns": 3, "decision": "BLOCK", "reason": "rule:git_destructive"},
+            {"ts_ns": 4, "decision": "BLOCK", "reason": "instruction_drift: CLAUDE.md mutated"},
+            {"ts_ns": 5, "decision": "REQUIRE_APPROVAL", "reason": "loop (3× seen)"},
+            {"ts_ns": 6, "decision": "REQUIRE_APPROVAL", "reason": "rule:persona_drift"},
+        ],
+    )
+    rc = aegis_cli.cmd_report(_audit_args(audit=str(audit)))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "2 safe tool calls" in out
+    assert "2 high-risk actions" in out
+    assert "1 destructive commands" in out
+    assert "1 poisoned-instruction sources" in out
+    assert "1 redundant calls" in out
+    assert "1 potential loops" in out
+    assert str(audit) in out
+
+
+def test_report_skips_blank_and_malformed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    audit = tmp_path / "audit.jsonl"
+    audit.write_text(
+        '\n{"decision": "ALLOW", "reason": "ok"}\nnot json\n'
+        '{"decision": "BLOCK", "reason": "rule:rm"}\n\n'
+    )
+    rc = aegis_cli.cmd_report(_audit_args(audit=str(audit)))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "1 safe" in out
+    assert "1 destructive" in out
+
+
+def test_report_with_since_window_filters(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    audit = tmp_path / "audit.jsonl"
+    now_ns = int(time.time() * 1_000_000_000)
+    old_ns = now_ns - 7 * 24 * 3600 * 1_000_000_000  # 7 days ago
+    _write_audit(
+        audit,
+        [
+            {"ts_ns": old_ns, "decision": "ALLOW", "reason": "old"},
+            {"ts_ns": now_ns, "decision": "ALLOW", "reason": "fresh"},
+        ],
+    )
+    rc = aegis_cli.cmd_report(_audit_args(audit=str(audit), since="24h"))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "1 safe" in out  # only the fresh one
+
+
+def test_report_verbose_shows_top_reasons(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    audit = tmp_path / "audit.jsonl"
+    _write_audit(
+        audit,
+        [
+            {"ts_ns": i, "decision": "BLOCK", "reason": "rule:git_destructive"}
+            for i in range(5)
+        ]
+        + [
+            {"ts_ns": 100, "decision": "ALLOW", "reason": "all firewall steps passed"},
+        ],
+    )
+    rc = aegis_cli.cmd_report(_audit_args(audit=str(audit), verbose=True))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Top reasons" in out
+    assert "rule:git_destructive" in out
+
+
+def test_report_subcommand_argparse() -> None:
+    parser = aegis_cli.build_parser()
+    args = parser.parse_args(["report", "--audit", "/tmp/a.jsonl", "--since", "24h", "-v"])
+    assert args.fn.__name__ == "cmd_report"
+    assert args.audit == "/tmp/a.jsonl"
+    assert args.since == "24h"
+    assert args.verbose is True
+
+
+def test_report_subcommand_default_args() -> None:
+    parser = aegis_cli.build_parser()
+    args = parser.parse_args(["report"])
+    assert args.fn.__name__ == "cmd_report"
+    assert args.audit is None
+    assert args.since is None
+    assert args.verbose is False
+
+
+# ---- v2.2: aegis baseline ----------------------------------------------
+
+
+def _baseline_args(  # type: ignore[no-untyped-def]
+    action: str,
+    *,
+    root: str | None = None,
+    baseline: str | None = None,
+    force: bool = False,
+):
+    import argparse
+
+    return argparse.Namespace(
+        action=action, root=root, baseline=baseline, force=force
+    )
+
+
+def _make_repo(root: Path) -> None:
+    (root / "CLAUDE.md").write_text("# rules\n")
+    (root / "AGENTS.md").write_text("agents.\n")
+
+
+def test_baseline_init_writes_manifest(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _make_repo(tmp_path)
+    out = tmp_path / "m.json"
+    rc = aegis_cli.cmd_baseline(
+        _baseline_args("init", root=str(tmp_path), baseline=str(out))
+    )
+    assert rc == 0
+    assert out.exists()
+    data = json.loads(out.read_text())
+    assert "CLAUDE.md" in data["files"]
+    assert "AGENTS.md" in data["files"]
+    out_text = capsys.readouterr().out
+    assert "instruction baseline written" in out_text
+
+
+def test_baseline_init_refuses_overwrite_without_force(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _make_repo(tmp_path)
+    out = tmp_path / "m.json"
+    out.write_text("{}")
+    rc = aegis_cli.cmd_baseline(
+        _baseline_args("init", root=str(tmp_path), baseline=str(out))
+    )
+    assert rc == 1
+    err_text = capsys.readouterr().out
+    assert "already exists" in err_text
+
+
+def test_baseline_init_with_force_overwrites(tmp_path: Path) -> None:
+    _make_repo(tmp_path)
+    out = tmp_path / "m.json"
+    out.write_text("{}")
+    rc = aegis_cli.cmd_baseline(
+        _baseline_args("init", root=str(tmp_path), baseline=str(out), force=True)
+    )
+    assert rc == 0
+    data = json.loads(out.read_text())
+    assert "CLAUDE.md" in data["files"]
+
+
+def test_baseline_status_reports_clean(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _make_repo(tmp_path)
+    out = tmp_path / "m.json"
+    aegis_cli.cmd_baseline(
+        _baseline_args("init", root=str(tmp_path), baseline=str(out))
+    )
+    capsys.readouterr()  # consume init output
+    rc = aegis_cli.cmd_baseline(
+        _baseline_args("status", root=str(tmp_path), baseline=str(out))
+    )
+    assert rc == 0
+    out_text = capsys.readouterr().out
+    assert "baseline intact" in out_text
+
+
+def test_baseline_status_detects_drift(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _make_repo(tmp_path)
+    out = tmp_path / "m.json"
+    aegis_cli.cmd_baseline(
+        _baseline_args("init", root=str(tmp_path), baseline=str(out))
+    )
+    (tmp_path / "CLAUDE.md").write_text("# poisoned\n")
+    capsys.readouterr()
+    rc = aegis_cli.cmd_baseline(
+        _baseline_args("status", root=str(tmp_path), baseline=str(out))
+    )
+    assert rc == 1
+    out_text = capsys.readouterr().out
+    assert "drift detected" in out_text
+    assert "CLAUDE.md" in out_text
+
+
+def test_baseline_status_missing_baseline(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rc = aegis_cli.cmd_baseline(
+        _baseline_args("status", root=str(tmp_path), baseline=str(tmp_path / "no.json"))
+    )
+    assert rc == 1
+    err_text = capsys.readouterr().out
+    assert "Run `aegis baseline init`" in err_text
+
+
+def test_baseline_reattest_overwrites(tmp_path: Path) -> None:
+    _make_repo(tmp_path)
+    out = tmp_path / "m.json"
+    aegis_cli.cmd_baseline(
+        _baseline_args("init", root=str(tmp_path), baseline=str(out))
+    )
+    original = out.read_text()
+    (tmp_path / "CLAUDE.md").write_text("# new content\n")
+    rc = aegis_cli.cmd_baseline(
+        _baseline_args("reattest", root=str(tmp_path), baseline=str(out))
+    )
+    assert rc == 0
+    refreshed = out.read_text()
+    assert refreshed != original
+
+
+def test_baseline_subcommand_argparse() -> None:
+    parser = aegis_cli.build_parser()
+    args = parser.parse_args(
+        ["baseline", "init", "--root", "/r", "--baseline", "/m.json", "--force"]
+    )
+    assert args.fn.__name__ == "cmd_baseline"
+    assert args.action == "init"
+    assert args.root == "/r"
+    assert args.baseline == "/m.json"
+    assert args.force is True
+
+
+def test_baseline_subcommand_invalid_action_rejected() -> None:
+    parser = aegis_cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["baseline", "wat"])

@@ -99,22 +99,46 @@ def cmd_status(_: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_verify_audit(_: argparse.Namespace) -> int:
-    from crypto.signing import verify_intent  # type: ignore[import-not-found]
+def cmd_verify_audit(args: argparse.Namespace) -> int:
+    """Verify the local audit chain (v2.1.5).
 
-    c = _conn()
-    rows = c.execute(
-        "SELECT aid, atv_hash, verdict, signature FROM intents ORDER BY id"
-    ).fetchall()
-    ok = bad = 0
-    for aid, atv_hash, verdict_json, sig in rows:
-        verdict = json.loads(verdict_json)
-        if verify_intent(atv_hash, verdict, aid, sig):
-            ok += 1
-        else:
-            bad += 1
-    print(f"[verify-audit] {ok}/{ok + bad} signatures valid")
-    return 0 if bad == 0 else 1
+    For local-mode (Solo Free) installs, walks ``~/.aegis/audit.jsonl``
+    line-by-line and recomputes each ``prev_hash``/``this_hash`` pair.
+    A single mutated record breaks every subsequent recompute, so this
+    catches both silent edits and re-orderings.
+
+    For sidecar-mode installs, the canonical verifier is the running
+    service's ``/forensic/replay`` endpoint (M5/M9/M15 Ed25519 + Merkle
+    + AES-GCM journal); the CLI just points operators there.
+    """
+    from aegis.audit.local_chain import verify_chain
+
+    audit_path = (
+        Path(args.audit) if args.audit
+        else Path.home() / ".aegis" / "audit.jsonl"
+    )
+    if not audit_path.exists():
+        print(f"[verify-audit] no local audit log at {audit_path}")
+        print(
+            "        sidecar mode: run `curl localhost:8000/forensic/replay` "
+            "instead (Ed25519 + Merkle + AES-GCM journal verification)."
+        )
+        return 1
+
+    ok, broken_at, total = verify_chain(audit_path)
+    if ok:
+        print(_green(f"\u2713 verify-audit (local chain) — {total} records intact"))
+        print(f"  audit:  {audit_path}")
+        return 0
+    print(
+        _red(
+            f"\u2717 verify-audit FAILED — chain broken at record #{broken_at} "
+            f"of {total}"
+        )
+    )
+    print(f"  audit:  {audit_path}")
+    print("  cause:  prev_hash or this_hash mismatch (line was mutated post-write)")
+    return 1
 
 
 def cmd_replay(args: argparse.Namespace) -> int:
@@ -289,6 +313,200 @@ def _build_pretool_command(mode: str) -> str:
 def _pretool_hook_marker(mode: str) -> str:
     """Substring searched in existing settings to detect a prior install."""
     return str(LOCAL_HOOK_SCRIPT) if mode == "local" else str(HOOK_SCRIPT)
+
+
+def _default_baseline_path() -> Path:
+    """Where ``aegis baseline init`` writes by default — repo-local."""
+    return Path.cwd() / ".aegis" / "instruction_baseline.json"
+
+
+def cmd_baseline(args: argparse.Namespace) -> int:
+    """v2.2.1 Day-1 #3 — manage the instruction baseline manifest.
+
+    Three subactions:
+
+    * ``aegis baseline init``     — snapshot current CLAUDE.md /
+      AGENTS.md / .mcp.json / plugin & skill manifests into
+      ``.aegis/instruction_baseline.json``. Subsequent PreToolUse
+      calls verify against this file.
+    * ``aegis baseline status``   — show the diff between the live
+      tree and the baseline (additions, removals, modifications).
+    * ``aegis baseline reattest`` — re-snapshot and overwrite, after
+      a reviewed change. Drops the firewall's in-process cache so
+      the next PreToolUse picks up the new manifest.
+    """
+    from aegis.instruction_baseline import (
+        diff_baseline,
+        load_baseline,
+        snapshot,
+        write_baseline,
+    )
+
+    root = Path(args.root).resolve() if args.root else Path.cwd()
+    baseline_path = (
+        Path(args.baseline) if args.baseline else _default_baseline_path()
+    )
+
+    if args.action == "init":
+        if baseline_path.exists() and not args.force:
+            print(
+                _yellow(
+                    f"baseline already exists at {baseline_path} — re-run with "
+                    "--force to overwrite, or use `aegis baseline reattest`."
+                )
+            )
+            return 1
+        bl = snapshot(root)
+        write_baseline(bl, baseline_path)
+        print(_green(f"\u2713 instruction baseline written → {baseline_path}"))
+        print(f"  root:  {root}")
+        print(f"  files: {len(bl.files)} tracked")
+        for rel in sorted(bl.files):
+            print(f"    {bl.files[rel][:12]}…  {rel}")
+        print()
+        print(
+            f"Set AEGIS_INSTRUCTION_BASELINE_PATH={baseline_path} in your env "
+            "to enable step309 drift checking on every PreToolUse."
+        )
+        return 0
+
+    if args.action == "status":
+        if not baseline_path.exists():
+            print(
+                _red(
+                    f"no baseline at {baseline_path}. Run "
+                    "`aegis baseline init` first."
+                )
+            )
+            return 1
+        bl = load_baseline(baseline_path)
+        report = diff_baseline(bl, root)
+        if report.is_clean:
+            print(_green(f"\u2713 baseline intact ({len(bl.files)} files tracked)"))
+            return 0
+        print(_red(f"\u2717 instruction drift detected: {report.summary()}"))
+        for rel in report.added:
+            print(f"  + {rel}  (NEW)")
+        for rel in report.removed:
+            print(f"  - {rel}  (REMOVED)")
+        for rel, old, new in report.modified:
+            print(f"  ~ {rel}")
+            print(f"      was: {old[:16]}…")
+            print(f"      now: {new[:16]}…")
+        print()
+        print(
+            "Until reviewed, every PreToolUse is BLOCKed by step309. "
+            "If the change is intentional, run `aegis baseline reattest`."
+        )
+        return 1
+
+    if args.action == "reattest":
+        bl = snapshot(root)
+        write_baseline(bl, baseline_path)
+        from aegis.firewall.step309_instruction_drift import reset_baseline_cache
+
+        reset_baseline_cache()
+        print(_green(f"\u2713 baseline re-attested → {baseline_path}"))
+        print(f"  files: {len(bl.files)} tracked")
+        return 0
+
+    return 2
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    """Print a 5-line Agent Risk Report for the most recent session.
+
+    Reads ``~/.aegis/audit.jsonl`` (local mode) or the path passed via
+    ``--audit``. Aggregates by decision + reason + redundant flag and
+    prints an emoji-led summary mirroring the report shape from the
+    must-install strategy doc:
+
+        ✅ N safe tool calls auto-approved
+        ⚠️ K high-risk actions required approval
+        ⛔ B destructive commands blocked
+        ⛔ P poisoned-instruction sources detected
+        💸 D redundant calls deduplicated
+        🔁 L potential loops aborted
+        🧾 Full signed local audit: <path>
+    """
+    audit_path = (
+        Path(args.audit) if args.audit
+        else Path.home() / ".aegis" / "audit.jsonl"
+    )
+    since_secs = _parse_window_secs(args.since) if args.since else None
+
+    if not audit_path.exists():
+        print(f"[report] no audit log at {audit_path}")
+        print("        (start a Claude Code session with `aegis install --mode local`")
+        print("         or `--mode sidecar` so the hook can append decisions.)")
+        return 1
+
+    cutoff_ns = int(time.time() - since_secs) * 1_000_000_000 if since_secs else 0
+
+    n_total = 0
+    n_safe = 0
+    n_approval = 0
+    n_block_destructive = 0
+    n_block_poisoned = 0
+    n_loop_aborted = 0
+    n_redundant = 0
+    by_reason: dict[str, int] = {}
+
+    with audit_path.open(encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            ts = int(rec.get("ts_ns") or 0)
+            if cutoff_ns and ts and ts < cutoff_ns:
+                continue
+            decision = (rec.get("decision") or "").upper()
+            reason = (rec.get("reason") or "").lower()
+            n_total += 1
+
+            if decision == "ALLOW":
+                n_safe += 1
+                if "redundant" in reason:
+                    n_redundant += 1
+            elif decision == "REQUIRE_APPROVAL":
+                n_approval += 1
+                if "loop" in reason or "step336" in reason:
+                    n_loop_aborted += 1
+            elif decision == "BLOCK":
+                if "instruction_drift" in reason or "poisoned" in reason:
+                    n_block_poisoned += 1
+                else:
+                    n_block_destructive += 1
+
+            tag = reason[:60] if reason else f"{decision} (no reason)"
+            by_reason[tag] = by_reason.get(tag, 0) + 1
+
+    print("AegisData Agent Risk Report")
+    print("===========================")
+    if since_secs:
+        print(f"  window:    last {args.since}")
+    print(f"  audit log: {audit_path}  ({n_total} entries)")
+    print()
+    print(f"  ✅  {n_safe:>4} safe tool calls auto-approved")
+    print(f"  ⚠️   {n_approval:>4} high-risk actions required approval")
+    print(f"  ⛔  {n_block_destructive:>4} destructive commands blocked")
+    print(f"  ⛔  {n_block_poisoned:>4} poisoned-instruction sources detected")
+    print(f"  💸  {n_redundant:>4} redundant calls deduplicated")
+    print(f"  🔁  {n_loop_aborted:>4} potential loops aborted")
+    print(f"  🧾  Full signed local audit: {audit_path}")
+
+    if args.verbose and by_reason:
+        print()
+        print("  Top reasons (count × tag):")
+        top = sorted(by_reason.items(), key=lambda kv: -kv[1])[:10]
+        for tag, c in top:
+            print(f"    {c:>4} × {tag}")
+
+    return 0
 
 
 def cmd_install(args: argparse.Namespace) -> int:
@@ -495,7 +713,15 @@ def build_parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("status").set_defaults(fn=cmd_status)
-    sub.add_parser("verify-audit").set_defaults(fn=cmd_verify_audit)
+    va = sub.add_parser(
+        "verify-audit",
+        help="Verify the local audit chain integrity (Solo Free, v2.1.5)",
+    )
+    va.add_argument(
+        "--audit",
+        help="Path to audit JSONL (default: ~/.aegis/audit.jsonl, the local-mode log)",
+    )
+    va.set_defaults(fn=cmd_verify_audit)
 
     rp = sub.add_parser("replay")
     rp.add_argument("n", type=int, nargs="?", default=20)
@@ -560,6 +786,48 @@ def build_parser() -> argparse.ArgumentParser:
     bg.add_argument("--daily", type=float)
     bg.add_argument("--per-call", type=float, dest="per_call")
     bg.set_defaults(fn=cmd_budget)
+
+    bl = sub.add_parser(
+        "baseline",
+        help="Manage the instruction baseline (CLAUDE.md / AGENTS.md / .mcp.json)",
+    )
+    bl.add_argument(
+        "action",
+        choices=["init", "status", "reattest"],
+        help="init: snapshot files; status: diff vs baseline; reattest: overwrite",
+    )
+    bl.add_argument(
+        "--root",
+        help="Repo root to walk (default: current working directory)",
+    )
+    bl.add_argument(
+        "--baseline",
+        help="Manifest path (default: .aegis/instruction_baseline.json under cwd)",
+    )
+    bl.add_argument(
+        "--force",
+        action="store_true",
+        help="(init) overwrite existing baseline manifest",
+    )
+    bl.set_defaults(fn=cmd_baseline)
+
+    rep = sub.add_parser(
+        "report",
+        help="5-line Agent Risk Report from the local audit log",
+    )
+    rep.add_argument(
+        "--audit",
+        help="Path to audit JSONL (default: ~/.aegis/audit.jsonl, the local-mode log)",
+    )
+    rep.add_argument(
+        "--since",
+        help="Time window: '24h', '7d', '3600' (seconds)",
+    )
+    rep.add_argument(
+        "--verbose", "-v", action="store_true",
+        help="Show top reasons table",
+    )
+    rep.set_defaults(fn=cmd_report)
 
     inst = sub.add_parser("install", help="Install hooks into ~/.claude/settings.json")
     inst.add_argument(

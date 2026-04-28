@@ -206,6 +206,103 @@ def test_payment_overflow_per_tool_ceilings() -> None:
     assert block_v == "BLOCK"
 
 
+# ---- cloud_destructive (v2.1.2) -----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "kubectl delete pod my-pod",
+        "kubectl drain node-1",
+        "terraform destroy -auto-approve",
+        "terraform apply -auto-approve",
+        "terraform state rm aws_instance.foo",
+        "aws s3 rm s3://my-bucket/logs --recursive",
+        "aws s3 rb s3://my-bucket --force",
+        "aws iam delete-user --user-name admin",
+        "aws iam create-access-key --user-name admin",
+        "aws ec2 terminate-instances --instance-ids i-123",
+        "aws rds delete-db-instance --db-instance-identifier prod",
+        "aws rds delete-db-cluster-snapshot --db-cluster-snapshot-identifier prod-snap",
+        "gcloud iam roles delete projects/p/roles/r",
+        "gcloud iam service-accounts keys create k.json --iam-account=svc@p.iam.gserviceaccount.com",
+        "gcloud compute instances delete my-instance",
+        "gcloud projects delete my-project",
+        "az role assignment delete --role 'Owner' --assignee user",
+        "az vm delete --name myvm",
+        "helm uninstall my-release",
+        "helm delete my-release",
+        "docker rmi -f some-image:latest",
+        "docker system prune -a --force",
+        "docker volume rm my-volume",
+    ],
+)
+def test_cloud_destructive_blocks(command: str) -> None:
+    verdict, reason = _run("Bash", {"command": command})
+    assert verdict == "BLOCK"
+    assert "cloud_destructive" in reason
+
+
+def test_cloud_destructive_inactive_for_non_shell_tools() -> None:
+    verdict, _ = _run("Read", {"file_path": "kubectl delete pod"})
+    assert verdict is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "kubectl get pods",
+        "terraform plan",
+        "aws s3 ls",
+        "gcloud projects list",
+        "docker ps",
+        "helm list",
+    ],
+)
+def test_cloud_read_only_passes(command: str) -> None:
+    verdict, _ = _run("Bash", {"command": command})
+    assert verdict is None
+
+
+# ---- sql_unbounded (v2.1.2) ---------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "DELETE FROM users",
+        "delete from sessions;",
+        "UPDATE users SET banned = true",
+        "update orders set status = 'cancelled'",
+    ],
+)
+def test_sql_unbounded_blocks(query: str) -> None:
+    verdict, reason = _run("sql", {"query": query})
+    assert verdict == "BLOCK"
+    assert "sql_unbounded" in reason
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "DELETE FROM users WHERE id = 42",
+        "UPDATE users SET banned = true WHERE id IN (1,2)",
+        "SELECT * FROM users",
+    ],
+)
+def test_sql_with_where_or_select_passes(query: str) -> None:
+    verdict, _ = _run("sql", {"query": query})
+    assert verdict is None
+
+
+def test_sql_unbounded_via_bash_psql() -> None:
+    verdict, reason = _run(
+        "Bash", {"command": 'psql -c "DELETE FROM logs"'}
+    )
+    assert verdict == "BLOCK"
+    assert "sql_unbounded" in reason
+
+
 # ---- aggregate ----------------------------------------------------------
 
 

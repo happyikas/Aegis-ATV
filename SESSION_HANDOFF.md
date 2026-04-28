@@ -1,8 +1,8 @@
 # AegisData MVP — 세션 핸드오프 (Session Handoff)
 
-**상태 스냅샷:** 2026-04-26 (v2.0.0)
+**상태 스냅샷:** 2026-04-27 (v2.2.0)
 **대상:** 새 Claude Code 챗 창에서 이 프로젝트 작업을 이어가는 사람 (또는 새 Claude 인스턴스)
-**한 문장:** AegisData v2.0.0 — T2 sidecar + Claude Code plugin (`--mode sidecar|local`) 통합 완료, 650 테스트 PASS, 12/12 incident 차단 (live 검증), donor rule pack (step311) + ATV-2080 어댑터 + plugin packaging 모두 commit, branch `feat/v2.0-merge` 에서 v2.0 release tag 대기.
+**한 문장:** AegisData v2.2.0 — must-install 단계 도달. v2.0 sidecar+plugin 위에 v2.1 (Safe Auto-Run, cloud destructive 룰, Loop Saver, `aegis report`, local SHA3 audit chain) + v2.2 (Poisoned Instruction Detector — CLAUDE.md / AGENTS.md / .mcp.json baseline) 추가. **792 테스트 PASS**, mypy 82 source files clean, ruff clean, 12/12 donor incident + 7-시나리오 회귀 0.
 
 ---
 
