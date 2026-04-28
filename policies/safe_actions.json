@@ -1,0 +1,30 @@
+{
+  "_comment": "v2.1: Day-1 #1 Safe Auto-Run. Calls matching any rule below are flagged as safe_fast_path so step340 (sLLM judge) skips its LLM round-trip. The firewall pipeline still runs every other gate (step310 dangerous regex, step311 donor rules, step320 blast, step335 cost) so a safe-listed call is NOT exempt from real BLOCKs — only from the LLM judge. This produces the 'less prompts, better prompts' UX where common safe operations clear in <1 ms.",
+  "version": 1,
+  "tools": {
+    "Read":   { "any_args": true, "description": "Reading any file is non-mutating; sensitive_paths.json still gates secret paths." },
+    "Grep":   { "any_args": true, "description": "Pure search." },
+    "Glob":   { "any_args": true, "description": "Pure listing." }
+  },
+  "bash_subcommands": [
+    "ls", "pwd", "cat", "head", "tail", "wc", "file", "stat",
+    "grep", "rg", "ag", "find", "fd", "tree", "locate",
+    "diff", "cmp", "sort", "uniq", "cut", "awk", "sed",
+    "jq", "yq", "xxd", "hexdump", "md5sum", "sha256sum", "sha3sum", "shasum",
+    "echo", "printf", "true", "false", "test", "which", "type",
+    "date", "uptime", "uname", "whoami", "id", "env",
+    "git status", "git log", "git diff", "git show", "git branch", "git remote",
+    "git rev-parse", "git config --get", "git ls-files", "git stash list",
+    "npm test", "npm run test", "yarn test",
+    "pytest", "uv run pytest", "python -m pytest",
+    "go test", "cargo test",
+    "ruff check", "ruff format --check", "mypy", "uv run ruff", "uv run mypy",
+    "black --check", "prettier --check", "eslint",
+    "tsc --noEmit", "uv run tsc"
+  ],
+  "_notes": [
+    "All bash_subcommands match by prefix on the canonical command string after step312 normalization.",
+    "Quoted shell metachars (|, >, ;) and redirection are NOT in this list — those revert to full pipeline.",
+    "Adding entries here only loosens latency, never loosens enforcement: step310 destructive regex still runs."
+  ]
+}

@@ -56,6 +56,13 @@ class Settings(BaseSettings):
 
     aegis_policy_dir: str = "./policies"
 
+    # v2.2 — Instruction baseline (poisoned-instruction detector).
+    # Empty string disables step309 drift detection (default for the
+    # sidecar service so the existing 650-test surface is unaffected;
+    # local-mode + plugin packaging opt in by writing to .aegis/).
+    aegis_instruction_baseline_path: str = ""
+    aegis_instruction_root: str = "."
+
     # M15 — encrypted ATV journal (AES-GCM AEAD). The data key is
     # auto-generated on first run if the file is missing. T3 will seal
     # this under the hardware TEE.

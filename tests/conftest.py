@@ -64,6 +64,11 @@ def aegis_app(tmp_path: Path) -> Iterator[object]:
         db_path=":memory:",
         data_key=ham_key,
     )
+    # v2.1.3: reset the per-process loop detector so each test starts
+    # with empty per-session counts (the detector is a module-level
+    # singleton inside aegis.monitor.loop_detector).
+    from aegis.monitor.loop_detector import reset_default_detector
+    reset_default_detector()
     yield create_app(
         key=key, db=db, log=log,
         intent_log=intent_log, cost_ledger=cost_ledger,
@@ -74,3 +79,4 @@ def aegis_app(tmp_path: Path) -> Iterator[object]:
     intent_log.close()
     cost_ledger.close()
     ham_store.close()
+    reset_default_detector()

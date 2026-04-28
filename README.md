@@ -21,19 +21,33 @@ patent v7.10. The original 7-day MVP design is in [`PLAN.md`](PLAN.md);
 the patent-aligned re-plan and per-milestone status is in
 [`PLAN_v2.md`](PLAN_v2.md).
 
-**Status (2026-04-26):** v2.0.0 — sidecar + Claude Code plugin
-unified. M1–M17 + step311 donor rule pack. **650 tests pass**, ruff
-clean, mypy strict over 74 source files. Two deployment modes:
+**Status (2026-04-27):** v2.2.0 — **must-install for Claude Code &
+Codex**. M1–M17 + step311 donor rule pack + v2.1 Safe Auto-Run + v2.2
+Poisoned Instruction Detector. **792 tests pass**, ruff clean, mypy
+strict over 82 source files.
 
 ```bash
 uv run aegis install --mode sidecar    # multi-tenant FastAPI service
 uv run aegis install --mode local      # Solo Free in-process hook (no service)
+uv run aegis baseline init             # snapshot CLAUDE.md / AGENTS.md / .mcp.json
+uv run aegis report                    # 5-line Agent Risk Report
 ```
 
-12 / 12 known incident classes block (live verified against the real
-`/evaluate` endpoint). 10-minute runbook at
-[`docs/RUNBOOK.md`](docs/RUNBOOK.md); release notes in
-[`CHANGELOG.md`](CHANGELOG.md).
+* **Safe Auto-Run** — known-safe ops (Read/Grep/Glob, ls, pytest,
+  ruff, git status) skip the sLLM judge — <5 ms median.
+* **12 / 12 known incident classes** block + cloud destructive
+  patterns (kubectl delete / terraform destroy / aws iam / unbounded
+  DELETE) caught at step311.
+* **Loop & Redundant Call Saver** — same call 3× → REQUIRE_APPROVAL;
+  read-only repeats deduped and surfaced in `aegis report`.
+* **Poisoned Instruction Detector** — CLAUDE.md / AGENTS.md /
+  .mcp.json / plugin & skill manifest hashes baselined; any drift
+  BLOCKs every subsequent PreToolUse until reviewed.
+* **Local-mode signed audit chain** — SHA3-256 prev_hash / this_hash
+  per line; `aegis verify-audit` catches mutations and re-orderings.
+
+10-minute runbook at [`docs/RUNBOOK.md`](docs/RUNBOOK.md); full
+release notes in [`CHANGELOG.md`](CHANGELOG.md).
 
 ---
 

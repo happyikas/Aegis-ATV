@@ -1000,6 +1000,118 @@ uv run aegis install --mode sidecar
 
 ---
 
+## 7B. v2.2 must-install — Safe Auto-Run + Poisoned Instruction Detector
+
+v2.2.0 (2026-04-27) 은 v2.0 의 "patent-backed sidecar" 포지셔닝을
+**"agent 를 더 오래, 더 과감히, 덜 불안하게 돌리게 해주는 개발 생산성
+플러그인"** 으로 업그레이드한다. 다섯 개의 새 기능:
+
+### 7B.1 Safe Auto-Run (step305)
+
+- `policies/safe_actions.json` 의 60개 bash subcommand prefix +
+  3개 read-only tool 을 fast-path 처리 → step340 sLLM judge round-trip
+  skip → median pre-tool latency <5 ms (vs ~150 ms with Haiku).
+- 단축은 latency 만; 다른 모든 gate (step310 dangerous regex, step311
+  donor rules + cloud, step320 blast, step335 cost, step336 loop) 는
+  여전히 실행 → "fast doesn't mean unsafe".
+- Shell metachar (`|`, `;`, `&&`, `>`, `$()`, backtick) 가 args 에
+  있으면 즉시 fast-path 자격 박탈.
+
+### 7B.2 step311 cloud + sql_unbounded (v2.1.2)
+
+도너 룰팩 위에 추가된 클라우드 / SQL 파괴 룰:
+
+| 카테고리 | 패턴 |
+|---|---|
+| Kubernetes | `kubectl delete`, `kubectl drain`, force cordon |
+| Terraform | `terraform destroy`, `apply -auto-approve`, `state rm` |
+| AWS | `s3 rm/rb`, `iam delete-user/create-access-key/...`, `ec2 terminate-instances`, `rds delete-db-*` |
+| GCP | `iam roles\|service-accounts delete`, `iam keys create`, `compute\|sql\|kms ... delete`, `projects delete` |
+| Azure | `role assignment create\|delete`, `vm\|sql\|storage\|keyvault delete` |
+| Helm | `uninstall`, `delete` |
+| Docker | `rmi -f`, `system prune -a`, `volume rm` |
+| SQL unbounded | `DELETE FROM ... ;` / `UPDATE ... SET ... ;` (no WHERE) |
+
+### 7B.3 Loop & Redundant Call Saver (step336, v2.1.3)
+
+- `aegis.monitor.loop_detector` — 세션별 SHA3 카운터.
+  `loop_threshold=3` 도달 시 step336 → REQUIRE_APPROVAL.
+- Read-only 재호출 (`Read`/`Grep`/`Glob` 등 `_READ_ONLY_TOOLS`) 가 dedup
+  window (300 s) 내 반복되면 ALLOW + `ctx.extras["redundant"]=True`.
+- 7B.5 의 risk report 가 "💸 N redundant calls deduplicated" /
+  "🔁 L potential loops aborted" 로 집계.
+
+### 7B.4 Poisoned Instruction Detector (step309, v2.2.1)
+
+AIA 특허의 **configuration mutation monitoring + directive-precedence
+anomaly detection** 차별점이 firewall step 으로 출시.
+
+설치 흐름:
+
+```bash
+uv run aegis baseline init                                  # snapshot
+export AEGIS_INSTRUCTION_BASELINE_PATH=$(pwd)/.aegis/instruction_baseline.json
+# Restart Claude Code / sidecar
+```
+
+매 PreToolUse 직전:
+
+1. `CLAUDE.md`, `AGENTS.md`, `.mcp.json`, `.claude-plugin/plugin.json`,
+   `.claude/skills/*.md`, `.claude/commands/*.md`, `.cursor/rules/*.mdc`
+   를 SHA3-256 으로 재해시.
+2. baseline 과 비교 → DriftReport (added / removed / modified).
+3. drift 가 있으면 즉시 BLOCK with reason
+   `instruction_drift: ~1 modified (CLAUDE.md)`.
+4. 사용자가 `aegis baseline status` 로 정확한 변경 파일 확인 →
+   reviewed 후 `aegis baseline reattest` 또는 revert.
+
+이 기능은 **Replit-style 사고 사례** (외부 prompt injection 이 아닌
+repo 내부 instruction 변조) 의 첫 번째 line of defense.
+
+### 7B.5 Local-mode Signed Audit Chain (v2.1.5)
+
+- 로컬 모드의 `~/.aegis/audit.jsonl` 매 라인이 `prev_hash` + `this_hash`
+  를 carrying. 임의 수정 시 후속 모든 라인의 recompute 가 깨짐.
+- `aegis verify-audit` 가 chain end-to-end walk → 첫 broken record
+  보고. 사이드카 모드는 M5/M9/M15 Ed25519 + Merkle + AES-GCM 그대로.
+
+### 7B.6 `aegis report`
+
+세션 끝에 한 줄로:
+
+```
+✅     N safe tool calls auto-approved
+⚠️      K high-risk actions required approval
+⛔     B destructive commands blocked
+⛔     P poisoned-instruction sources detected
+💸     D redundant calls deduplicated
+🔁     L potential loops aborted
+🧾  Full signed local audit: ~/.aegis/audit.jsonl
+```
+
+`--since 24h` window, `--verbose` top reasons table.
+
+### 7B.7 v2.0 → v2.2 메트릭 비교
+
+| 항목 | v2.0.0 | **v2.2.0** |
+|---|---:|---:|
+| pytest | 650 | **792** (+142) |
+| mypy strict source files | 74 | **82** |
+| firewall pipeline length | 8 steps | **10 steps** |
+| step311 룰 개수 | 7 | **9** (cloud_destructive + sql_unbounded 추가) |
+| 12-incident donor KPI | 12/12 strict | **12/12 strict** (회귀 0) |
+| 7-시나리오 회귀 | 7/7 | **7/7** (회귀 0) |
+| Median pre-tool latency (safe) | ~150 ms (Haiku) | **<5 ms** (fast-path) |
+| Poisoned-instruction defense | ❌ | ✅ (`aegis baseline`) |
+| Loop / dedup defense | ❌ | ✅ (step336) |
+| Risk report | ❌ | ✅ (`aegis report`) |
+| Local audit integrity | plain JSONL | **SHA3 chain + verify-audit** |
+
+상세 변경 내역은 [`CHANGELOG.md`](CHANGELOG.md) v2.2.0 entry.
+실행 가능한 10분 데모 스크립트는 [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
+
+---
+
 ## 8. 데모 시나리오
 
 ### 8.1 90초 엘리베이터 데모

@@ -4,6 +4,136 @@ All notable changes to AegisData MVP. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.2.0] — 2026-04-27  ·  must-install: Safe Auto-Run + Poisoned Instruction Detector
+
+This release closes the "must-install" gap from the v2.0 strategy
+review. Five v2.1 features (Safe Auto-Run, cloud destructive rules,
+Loop Saver, Risk Report, local signed audit) plus the v2.2 Poisoned
+Instruction Detector turn the sidecar / plugin into the
+**"Aegis Guard makes Claude Code & Codex safe enough to run
+unattended"** product.
+
+### Added — v2.1 Safe Auto-Run + Cost saver + visibility
+
+* **v2.1.1 Safe action allowlist** — new `step305_safe_allowlist`
+  runs first in the pipeline. Curated `policies/safe_actions.json`
+  flags read-only file tools (Read / Grep / Glob, ``any_args``) and
+  60 bash subcommand prefixes (file inspection, formatters, test
+  runners, read-only git) as ``ctx.extras["safe_fast_path"] = True``.
+  step340 honors the flag and skips the sLLM judge round-trip,
+  dropping median latency from ~150 ms (Haiku) to <5 ms.
+  Disqualifying shell metachars (``|``, ``;``, ``&&``, ``>``, ``$()``,
+  backticks) immediately revert the call to the full pipeline so a
+  destructive subshell never papers over a safe leading verb.
+* **v2.1.2 step311 cloud + sql_unbounded patterns** — kubectl
+  delete / drain, terraform destroy / apply -auto-approve / state rm,
+  aws s3 rm / iam delete-user / iam create-access-key / ec2
+  terminate-instances / rds delete-db-*, gcloud iam roles | service-
+  accounts delete + iam service-accounts keys create + compute | sql
+  | kms ... delete + projects delete / remove-iam-policy-binding, az
+  role assignment create | delete + vm | sql | storage | keyvault
+  delete, helm uninstall | delete, docker rmi -f | system prune -a |
+  volume rm. Plus DELETE / UPDATE without WHERE on sql-class tools
+  (incl. bash-tunneled ``psql -c "DELETE FROM logs"``).
+* **v2.1.3 Loop & Redundant Call Saver** — new
+  `aegis.monitor.loop_detector` (per-session, lock-protected SHA3
+  counter) + `step336_loop`. Loop = same (tool, args_hash) repeated
+  ≥ 3 times → REQUIRE_APPROVAL. Redundant = read-only repeat within
+  300 s window → ALLOW + ``ctx.extras["redundant"] = True`` so the
+  risk report can later count "N redundant calls deduped".
+* **v2.1.4 ``aegis report``** — 5-line Agent Risk Report that reads
+  the local audit JSONL and bins by decision + reason:
+
+  ```
+  ✅  N safe tool calls auto-approved
+  ⚠️   K high-risk actions required approval
+  ⛔  B destructive commands blocked
+  ⛔  P poisoned-instruction sources detected
+  💸  D redundant calls deduplicated
+  🔁  L potential loops aborted
+  🧾  Full signed local audit: <path>
+  ```
+
+  ``--since 24h`` filters by ts_ns; ``--verbose`` adds a top-10
+  reason × count table.
+* **v2.1.5 Local-mode SHA3 audit chain** — every line in
+  ``~/.aegis/audit.jsonl`` now carries ``prev_hash`` + ``this_hash``
+  so any post-write mutation breaks every subsequent recompute.
+  ``aegis verify-audit`` walks the chain end-to-end and reports the
+  first broken record. Sidecar mode is unchanged (M5/M9/M15 Ed25519
+  + Merkle + AES-GCM remain canonical there).
+
+### Added — v2.2 Poisoned Instruction Detector
+
+* **`src/aegis/instruction_baseline/`** — captures SHA3-256 hashes
+  of CLAUDE.md, AGENTS.md, .mcp.json, .claude-plugin/plugin.json,
+  .claude/skills/*.md, .claude/commands/*.md, .cursor/rules/*.mdc.
+  ``snapshot``, ``diff_baseline``, ``write/load_baseline`` are pure
+  stdlib; ``DriftReport(added, removed, modified)`` is the contract.
+* **`step309_instruction_drift`** — sits after step305, before
+  step310. Re-hashes on every PreToolUse and BLOCKs on any drift
+  with reason ``instruction_drift: <summary> (<top-3-files>)``.
+  Disabled by default (settings.aegis_instruction_baseline_path = ""
+  → no-op) so existing sidecar tests pass unchanged.
+* **`aegis baseline {init|status|reattest}`** — repo-local manifest
+  management. Default path is ``.aegis/instruction_baseline.json``
+  under the repo root. ``init`` refuses to overwrite without
+  ``--force``; ``status`` exits 1 on drift with per-file diff;
+  ``reattest`` overwrites and drops the firewall's in-process cache.
+
+### Changed
+
+* `src/aegis/firewall/core.py` `default_steps()` is now a 10-step
+  pipeline:
+
+  ```
+  step305_safe_allowlist  (v2.1.1)
+  step309_instruction_drift  (v2.2)
+  step310_args
+  step311_donor_rules  (D11 + v2.1.2 cloud)
+  step312_normalize
+  step315_aid_auth
+  step320_blast
+  step330_human
+  step335_cost
+  step336_loop  (v2.1.3)
+  step340_policy  (skips judge when safe_fast_path is set)
+  ```
+
+* `tests/conftest.py` `aegis_app` fixture resets the module-level
+  default loop detector before and after each test so cross-test
+  bleeds (the existing burnin e2e re-posts the same call 5×) don't
+  trigger spurious loop verdicts.
+
+### Tests
+
+* +142 unit tests (Phase 0 baseline 455 → v2.0.0 650 → **v2.2.0 792**).
+  Coverage: 23 step305, 38 step311 cloud rules, 22 loop detector +
+  step336, 7 ``aegis report``, 17 local audit chain + verify-audit, 16
+  instruction baseline, 8 step309, 9 ``aegis baseline``.
+
+### Verified gates
+
+* `pytest -q`                                       **792 passed**.
+* `mypy src` — clean, **82 source files**.
+* `ruff check .` — clean.
+
+### Migration from v2.0.x
+
+No breaking changes for sidecar mode — step305 / step309 / step336
+are no-op when disabled, and the new policies/safe_actions.json is
+purely additive. To opt into the new surface in your install:
+
+```bash
+# v2.1 features ship enabled (safe allowlist + loop detector run by default).
+# v2.2 baseline is opt-in:
+uv run aegis baseline init                         # write the manifest
+export AEGIS_INSTRUCTION_BASELINE_PATH=$(pwd)/.aegis/instruction_baseline.json
+# Restart the service / Claude Code.
+```
+
+---
+
 ## [2.0.0] — 2026-04-26  ·  aegis-mvp plugin merged into T2 sidecar
 
 This release merges the `aegis-mvp v1.0.0` Claude Code plugin (142
