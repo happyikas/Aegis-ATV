@@ -45,6 +45,7 @@ StepFn = Callable[[np.ndarray, ATVInput, FirewallContext], StepResult]
 def default_steps() -> list[StepFn]:
     """Return the canonical ordered step list. Lazy-imported to avoid cycles."""
     from aegis.firewall import (
+        step305_safe_allowlist,
         step310_args,
         step311_donor_rules,
         step312_normalize,
@@ -56,6 +57,7 @@ def default_steps() -> list[StepFn]:
     )
 
     return [
+        step305_safe_allowlist.run,  # v2.1 Day-1 #1 — flag known-safe calls so step340 skips sLLM round-trip
         step310_args.run,
         step311_donor_rules.run,  # D11 — donor pattern rule pack (persona drift, exfil URL, sandbox escape, prompt/mcp injection, git --force, payment overflow)
         step312_normalize.run,   # DOGFOOD Rec #3 — canonicalize tool args before downstream steps

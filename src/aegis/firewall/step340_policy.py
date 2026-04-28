@@ -71,6 +71,18 @@ def run(atv: np.ndarray, inp: ATVInput, ctx: FirewallContext) -> StepResult:
                 f"step340: allow match {rule.get('name', '<unnamed>')}",
             )
 
+    # v2.1 Day-1 #1: skip the sLLM judge round-trip when step305 flagged
+    # the call as safely fast-pathable. The earlier gates (310 dangerous
+    # regex, 311 donor rules, 320 blast, 335 cost) have already cleared
+    # this call, so the judge would almost always return ALLOW anyway —
+    # we save the latency and the LLM token cost.
+    if ctx.extras.get("safe_fast_path"):
+        return StepResult(
+            None,
+            "",
+            f"step340: skipped (safe_fast_path={ctx.extras.get('safe_match', '?')})",
+        )
+
     judge = get_judge()
     jv = judge.evaluate(atv_summary_for_llm(inp))
 
