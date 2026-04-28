@@ -413,13 +413,79 @@ def cmd_baseline(args: argparse.Namespace) -> int:
     return 2
 
 
+def _extract_audit_fields(rec: dict[str, object]) -> dict[str, object]:
+    """Pull (decision, reason, tool, ts_ns) out of an audit record.
+
+    Two schemas are supported:
+
+    * **Local hook** (``tools/aegis_local_hook.py``) — flat top-level
+      fields ``{decision, reason, tool, aid, ts_ns, prev_hash, this_hash}``.
+    * **Sidecar service** (``aegis.audit.jsonl_store``) — nested under
+      ``payload.header`` with ``decision`` AND ``tool_name``; ``reason``
+      lives in the SQLite ``audit.sqlite`` companion (not the JSONL).
+      We surface tool_name as a fallback so the verbose `--verbose`
+      table is still useful even when reason is absent.
+
+    Returns a normalised dict the report aggregator can consume.
+    """
+    decision = rec.get("decision")
+    if not decision:
+        # Sidecar nested path
+        payload = rec.get("payload")
+        if isinstance(payload, dict):
+            header = payload.get("header")
+            if isinstance(header, dict):
+                decision = header.get("decision")
+    decision_str = str(decision or "").upper()
+
+    reason = rec.get("reason")
+    if not reason:
+        payload = rec.get("payload")
+        if isinstance(payload, dict):
+            header = payload.get("header")
+            if isinstance(header, dict):
+                reason = header.get("reason")
+    reason_str = str(reason or "").lower()
+
+    tool = rec.get("tool") or rec.get("tool_name")
+    if not tool:
+        payload = rec.get("payload")
+        if isinstance(payload, dict):
+            header = payload.get("header")
+            if isinstance(header, dict):
+                tool = header.get("tool_name")
+    tool_str = str(tool or "?")
+
+    ts = rec.get("ts_ns")
+    if ts is None:
+        payload = rec.get("payload")
+        if isinstance(payload, dict):
+            header = payload.get("header")
+            if isinstance(header, dict):
+                ts = header.get("timestamp_ns")
+            if ts is None:
+                ts = payload.get("signed_at_ns")
+    try:
+        ts_int = int(ts or 0)
+    except (TypeError, ValueError):
+        ts_int = 0
+
+    return {
+        "decision": decision_str,
+        "reason": reason_str,
+        "tool": tool_str,
+        "ts_ns": ts_int,
+    }
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     """Print a 5-line Agent Risk Report for the most recent session.
 
     Reads ``~/.aegis/audit.jsonl`` (local mode) or the path passed via
-    ``--audit``. Aggregates by decision + reason + redundant flag and
-    prints an emoji-led summary mirroring the report shape from the
-    must-install strategy doc:
+    ``--audit``. Recognises both the local-hook flat schema and the
+    sidecar-service nested ``payload.header`` schema; aggregates by
+    decision + reason + redundant flag and prints an emoji-led summary
+    mirroring the report shape from the must-install strategy doc:
 
         ✅ N safe tool calls auto-approved
         ⚠️ K high-risk actions required approval
@@ -428,6 +494,12 @@ def cmd_report(args: argparse.Namespace) -> int:
         💸 D redundant calls deduplicated
         🔁 L potential loops aborted
         🧾 Full signed local audit: <path>
+
+    Sidecar JSONL stores ``reason`` in the SQLite companion only, so
+    the poisoned/loop/destructive split degrades to "all-destructive"
+    for those records — counts remain accurate. For full-fidelity
+    reasons against a sidecar audit, point at the running service's
+    ``/forensic/replay`` endpoint instead.
     """
     audit_path = (
         Path(args.audit) if args.audit
@@ -450,6 +522,7 @@ def cmd_report(args: argparse.Namespace) -> int:
     n_block_poisoned = 0
     n_loop_aborted = 0
     n_redundant = 0
+    n_sidecar_no_reason = 0
     by_reason: dict[str, int] = {}
 
     with audit_path.open(encoding="utf-8") as fh:
@@ -461,12 +534,17 @@ def cmd_report(args: argparse.Namespace) -> int:
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            ts = int(rec.get("ts_ns") or 0)
+
+            fields = _extract_audit_fields(rec)
+            ts = int(fields["ts_ns"])  # type: ignore[arg-type]
             if cutoff_ns and ts and ts < cutoff_ns:
                 continue
-            decision = (rec.get("decision") or "").upper()
-            reason = (rec.get("reason") or "").lower()
+            decision = str(fields["decision"])
+            reason = str(fields["reason"])
+            tool = str(fields["tool"])
             n_total += 1
+            if not reason:
+                n_sidecar_no_reason += 1
 
             if decision == "ALLOW":
                 n_safe += 1
@@ -482,7 +560,9 @@ def cmd_report(args: argparse.Namespace) -> int:
                 else:
                     n_block_destructive += 1
 
-            tag = reason[:60] if reason else f"{decision} (no reason)"
+            # Sidecar fallback: classify by tool so the verbose table is
+            # still useful without fetching SQLite reason text.
+            tag = reason[:60] if reason else f"{decision} {tool}".strip()
             by_reason[tag] = by_reason.get(tag, 0) + 1
 
     print("AegisData Agent Risk Report")
@@ -498,6 +578,17 @@ def cmd_report(args: argparse.Namespace) -> int:
     print(f"  💸  {n_redundant:>4} redundant calls deduplicated")
     print(f"  🔁  {n_loop_aborted:>4} potential loops aborted")
     print(f"  🧾  Full signed local audit: {audit_path}")
+
+    # Surface the sidecar JSONL limitation so users aren't surprised
+    # the poisoned/loop split looks empty against a sidecar log.
+    if n_sidecar_no_reason and n_sidecar_no_reason == n_total:
+        print()
+        print(_yellow(
+            "Note: this audit log carries no `reason` text — looks like a "
+            "sidecar service JSONL. Counts are accurate; for the "
+            "destructive-vs-poisoned split, query the SQLite companion "
+            "(`audit.sqlite`) or use `curl localhost:8000/forensic/replay`."
+        ))
 
     if args.verbose and by_reason:
         print()
