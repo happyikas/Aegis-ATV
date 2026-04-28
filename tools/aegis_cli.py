@@ -99,22 +99,46 @@ def cmd_status(_: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_verify_audit(_: argparse.Namespace) -> int:
-    from crypto.signing import verify_intent  # type: ignore[import-not-found]
+def cmd_verify_audit(args: argparse.Namespace) -> int:
+    """Verify the local audit chain (v2.1.5).
 
-    c = _conn()
-    rows = c.execute(
-        "SELECT aid, atv_hash, verdict, signature FROM intents ORDER BY id"
-    ).fetchall()
-    ok = bad = 0
-    for aid, atv_hash, verdict_json, sig in rows:
-        verdict = json.loads(verdict_json)
-        if verify_intent(atv_hash, verdict, aid, sig):
-            ok += 1
-        else:
-            bad += 1
-    print(f"[verify-audit] {ok}/{ok + bad} signatures valid")
-    return 0 if bad == 0 else 1
+    For local-mode (Solo Free) installs, walks ``~/.aegis/audit.jsonl``
+    line-by-line and recomputes each ``prev_hash``/``this_hash`` pair.
+    A single mutated record breaks every subsequent recompute, so this
+    catches both silent edits and re-orderings.
+
+    For sidecar-mode installs, the canonical verifier is the running
+    service's ``/forensic/replay`` endpoint (M5/M9/M15 Ed25519 + Merkle
+    + AES-GCM journal); the CLI just points operators there.
+    """
+    from aegis.audit.local_chain import verify_chain
+
+    audit_path = (
+        Path(args.audit) if args.audit
+        else Path.home() / ".aegis" / "audit.jsonl"
+    )
+    if not audit_path.exists():
+        print(f"[verify-audit] no local audit log at {audit_path}")
+        print(
+            "        sidecar mode: run `curl localhost:8000/forensic/replay` "
+            "instead (Ed25519 + Merkle + AES-GCM journal verification)."
+        )
+        return 1
+
+    ok, broken_at, total = verify_chain(audit_path)
+    if ok:
+        print(_green(f"\u2713 verify-audit (local chain) — {total} records intact"))
+        print(f"  audit:  {audit_path}")
+        return 0
+    print(
+        _red(
+            f"\u2717 verify-audit FAILED — chain broken at record #{broken_at} "
+            f"of {total}"
+        )
+    )
+    print(f"  audit:  {audit_path}")
+    print("  cause:  prev_hash or this_hash mismatch (line was mutated post-write)")
+    return 1
 
 
 def cmd_replay(args: argparse.Namespace) -> int:
@@ -591,7 +615,15 @@ def build_parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("status").set_defaults(fn=cmd_status)
-    sub.add_parser("verify-audit").set_defaults(fn=cmd_verify_audit)
+    va = sub.add_parser(
+        "verify-audit",
+        help="Verify the local audit chain integrity (Solo Free, v2.1.5)",
+    )
+    va.add_argument(
+        "--audit",
+        help="Path to audit JSONL (default: ~/.aegis/audit.jsonl, the local-mode log)",
+    )
+    va.set_defaults(fn=cmd_verify_audit)
 
     rp = sub.add_parser("replay")
     rp.add_argument("n", type=int, nargs="?", default=20)
