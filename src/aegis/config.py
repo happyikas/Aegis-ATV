@@ -33,7 +33,9 @@ class Settings(BaseSettings):
     aegis_embedding_provider: Literal["openai", "dummy", "bge-local"] = "dummy"
     aegis_embedding_model: str = "text-embedding-3-small"
 
-    aegis_judge_provider: Literal["haiku", "dummy", "local-phi"] = "dummy"
+    aegis_judge_provider: Literal[
+        "haiku", "dummy", "local-phi", "attribution_head", "hybrid"
+    ] = "dummy"
     aegis_judge_temperature: float = 0.0
     aegis_judge_seed: int = 42
 

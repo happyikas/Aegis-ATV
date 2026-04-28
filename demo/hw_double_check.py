@@ -28,14 +28,16 @@ os.environ.setdefault("AEGIS_SAFETY_PROVIDER", "dummy")
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from aegis.atv.builder import build_atv
-from aegis.cost.divergence import compute_divergence
-from aegis.cost.escalation import evaluate_escalation
-from aegis.cost.model_flops import DEFAULT_DOLLAR_PER_FLOP, expected_flops
-from aegis.firewall import step337_hw_anomaly
-from aegis.firewall.core import FirewallContext
-from aegis.hw_telemetry import ATTACK_MODES, simulate
-from aegis.schema import ATVHeader, ATVInput, CostEfficiencyMetrics
+# Imports below E402 because they follow the sys.path manipulation above —
+# this is a self-contained demo runnable without `uv sync`.
+from aegis.atv.builder import build_atv  # noqa: E402
+from aegis.cost.divergence import compute_divergence  # noqa: E402
+from aegis.cost.escalation import evaluate_escalation  # noqa: E402
+from aegis.cost.model_flops import DEFAULT_DOLLAR_PER_FLOP, expected_flops  # noqa: E402
+from aegis.firewall import step337_hw_anomaly  # noqa: E402
+from aegis.firewall.core import FirewallContext  # noqa: E402
+from aegis.hw_telemetry import ATTACK_MODES, simulate  # noqa: E402
+from aegis.schema import ATVHeader, ATVInput, CostEfficiencyMetrics  # noqa: E402
 
 MODEL = "claude-haiku-4-5"
 
