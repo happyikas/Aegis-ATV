@@ -1,11 +1,23 @@
 # AegisData MVP — 세션 핸드오프 (Session Handoff)
 
-**상태 스냅샷:** 2026-04-28 (**v3.6.0**)
+**상태 스냅샷:** 2026-04-28 (**v3.7.0**)
 **Repo:** [happyikas/Aegis-ATV](https://github.com/happyikas/Aegis-ATV) (private)
 **대상:** 새 Claude Code 챗 창에서 이 프로젝트 작업을 이어가는 사람 (또는 새 Claude 인스턴스)
-**한 문장:** AegisData v3.6.0 — **퍼포먼스 자문 surface (v3.1→v3.6)** 출시. 동일 ATV-2080 이 트러스트 firewall 과 LLM serving runtime perf 자문을 동시 구동. M13 unified head 가 single ATV pass 로 verdict + KV cache + scheduling + placement 4 출력 발행. **968 tests PASS (+63)**, mypy 96 source files clean, ruff clean.
+**한 문장:** AegisData v3.7.0 — **context window advisor 추가**. 동일 ATV-2080 이 (트러스트 verdict / KV cache / scheduling / placement / **context window** = 5축) 모두 driven. **982 tests PASS (+14)**, mypy 97 source files clean, ruff clean.
 
-**v3.6 까지 release 완료:** v2.0.0 / v2.2.0 / v2.3.0 / v2.4.0 / v3.0.0 / **v3.6.0** 모두 GitHub tag + Release 발행됨.
+**v3.7 까지 release 완료:** v2.0.0 / v2.2.0 / v2.3.0 / v2.4.0 / v3.0.0 / v3.6.0 / **v3.7.0** 모두 GitHub tag + Release 발행됨.
+
+## 0-Y. v3.7 (이 세션 후속, 2026-04-28)
+
+ATV 의 새 적용 축: **token budget** (KV cache 와 다른 축. KV cache=물리메모리, context=논리 token).
+사용자 질문 "Context Window 절감" → `context_advisor` 구현.
+
+- `src/aegis/performance/context_advisor.py` — pure function (current ATV + history ATVs + token budget) → ContextAdvice (keep/summarize/drop turn IDs)
+- Relevance score = 0.45 × cosine(agent_state) + 0.20 × progress_match + 0.10 × novelty_match + 0.25 × recency
+- POST `/advisory/context` endpoint
+- 12-turn demo: budget 5000 → 50 % 절감, 2000 → 67 %, 800 → 87 %
+- Latency 0.087 ms (50-turn history)
+- 특허: PATENT_SUPPLEMENT_v3 §3.8 = **Claim 48** (구현). Claim 49 (subfield diff), Claim 50 (unified head v2 with 5 outputs) 은 v3.8 예약.
 
 ## 0-Z. v3.1 → v3.6 보강 (이 세션, 2026-04-28)
 
