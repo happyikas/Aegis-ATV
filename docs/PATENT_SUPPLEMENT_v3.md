@@ -1,0 +1,310 @@
+# AegisData 특허 보강 명세 (Provisional Supplement v3)
+
+**버전:** v3.6 (2026-04-28)
+**대상 출원:** US Provisional Patent `ATV_v7_10` (40 claims)
+**보강 범위:** ATV-2080 의 **트러스트 면**(기존 Claim 1–40)에서 **퍼포먼스 면**으로의 확장
+**구현 참조:** `src/aegis/performance/`, `src/aegis/judge/unified_head.py`,
+`integrations/{mlx_lm,llama_cpp,vllm}/`, `docs/VLLM_INTEGRATION_DESIGN.md`
+
+---
+
+## 0. 한 줄 요약
+
+> 기존 ATV-2080 텐서가 **AI 에이전트 도구 호출의 신뢰 검증**을 위해 설계되었으나,
+> 본 보강은 동일 텐서를 입력으로 **LLM 추론 런타임의 KV cache prefetch /
+> scheduling / memory placement** 를 하나의 결정론적 sub-millisecond 함수로
+> 자문(advisory)하는 메커니즘을 청구한다. **트러스트 면과 퍼포먼스 면이
+> 동일 ATV 텐서와 동일 attribution-head 아키텍처를 공유**한다는 것이
+> 핵심 차별점이다.
+
+---
+
+## 1. 배경 (기존 청구의 한계)
+
+기존 출원 (`ATV_v7_10`) 의 청구는 다음에 한정되어 있다:
+
+| 청구 번호 | 영역 | 출력 |
+|---|---|---|
+| Claim 1, 2 | ATV-2080 schema | 30 subfield × 1880 SW + 200 HW = 2080-D |
+| Claim 6, 7 | Sub-field encoder | 4 family (TEXT-EMBED / HASH-EXPAND / FEATURE-EXTRACT / ZERO) |
+| Claim 8 | M13 attribution head | (verdict, confidence, 30-key attribution) |
+| Claim 9 | Audit replay | model_hash 기반 deterministic re-run |
+| Claim 26, 27, 30 | HW/SW double-check | cost-divergence escalation |
+| Claim 34 | Cost attestation key | telemetry key 와 분리된 별도 서명 슬롯 |
+
+본 청구의 **출력은 모두 안전성 검증 (3-class verdict)** 에 한정된다.
+
+**한계점:**
+1. 동일 텐서가 가진 perf-relevant 신호 (`cache_hit_rate`,
+   `context_utilization_ratio`, `task_progress_score`,
+   `composite_novelty`, `prompt_structure`, `inter_agent_graph`,
+   `memory_provenance`) 가 **활용되지 않은 채 폐기**되고 있다.
+2. LLM 서빙 런타임 (vLLM, MLX-LM, llama.cpp, SGLang) 은 자체 LRU /
+   휴리스틱에 의존하여 KV cache 를 관리, **multi-agent 환경에서 발생하는
+   sub-task 단위의 hot/cold 패턴을 인식하지 못한다.**
+3. AI 에이전트별 cohort 정보 (동일 task phase, 유사 prompt 구조) 가
+   **scheduling 으로 흘러가지 못해**, 같은 cohort 의 요청이 분산 배치되어
+   batching 이득이 사라진다.
+
+---
+
+## 2. 보강 청구의 출발점 (Architectural Insight)
+
+**핵심 통찰:** ATV-2080 의 30 subfield 중 **13 개가 perf-relevant 시그널을
+담고 있다**:
+
+| Subfield | 슬롯 | Perf 의미 |
+|---|---|---|
+| `cost_efficiency_metrics` | 16 | `cache_hit_rate` (s-10), `context_utilization_ratio` (s-11), `cumulative_tokens` (s-4), `task_progress_score` (s-15) |
+| `novelty_score` | 4 | `composite_novelty` (idx 3) — speculative decode 적합도 |
+| `prompt_structure` | 16 | code-block presence, length-norm — speculative & batching |
+| `action_history` | 640 | 같은 history 패턴 = 같은 KV layout |
+| `agent_state_embedding` | 768 | cohort key 의 안정 부분 |
+| `inter_agent_graph` | 128 | cross-agent shared prefix |
+| `memory_provenance` | 64 | hash-derived KV segment id |
+| `action_blast_radius` | 16 | preempt safety 신호 |
+| `tool_arg_inspection` | 32 | destructive verb / fs write — preempt 위험 |
+| `human_oversight_state` | 8 | operator presence → priority class |
+| `aid_ats_scalars` | 8 | T3 deployment 여부 → CSD 티어 가용성 |
+| `qom_scores` | 16 | progress freshness/relevance 종합 |
+| `mcp_trust_signals` | 12 | tool desc churn → cache invalidation 신호 |
+
+따라서 같은 텐서를 입력으로 **다른 헤드를 추가**하면 별도 모델 코드 수정 없이
+런타임에 perf hint 를 흘릴 수 있다.
+
+---
+
+## 3. 보강 청구 (Claims Extension)
+
+### 3.1 Claim 41 — ATV-기반 KV cache 자문 헤드
+
+> **`Claim 41`**: 청구항 1 의 ATV-2080 텐서를 입력으로 하여
+> ``(prefetch_segment_ids, evict_candidates, residency_class,
+> batch_key, speculative_decode, advisor_hash)`` 를 출력하는
+> **결정론적 sub-millisecond 자문 함수**를 갖는 시스템으로서, 상기
+> ``residency_class`` 는 ``cost_efficiency_metrics`` 의 슬롯
+> ``s-10/s-11/s-15`` 와 ``novelty_score`` 의 ``composite_novelty``
+> 로부터 hot|warm|cold 의 3-class 로 결정되고, 상기 ``batch_key`` 는
+> ``agent_state_embedding`` + ``action_blast_radius`` 의 양자화된
+> SHA3-256 해시로부터 도출되며, 상기 ``advisor_hash`` 는 자문 함수의
+> 코드 버전 식별자의 SHA3-256 으로 정의되어 audit replay 가
+> 가능한 시스템.
+
+**구현 참조:** [src/aegis/performance/kv_cache_advisor.py](../src/aegis/performance/kv_cache_advisor.py)
+
+### 3.2 Claim 42 — Closed-loop perf attestation
+
+> **`Claim 42`**: 청구항 41 의 시스템에 있어, 상기 LLM 서빙 런타임이
+> 측정한 ``cache_hit_rate``, ``context_utilization_ratio``,
+> ``tokens_per_second``, ``runtime_latency_ms``, ``memory_peak_bytes``
+> 를 (tenant_id, aid) 키 별 **EWMA 저장소**에 누적하고, 다음 turn 의
+> ATV 빌드 시 호스트가 명시적으로 채우지 않은 cost band 슬롯을
+> 상기 EWMA 값으로 backfill 하되, **호스트 명시 값은 결코 덮어쓰지
+> 않음으로써** 호스트 우선권을 보장하는 시스템. 상기 EWMA 가
+> 청구항 34 의 cost-attestation key 로 서명되는 경우, 자문은
+> **서명된 측정치 기반의 폐쇄 루프 자문 (signed closed-loop
+> advisory)** 이 된다.
+
+**구현 참조:** [src/aegis/performance/feedback.py](../src/aegis/performance/feedback.py),
+[src/aegis/api/tool_outcome.py](../src/aegis/api/tool_outcome.py)
+
+### 3.3 Claim 43 — Scheduling 자문 헤드
+
+> **`Claim 43`**: 청구항 1 의 ATV 를 입력으로
+> ``(priority_class, preempt_safe, max_concurrent_in_cohort,
+> deadline_ms, advisor_hash)`` 를 출력하는 결정론적 sub-millisecond
+> scheduling 자문 함수로서, ``priority_class`` 는
+> ``human_oversight_state`` 의 ``operator_present``,
+> ``action_blast_radius`` 의 ``blast_radius_norm``,
+> ``novelty_score`` 의 ``composite_novelty`` 로부터
+> interactive|batch|low 의 3-class 로 결정되고,
+> ``preempt_safe`` 는 ``tool_arg_inspection`` 의 ``destructive_verb``
+> + ``filesystem_write`` 슬롯의 부재로 결정되는 시스템.
+
+**구현 참조:** [src/aegis/performance/scheduling_advisor.py](../src/aegis/performance/scheduling_advisor.py)
+
+### 3.4 Claim 44 — Memory placement 자문 헤드
+
+> **`Claim 44`**: 청구항 1 의 ATV 를 입력으로 ``(layer_residency_plan,
+> kv_quantisation_dtype, prefetch_window_tokens, swap_threshold_bytes,
+> advisor_hash)`` 를 출력하는 결정론적 자문 함수로서, 상기
+> ``layer_residency_plan`` 은 [layer_index → tier] 의 사상으로 표현
+> 되고, ``tier`` 는 hbm|cpu|csd 중 선택되며, ``aid_ats_scalars`` 의
+> T3-flag 가 set 된 경우에 한해 csd tier 가 후보가 되어 청구항 26
+> 의 cost-attestation profile 과 정렬되는 시스템.
+
+**구현 참조:** [src/aegis/performance/placement_advisor.py](../src/aegis/performance/placement_advisor.py)
+
+### 3.5 Claim 45 — Unified attribution head
+
+> **`Claim 45`**: 청구항 8 의 M13 attribution head 를 확장하여,
+> 단일 ATV 입력 통과로 (a) 청구항 8 의 verdict + 30-key attribution,
+> (b) 청구항 41 의 KV cache 자문, (c) 청구항 43 의 scheduling 자문,
+> (d) 청구항 44 의 placement 자문 의 **4 종 출력을 동시에**
+> 생성하고, 상기 4 출력의 advisor_hash 들을 정렬-결합한
+> SHA3-256 을 ``unified_hash`` 로 발행하여, audit replay 시
+> 4 헤드 중 **하나라도 버전이 다르면 unified_hash 가 달라져
+> 검출 가능한** 시스템.
+
+**구현 참조:** [src/aegis/judge/unified_head.py](../src/aegis/judge/unified_head.py)
+
+### 3.6 Claim 46 — Advisor-as-hint protocol
+
+> **`Claim 46`**: 청구항 41–45 의 자문 출력은 **권고 (advisory)** 로
+> 만 정의되고, LLM 서빙 런타임은 자문을 (a) 적용, (b) 부분 적용,
+> (c) 무시 중 임의를 선택할 수 있으며, 자문이 5 ms 이내에
+> 도착하지 않거나 ``confidence < threshold`` 인 경우 런타임은
+> 자체 휴리스틱으로 **graceful fallback** 한다. 본 advisory-only
+> 프로토콜로 인해 LLM 모델 코드의 수정이 요구되지 않으며, 본
+> 발명은 **모델 외부의 메모리/스케줄러 레이어** 에 한정 적용된다.
+
+**구현 참조:** [docs/VLLM_INTEGRATION_DESIGN.md](VLLM_INTEGRATION_DESIGN.md),
+[integrations/vllm/__init__.py](../integrations/vllm/__init__.py)
+
+### 3.7 Claim 47 — Cross-tenant cache federation (선택적)
+
+> **`Claim 47`**: 청구항 41 의 ``batch_key`` 는 ``agent_state_embedding``
+> + ``action_blast_radius`` 만 의존하므로, **여러 tenant 가 동일
+> 모델/동일 task phase 에 있을 때 동일 batch_key 를 공유**할 수 있고,
+> 이 경우 청구항 34 의 cost-attestation key 를 통해 **tenant 간 KV
+> segment 의 cross-rental** 이 권리행사로 가능하며, 자문은 해당
+> federation 의 멤버십 hint 로 동작하는 시스템.
+
+**Note:** Claim 47 은 옵션 — federation 기능 자체는 v3.x 에 미구현,
+v4.x 의 milestone 으로 예약.
+
+---
+
+## 4. 본 보강의 차별점 (Why This Is Novel)
+
+### 4.1 트러스트와 퍼포먼스의 통합 텐서
+
+| 관점 | 기존 LLM 시스템 | AegisData v3 |
+|---|---|---|
+| 트러스트 검증 | Constitutional AI / 별도 firewall | ATV-2080 + M13 head |
+| 퍼포먼스 최적화 | LRU / vLLM PagedAttention 자체 | ATV-2080 + 자문 헤드 |
+| 입력 텐서 | **분리** | **통일** (동일 2080-D) |
+| 학습 | 독립 | M13 weights 학습 시 양면 동시 신호 사용 가능 (v4.x) |
+
+### 4.2 Advisory-only 프로토콜의 함의
+
+- vLLM / MLX-LM / llama.cpp 중 **하나도 fork 하지 않는다**.
+- 모델 가중치 / inference 코드 일체 변경 없음.
+- 자문 endpoint (HTTP, ≤5 ms p99) 가 모든 결합점.
+- Aegis 가 unreachable 이어도 런타임은 native 휴리스틱으로 동작.
+
+### 4.3 Closed-loop attestation
+
+- 호스트 자기보고 vs 런타임 측정 의 **이중 신호**.
+- T3 hardware (M19+) 와 결합 시 측정치 자체가 cost-attestation key 로
+  서명 → audit-grade perf telemetry.
+- 청구항 26/27 의 HW/SW double-check 와 같은 패턴 적용.
+
+### 4.4 Unified hash 의 audit 가치
+
+- 4 헤드 중 어느 하나라도 버전 변경 → ``unified_hash`` 변경.
+- ``aegis verify-audit`` 가 트러스트 + 퍼포먼스 자문 전체를 한 번에 검증.
+- 규제 측에서 "누가 어떤 perf 결정을 했는가" 를 결정론적으로 재현 가능.
+
+---
+
+## 5. 실시례 (Reference Implementation)
+
+### 5.1 v3.1 KV cache advisor
+
+```
+src/aegis/performance/kv_cache_advisor.py     ←  Claim 41
+src/aegis/api/advisory.py                     ←  POST /advisory/kv_cache
+demo/kv_cache_advisor.py                      ←  5-scenario demo
+tests/unit/test_kv_cache_advisor.py           ←  14 unit tests (PASS)
+```
+
+**측정값** (M3 Mac, 2026-04):
+- 평균 latency: 0.011 ms (p50), 0.035 ms (p99)
+- Bit-determinism: 동일 ATV 입력에서 100 % 동일 출력
+- Pure function: 외부 I/O 없음, lock 없음
+
+### 5.2 v3.2 Closed-loop feedback
+
+```
+src/aegis/performance/feedback.py             ←  Claim 42
+src/aegis/api/tool_outcome.py                 ←  /tool-outcome 확장
+src/aegis/api/{advisory,evaluate}.py          ←  backfill 적용
+tests/unit/test_perf_feedback.py              ←  13 unit tests (PASS)
+```
+
+**EWMA 파라미터:** α=0.30 (recent 30 %, history 70 %).
+호스트 명시 값은 절대 덮어쓰지 않음 (test_host_supplied_value_not_overwritten 으로 검증).
+
+### 5.3 v3.4 Scheduling + Placement advisors
+
+```
+src/aegis/performance/scheduling_advisor.py   ←  Claim 43
+src/aegis/performance/placement_advisor.py    ←  Claim 44
+src/aegis/api/advisory.py                     ←  /advisory/{scheduling,placement,all}
+tests/unit/test_scheduling_placement.py       ←  18 unit tests (PASS)
+```
+
+### 5.4 v3.5 vLLM integration
+
+```
+integrations/vllm/__init__.py                 ←  Claim 46 reference shim
+docs/VLLM_INTEGRATION_DESIGN.md               ←  3 plug-point design
+tests/unit/test_runtime_adapters.py           ←  10 unit tests (PASS, 3 vLLM)
+```
+
+### 5.5 v3.6 Unified head
+
+```
+src/aegis/judge/unified_head.py               ←  Claim 45
+src/aegis/api/advisory.py                     ←  POST /advisory/unified
+tests/unit/test_unified_head.py               ←  8 unit tests (PASS)
+```
+
+**unified_hash 안정성:** 동일 4 헤드 버전 → 동일 hash, 입력 ATV 무관
+(test_unified_hash_stable_across_calls 로 검증).
+
+**트러스트 경로 동등성:** UnifiedHead.evaluate_unified() 의 verdict
+경로는 v2.5 AttributionHead 와 bit-identical
+(test_unified_verdict_path_matches_attribution_head 로 검증).
+
+---
+
+## 6. 출원 전 체크리스트
+
+- [x] Reference implementation: `src/aegis/performance/`, `src/aegis/judge/unified_head.py`
+- [x] Unit tests: 968 passed (1 skipped — llama-cpp 미설치)
+- [x] Type-check clean: mypy 96 source files
+- [x] Lint clean: ruff
+- [x] HTTP endpoints exposed: `/advisory/{kv_cache,scheduling,placement,all,unified}`
+- [x] Demo runnable: `demo/kv_cache_advisor.py`, `demo/runtime_closed_loop.py`
+- [x] vLLM design doc: `docs/VLLM_INTEGRATION_DESIGN.md`
+- [ ] vLLM 실제 환경 벤치마크 (cache_hit_rate uplift) — v4.x milestone
+- [ ] 학습된 unified head 가중치 — v4.x milestone
+- [ ] T3 hardware 의 cost-attestation key 서명 통합 — M19+ 시점
+
+---
+
+## 7. 후속 milestone (v4.x)
+
+1. **Learned unified head** — 손-튜닝 (heuristic) 가중치를 학습된
+   M13 weights 로 교체. 트러스트 + 퍼포먼스 양면의 ground truth 신호로
+   joint training. v3.6 의 architectural seam 위에 그대로 plug.
+2. **vLLM 실 환경 통합** — 본 보강 §5 의 reference shim 을 실제
+   vLLM 환경에서 컴파일 / 벤치마크.
+3. **vLLM upstream PR** — `BlockManager` 의 plug-point 를 upstream 으로
+   제안 (subclass 강제 없이 hook 으로).
+4. **Federation (Claim 47)** — cross-tenant batch_key 공유.
+5. **Hardware closed loop** — T3 silicon (M19+) 의 cost-attestation key 로
+   런타임 측정치 서명 → signed closed-loop attestation.
+
+---
+
+## 8. 참고
+
+- 본 보강은 **기존 출원의 dependent claim** 으로 추가 출원 권고.
+- 주 출원: `ATV_v7_10` (40 claims, 본 출원의 모체)
+- 본 보강의 모든 reference implementation 은
+  [happyikas/Aegis-ATV](https://github.com/happyikas/Aegis-ATV) 의
+  `main` 브랜치에 v3.6.0 tag 로 동결됨.
+- 968 자동 테스트 PASS, mypy/ruff clean, IEEE-754 결정론적.

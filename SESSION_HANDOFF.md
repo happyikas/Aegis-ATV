@@ -1,11 +1,39 @@
 # AegisData MVP — 세션 핸드오프 (Session Handoff)
 
-**상태 스냅샷:** 2026-04-28 (v3.0.0)
+**상태 스냅샷:** 2026-04-28 (**v3.6.0**)
 **Repo:** [happyikas/Aegis-ATV](https://github.com/happyikas/Aegis-ATV) (private)
 **대상:** 새 Claude Code 챗 창에서 이 프로젝트 작업을 이어가는 사람 (또는 새 Claude 인스턴스)
-**한 문장:** AegisData v3.0.0 — ATV-native sLLM stack 출시. M1–M17 + step311 donor 룰팩 + v2.1 Safe Auto-Run + v2.2 Poisoned Instruction Detector + v2.3 HW emulator + v2.4 step337 HW anomaly gate + **v3.0 M13 attribution head + LocalPhiJudge stub-friendly + HybridJudge confidence-routing**. **905 tests PASS (+ 1 skip)**, mypy 89 source files clean, ruff clean, 12-incident donor KPI + 7-시나리오 회귀 0, 6/6 simulator HW attack 차단.
+**한 문장:** AegisData v3.6.0 — **퍼포먼스 자문 surface (v3.1→v3.6)** 출시. 동일 ATV-2080 이 트러스트 firewall 과 LLM serving runtime perf 자문을 동시 구동. M13 unified head 가 single ATV pass 로 verdict + KV cache + scheduling + placement 4 출력 발행. **968 tests PASS (+63)**, mypy 96 source files clean, ruff clean.
 
-**v3.0 까지 release 완료:** v2.0.0 / v2.2.0 / v2.3.0 / v2.4.0 / v3.0.0 모두 GitHub tag + Release 발행됨.
+**v3.6 까지 release 완료:** v2.0.0 / v2.2.0 / v2.3.0 / v2.4.0 / v3.0.0 / **v3.6.0** 모두 GitHub tag + Release 발행됨.
+
+## 0-Z. v3.1 → v3.6 보강 (이 세션, 2026-04-28)
+
+같은 ATV-2080 텐서 위에 **퍼포먼스 자문 4-head 아키텍처** 추가.
+모델 코드 수정 없이 LLM serving runtime 의 메모리/스케줄러 레이어에
+out-of-band hint 를 흘림. 기존 트러스트 면과 ATV 입력 100 % 공유.
+
+| 릴리스 | 산출물 | 출력 |
+|---|---|---|
+| v3.1 | `src/aegis/performance/kv_cache_advisor.py` | KVCacheAdvice (prefetch/evict/residency/batch_key/speculative) |
+| v3.2 | `src/aegis/performance/feedback.py` | per-(tenant,aid) EWMA closed-loop |
+| v3.3 | `integrations/{mlx_lm,llama_cpp}/` | runtime adapters |
+| v3.4 | `src/aegis/performance/{scheduling,placement}_advisor.py` | SchedulingAdvice + PlacementAdvice |
+| v3.5 | `integrations/vllm/` + `docs/VLLM_INTEGRATION_DESIGN.md` | vLLM shim + design doc |
+| v3.6 | `src/aegis/judge/unified_head.py` | UnifiedVerdict (verdict + 3 perf 출력 + unified_hash) |
+
+**HTTP endpoints:** `/advisory/kv_cache` `/advisory/scheduling`
+`/advisory/placement` `/advisory/all` `/advisory/unified`
+
+**특허 보강 문서:** [docs/PATENT_SUPPLEMENT_v3.md](docs/PATENT_SUPPLEMENT_v3.md)
+— Claims 41–47 (KV cache 자문 / closed-loop attestation /
+scheduling 자문 / placement 자문 / unified head / advisor-as-hint /
+cross-tenant federation).
+
+**Performance 측정** (M3 Mac):
+- KV cache advisor: 0.011 ms p50, 0.035 ms p99
+- Closed-loop demo: 8 turn 후 advice confidence 0.40 → 0.85
+- Unified head: 트러스트 + 3 perf 출력 single ATV pass <10 ms (실측 ≪1 ms)
 
 ---
 

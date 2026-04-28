@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 
 from aegis import __version__
 from aegis.api.admin_aid import make_router as _admin_aid_router
+from aegis.api.advisory import make_router as _advisory_router
 from aegis.api.approve import make_router as _approve_router
 from aegis.api.attestation import make_router as _attestation_router
 from aegis.api.audit_query import make_router as _audit_router
@@ -120,6 +121,7 @@ def create_app(
     app.include_router(_admin_aid_router(breaker=get_circuit_breaker()))
     app.include_router(_replay_router(journal=encrypted_journal))
     app.include_router(_ham_router(store=ham_store))
+    app.include_router(_advisory_router())
 
     if _STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
