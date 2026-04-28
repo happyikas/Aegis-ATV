@@ -21,12 +21,21 @@ patent v7.10. The original 7-day MVP design is in [`PLAN.md`](PLAN.md);
 the patent-aligned re-plan and per-milestone status is in
 [`PLAN_v2.md`](PLAN_v2.md).
 
-**Status (2026-04-27):** v2.3.0 — **must-install + T3 hardware-emulated**.
-M1–M17 + step311 donor rule pack + v2.1 Safe Auto-Run + v2.2 Poisoned
-Instruction Detector + **v2.3 SW emulation of HW/SW double-check**.
-**829 tests pass**, ruff clean, mypy strict over 85 source files.
+**Status (2026-04-28):** v2.4.0 — **must-install + T3 emulator with HW
+anomaly gate**. M1–M17 + step311 donor rule pack + v2.1 Safe Auto-Run +
+v2.2 Poisoned Instruction Detector + v2.3 SW emulation of HW/SW
+double-check + **v2.4 step337 HW band anomaly gate**.
+**849 tests pass**, ruff clean, mypy strict over 86 source files.
 
 ```bash
+# v2.3+v2.4 HW/SW double-check live demo (no install needed)
+AEGIS_EMBEDDING_PROVIDER=dummy AEGIS_JUDGE_PROVIDER=dummy \
+  uv run python demo/hw_double_check.py
+# honest agent ✓ + 6 attack modes ✗ all caught
+#   3 by M12 escalation (Claim 27 cost axis)
+#   3 by step337 (HW band IOMMU / hypervisor / network exfil)
+
+# Sidecar mode: enable simulator + inject attack for demo
 AEGIS_HW_PROVIDER=sim                              # T3 emulation on (HW band populated)
 AEGIS_HW_INJECT_ATTACK=token_flops_mismatch        # demo: M12 escalation fires
 ```
