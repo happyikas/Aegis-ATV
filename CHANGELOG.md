@@ -4,6 +4,52 @@ All notable changes to AegisData MVP. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.7.0] — 2026-04-28  ·  Context window advisor
+
+ATV-based **token-budget-aware** decision of which historical turns
+to keep verbatim, summarise, or drop. Different axis from KV cache:
+KV cache works at the runtime memory layer; context advisor works
+at the prompt-construction layer. Both consume the same ATV.
+
+### Added
+
+* `src/aegis/performance/context_advisor.py` — pure function
+  `(current_atv, history_atvs, history_turn_ids, history_token_costs,
+  token_budget) → ContextAdvice` with `keep_verbatim_turn_ids`,
+  `summarize_turn_ids`, `drop_turn_ids`, `expected_token_savings`,
+  per-turn relevance scores, `advisor_hash`. Frozen weights (0.45
+  state cosine, 0.20 progress match, 0.10 novelty proximity, 0.25
+  recency with 8-turn half-life). Greedy ROI fit under token_budget.
+* `src/aegis/api/advisory.py` — `POST /advisory/context` accepting
+  current ATVInput + list of historical (turn_id, atv_input,
+  token_cost) + token_budget.
+* `demo/context_advisor.py` — 12-turn three-phase conversation,
+  three budgets (5000 / 2000 / 800 tokens). Recent same-phase
+  turns score 0.85+ → keep; older different-phase turns drop first.
+* `tests/unit/test_context_advisor.py` — 14 unit tests covering
+  pure-function shape, determinism, budget fit, recency tie-breaks,
+  per-turn bucket consistency, latency, endpoint integration.
+
+### Patent
+
+* `docs/PATENT_SUPPLEMENT_v3.md` — Claims 48–50 added:
+  * **Claim 48** — context window advisory head over ATV history
+    (implemented).
+  * **Claim 49** — subfield-selective ATV diff compression (deferred).
+  * **Claim 50** — unified head v2 with 5 outputs including context
+    (deferred to v3.8).
+
+### Numbers
+
+* **982 tests PASS** (968 → 982, +14), 1 skipped (llama-cpp).
+* **mypy 97 source files clean.**
+* **ruff clean.**
+* Latency: 0.087 ms for 50-turn history (M3 Mac).
+* Demo savings: 50 % (budget=5000) / 67 % (2000) / 87 % (800)
+  on a 12-turn 6050-token simulated history.
+
+---
+
 ## [3.6.0] — 2026-04-28  ·  Performance advisory surface (v3.1 → v3.6)
 
 The same ATV-2080 that powers the trust firewall now drives **out-of-band
