@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT))
 
 from integrations.llama_cpp import LlamaCppAegisAdvisor  # noqa: E402
 from integrations.mlx_lm import MLXLMAegisAdvisor  # noqa: E402
+from integrations.vllm import VLLMAegisAdvisor  # noqa: E402
 
 
 def _mock_advice_response(**overrides: Any) -> Any:
@@ -118,3 +119,88 @@ def test_llama_advisor_preserves_raw_payload() -> None:
         advice = advisor.advise({})
     assert "advisor_hash" in advice.raw
     assert advice.raw["confidence"] == 0.85
+
+
+# ── vLLM ──────────────────────────────────────────────────────────────
+
+
+def _mock_advisory_all_response(**overrides: Any) -> Any:
+    payload = {
+        "kv_cache": {
+            "prefetch_segment_ids": ["mem-1", "mem-2"],
+            "evict_candidates": ["hist-X"],
+            "residency_class": "hot",
+            "batch_key": "cohort-A",
+            "speculative_decode": True,
+            "confidence": 0.80,
+            "reasons": [],
+            "latency_ms": 0.3,
+            "advisor_hash": "h1",
+        },
+        "scheduling": {
+            "priority_class": "interactive",
+            "preempt_safe": False,
+            "max_concurrent_in_cohort": 8,
+            "deadline_ms": 2000,
+            "confidence": 0.75,
+            "reasons": [],
+            "latency_ms": 0.2,
+            "advisor_hash": "h2",
+        },
+        "placement": {
+            "layer_residency_plan": {0: "hbm", 1: "hbm"},
+            "kv_quantisation_dtype": "f16",
+            "prefetch_window_tokens": 128,
+            "swap_threshold_bytes": 1_000_000_000,
+            "confidence": 0.70,
+            "reasons": [],
+            "latency_ms": 0.2,
+            "advisor_hash": "h3",
+        },
+    }
+    payload.update(overrides)
+    body = json.dumps(payload).encode("utf-8")
+    mock_resp = MagicMock()
+    mock_resp.__enter__ = lambda self: io.BytesIO(body)
+    mock_resp.__exit__ = lambda *args: None
+    return mock_resp
+
+
+def test_vllm_advisor_projects_combined_response() -> None:
+    advisor = VLLMAegisAdvisor()
+    with patch("urllib.request.urlopen", return_value=_mock_advisory_all_response()):
+        advice = advisor.advise({})
+    assert advice.pin_block_ids == ["mem-1", "mem-2"]
+    assert advice.evict_priority_block_ids == ["hist-X"]
+    assert advice.priority_class == "interactive"
+    assert advice.kv_dtype == "f16"
+    assert advice.prefetch_tokens == 128
+    assert advice.cohort == "cohort-A"
+    assert advice.speculative_decode is True
+    # Average of 0.80, 0.75, 0.70
+    assert 0.74 < advice.confidence < 0.76
+
+
+def test_vllm_advisor_preserves_raw_subblocks() -> None:
+    advisor = VLLMAegisAdvisor()
+    with patch("urllib.request.urlopen", return_value=_mock_advisory_all_response()):
+        advice = advisor.advise({})
+    assert advice.raw_kv_cache["advisor_hash"] == "h1"
+    assert advice.raw_scheduling["advisor_hash"] == "h2"
+    assert advice.raw_placement["advisor_hash"] == "h3"
+
+
+def test_vllm_advisor_handles_partial_payload() -> None:
+    """If /advisory/all returns degraded data (e.g. one head failed),
+    the projector falls back to safe defaults."""
+    advisor = VLLMAegisAdvisor()
+    body = json.dumps({"kv_cache": {}}).encode("utf-8")
+    mock_resp = MagicMock()
+    mock_resp.__enter__ = lambda self: io.BytesIO(body)
+    mock_resp.__exit__ = lambda *args: None
+    with patch("urllib.request.urlopen", return_value=mock_resp):
+        advice = advisor.advise({})
+    assert advice.pin_block_ids == []
+    assert advice.priority_class == "batch"
+    assert advice.kv_dtype == "f16"
+    assert advice.confidence == 0.0
