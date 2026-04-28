@@ -21,14 +21,20 @@ patent v7.10. The original 7-day MVP design is in [`PLAN.md`](PLAN.md);
 the patent-aligned re-plan and per-milestone status is in
 [`PLAN_v2.md`](PLAN_v2.md).
 
-**Status (2026-04-28):** v2.4.0 — **must-install + T3 emulator with HW
-anomaly gate**. M1–M17 + step311 donor rule pack + v2.1 Safe Auto-Run +
-v2.2 Poisoned Instruction Detector + v2.3 SW emulation of HW/SW
-double-check + **v2.4 step337 HW band anomaly gate**.
-**849 tests pass**, ruff clean, mypy strict over 86 source files.
+**Status (2026-04-28):** v3.0.0 — **ATV-native sLLM stack**. M1–M17 +
+step311 donor rule pack + v2.1 Safe Auto-Run + v2.2 Poisoned
+Instruction Detector + v2.3 HW emulation + v2.4 step337 HW anomaly
+gate + **v3.0 attribution-head + local-Phi + hybrid judge**.
+**905 tests pass**, ruff clean, mypy strict over 89 source files.
 
 ```bash
-# v2.3+v2.4 HW/SW double-check live demo (no install needed)
+# v3.0: confidence-routing judge tower (M13 → Phi → Haiku → Dummy)
+export AEGIS_JUDGE_PROVIDER=hybrid
+AEGIS_EMBEDDING_PROVIDER=dummy AEGIS_JUDGE_PROVIDER=dummy \
+  uv run python demo/judge_stack.py
+# 5 / 5 scenarios decided at Tier 1 (M13) in <1ms aggregate
+
+# v2.3+v2.4 HW/SW double-check live demo
 AEGIS_EMBEDDING_PROVIDER=dummy AEGIS_JUDGE_PROVIDER=dummy \
   uv run python demo/hw_double_check.py
 # honest agent ✓ + 6 attack modes ✗ all caught
