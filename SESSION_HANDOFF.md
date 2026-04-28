@@ -1,8 +1,59 @@
 # AegisData MVP — 세션 핸드오프 (Session Handoff)
 
-**상태 스냅샷:** 2026-04-27 (v2.2.0)
+**상태 스냅샷:** 2026-04-28 (v3.0.0)
+**Repo:** [happyikas/Aegis-ATV](https://github.com/happyikas/Aegis-ATV) (private)
 **대상:** 새 Claude Code 챗 창에서 이 프로젝트 작업을 이어가는 사람 (또는 새 Claude 인스턴스)
-**한 문장:** AegisData v2.2.0 — must-install 단계 도달. v2.0 sidecar+plugin 위에 v2.1 (Safe Auto-Run, cloud destructive 룰, Loop Saver, `aegis report`, local SHA3 audit chain) + v2.2 (Poisoned Instruction Detector — CLAUDE.md / AGENTS.md / .mcp.json baseline) 추가. **792 테스트 PASS**, mypy 82 source files clean, ruff clean, 12/12 donor incident + 7-시나리오 회귀 0.
+**한 문장:** AegisData v3.0.0 — ATV-native sLLM stack 출시. M1–M17 + step311 donor 룰팩 + v2.1 Safe Auto-Run + v2.2 Poisoned Instruction Detector + v2.3 HW emulator + v2.4 step337 HW anomaly gate + **v3.0 M13 attribution head + LocalPhiJudge stub-friendly + HybridJudge confidence-routing**. **905 tests PASS (+ 1 skip)**, mypy 89 source files clean, ruff clean, 12-incident donor KPI + 7-시나리오 회귀 0, 6/6 simulator HW attack 차단.
+
+**v3.0 까지 release 완료:** v2.0.0 / v2.2.0 / v2.3.0 / v2.4.0 / v3.0.0 모두 GitHub tag + Release 발행됨.
+
+---
+
+## 0-A. 이 세션 (2026-04-26 ~ 04-28) 의 architectural conversations 요약
+
+새 세션이 컨텍스트 못 받게 되어도 다음 6 개 통찰만은 보존:
+
+1. **ATV-2080 ≠ 단일 LLM embedding**. 30 subfield 가 4 family 로 인코딩됨:
+   - **TEXT-EMBED** (3개): `agent_state_embedding` 768, `action_history` 640, `output_content_fingerprint` hash 52 — cosine 거리가 의미적 유사성과 상응 (OpenAI provider 시).
+   - **HASH-EXPAND** (4개): `inter_agent_graph` 128, `memory_provenance` 64, hashed n-gram tails — SHA3 결정성, cosine 거리 = exact-match 만 의미.
+   - **FEATURE-EXTRACT** (12개): `cost_efficiency_metrics` 16 슬롯, `action_blast_radius`, `tool_arg_inspection` 등 — named slot 기반, dataframe row 같은 구조.
+   - **HW band** (11개, 200-D): T2 zero-fill, sim 또는 real T3 에서 채움.
+
+2. **sLLM 도 generic LLM 이 아닌 ATV-native 가 차별화**. v3.0 hybrid stack (M13 → Phi → Haiku → Dummy) 가 도착점. M13 single tier 가 보통 <1ms 에 결정 (905 테스트 + live demo 검증). 일반 LLM-everywhere 대비 30-50× faster aggregate, 95% bit-deterministic.
+
+3. **HW/SW double-check** 는 같은 ATV 안에서 SW band 1880-D (agent 자기 보고) vs HW band 200-D (별도 키 서명, 물리 측정) 비교. v2.3 simulator 가 6 attack mode 로 escalation gate 활성. v2.4 step337 가 IOMMU/network/thermal 시그널 → BLOCK/ASK 전환. 6/6 attack catch.
+
+4. **T3 hardware 미구현**. M17 TEE attestation 만 mock provider. M18 (ML-DSA) ~ M22 (CSD) 모두 procurement 대기. v2.3 SW emulator 가 그 사이를 메우는 역할 — `HWCounters` envelope 가 실 silicon 의 contract 와 일치하므로 M19+ 시 driver swap 으로 활성화 가능.
+
+5. **Performance axis 는 미발굴 surface — 다음 가장 큰 가치**. ATV 의 30 subfield 중 13개가 perf-relevant (cache_hit_rate, context_utilization_ratio, novelty_score, prompt_structure, ...). v3.x 후속 작업: `aegis.performance.kv_cache_advisor` — ATV → KVCacheAdvice (prefetch, evict, residency, batch_key, speculative on/off). Inference server (vLLM/MLX/llama.cpp) 가 advisory consumer. Trust 면 + Perf 면이 같은 ATV 텐서를 공유하는 게 patent 차별화.
+
+6. **현재 11-step firewall pipeline:**
+   ```
+   step305_safe_allowlist     v2.1.1
+   step309_instruction_drift  v2.2 (opt-in via AEGIS_INSTRUCTION_BASELINE_PATH)
+   step310_args
+   step311_donor_rules        D11 + v2.1.2 (9개 룰)
+   step312_normalize          DOGFOOD #3
+   step315_aid_auth           M14
+   step320_blast
+   step330_human
+   step335_cost
+   step336_loop               v2.1.3
+   step337_hw_anomaly         v2.4 (no-op when AEGIS_HW_PROVIDER!=sim)
+   step340_policy             (sLLM judge — provider 선택)
+   ```
+
+---
+
+## 0-B. v3.0 까지의 마일스톤 commit 체인 (main)
+```
+20cf507 v3.0.0: ATV-native sLLM stack — M13 + LocalPhi + Hybrid (#5)
+9bcf674 v2.4.0: step337_hw_anomaly — close v2.3 demo gap (#4)
+85a125c v2.3.0: T3 hardware-emulation — SW/HW double-check live (#3)
+735d591 v2.2.0: must-install — Safe Auto-Run + Poisoned Instruction Detector (#2)
+38b1ede v2.0.0: aegis-mvp plugin integration into T2 sidecar (#1)
+3cad747 docs: SESSION_HANDOFF.md — pre-v2.0 state
+```
 
 ---
 
