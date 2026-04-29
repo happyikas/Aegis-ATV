@@ -53,7 +53,8 @@ class Settings(BaseSettings):
     aegis_audit_db: str = "./data/audit.sqlite"
     aegis_audit_jsonl: str = "./data/audit.jsonl"
 
-    # ATMU Write-Ahead Intent Log — separate SQLite store from audit (M10).
+    # ATMU (Agent Telemetry Management Unit) Write-Ahead Intent Log
+    # — separate SQLite store from audit (M10).
     aegis_intent_log_db: str = "./data/intent_log.sqlite"
 
     aegis_policy_dir: str = "./policies"

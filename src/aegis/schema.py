@@ -28,7 +28,7 @@ fixed index assignments:
     HW band  (1880..2079, 200-D, 11 subfields — T2 zero-filled)
         1880 .. 1911  memory_timing_histograms       32
         1912 .. 1935  aid_tag_transitions            24
-        1936 .. 1951  atmu_anomaly                   16
+        1936 .. 1951  atmu_anomaly                   16    (ATMU = Agent Telemetry Management Unit)
         1952 .. 1967  dma_fanout                     16
         1968 .. 1983  thermal_ecc_drift              16
         1984 .. 1995  watchdog_signals               12

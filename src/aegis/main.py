@@ -5,7 +5,8 @@ Endpoints:
     GET  /static/*            — dashboard assets
     GET  /healthz             — liveness
     GET  /attestation         — signed Burn-in L3-L5 measurement
-    POST /evaluate            — main firewall + sign + audit (+ ATMU intent)
+    POST /evaluate            — main firewall + sign + audit (+ ATMU intent;
+                                ATMU = Agent Telemetry Management Unit, §5A)
     POST /approve             — record human approval
     POST /tool-outcome        — host posts post-release outcome (M10)
     GET  /audit/{aid}         — return signed chain for one agent

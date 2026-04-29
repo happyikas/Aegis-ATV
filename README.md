@@ -6,7 +6,7 @@
 
 A Python sidecar that wraps every AI-agent tool call in a 2,080-dimensional
 **Agent Trace Vector (ATV-2080-v1)**, runs it through a 7-stage Action
-Firewall, brackets the call in an **Agent Transaction Management Unit
+Firewall, brackets the call in an **Agent Telemetry Management Unit
 (ATMU)** Write-Ahead Intent Log, asks an sLLM judge when needed,
 **Ed25519-signs** every record, chains it into a **Merkle-linked
 audit log**, encrypts it into an **AES-256-GCM forensic journal**,
@@ -363,7 +363,7 @@ src/aegis/
 │   ├── step350_approval.py  M9 — approval dispatch (channels)
 │   ├── step360_audit.py     M9 — sign + append + cost_attestation_hint
 │   └── step370_exec.py      M9 — exec annotation (PROCEED/SUPPRESS/DEFER)
-├── atmu/                    M10 — Agent Transaction Management Unit
+├── atmu/                    M10 — Agent Telemetry Management Unit
 │   ├── state_machine.py     7-state machine + legal transitions
 │   ├── intent_log.py        SQLite-backed Write-Ahead Intent Log
 │   ├── checkpoint.py        blast≥7 checkpoint manifests

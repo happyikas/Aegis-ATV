@@ -1,4 +1,5 @@
-"""ATMU transaction state machine (patent APPENDIX B + Section 5A).
+"""ATMU (Agent Telemetry Management Unit) transaction state machine
+(patent APPENDIX B + Section 5A).
 
 Seven terminal/non-terminal states:
 

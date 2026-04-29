@@ -1,7 +1,8 @@
 """Pre-action checkpoint (patent ¶[0063E]).
 
-Before a high-blast tool invocation is released, the ATMU records a
-checkpoint comprising one or more of:
+Before a high-blast tool invocation is released, the ATMU
+(Agent Telemetry Management Unit) records a checkpoint comprising
+one or more of:
     - agent working-memory snapshot
     - context-window digest
     - file-system pre-image hash

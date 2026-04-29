@@ -37,7 +37,7 @@ These don't move when crossing T2 → T3. **Don't touch.**
 | Ed25519 signature verification procedure | T3 *adds* ML-DSA cosign but keeps Ed25519 |
 | The 4-key separation (telemetry / cost / journal / HAM) | Patent Claim 34 |
 | All policy file formats (`policies/*.json`) | Same — even M21's HW tag comparator reads the same `aid_region.json` |
-| ATMU state machine (7 states, legal transitions) | Same — T3's hardware checkpointing just changes the storage backing |
+| ATMU (Agent Telemetry Management Unit) state machine (7 states, legal transitions) | Same — T3's hardware checkpointing just changes the storage backing |
 
 ---
 

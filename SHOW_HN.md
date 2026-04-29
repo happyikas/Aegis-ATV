@@ -144,7 +144,8 @@ yourself, ideally within the first hour while the post is hot):
 > can independently re-verify the audit log, (c) AES-GCM forensic
 > journal so tampering surfaces at decrypt time, (d) per-AID circuit
 > breaker that auto-quarantines an agent after N violations, (e) ATMU
-> 2-phase commit so the firewall record and the tool's actual outcome
+> (Agent Telemetry Management Unit) 2-phase commit so the firewall
+> record and the tool's actual outcome
 > are bound. OPA does (a)-step (and well). The other five layers are
 > the patent's contribution.
 

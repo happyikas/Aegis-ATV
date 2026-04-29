@@ -1,4 +1,5 @@
-"""Write-Ahead Intent Log (patent ¶[0063A]-[0063H]).
+"""ATMU (Agent Telemetry Management Unit) — Write-Ahead Intent Log
+(patent ¶[0063A]-[0063H]).
 
 SQLite-backed WAL that records every proposed tool invocation as a
 tentative intent BEFORE it's released to the external tool. Each

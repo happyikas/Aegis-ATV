@@ -1,4 +1,5 @@
-"""End-to-end tests for ATMU integration into /evaluate + /tool-outcome (M10)."""
+"""End-to-end tests for ATMU (Agent Telemetry Management Unit)
+integration into /evaluate + /tool-outcome (M10)."""
 
 from __future__ import annotations
 

@@ -42,7 +42,7 @@ host (agent runtime)
   │  Verdict { decision, reason, atv_id, signature, step_traces }
   ▼
 host runs (or skips) the tool, then POSTs /tool-outcome to close the
-ATMU intent record [M10].
+ATMU (Agent Telemetry Management Unit) intent record [M10].
 
 Out-of-band:
   • GET /forensic/replay walks the encrypted journal             [M15]
