@@ -1,11 +1,31 @@
 # AegisData MVP — 세션 핸드오프 (Session Handoff)
 
-**상태 스냅샷:** 2026-04-29 (**v4.0.0**)
+**상태 스냅샷:** 2026-04-29 (**v4.1.0**)
 **Repo:** [happyikas/Aegis-ATV](https://github.com/happyikas/Aegis-ATV) (private)
 **대상:** 새 Claude Code 챗 창에서 이 프로젝트 작업을 이어가는 사람 (또는 새 Claude 인스턴스)
-**한 문장:** AegisData v4.0.0 — **AuditPatrol** 도입 (Claim 54). 백그라운드 daemon 이 6 종 무결성 검증 (Merkle, Ed25519, AES-GCM, SHA3 commitment, cross-store consistency, ATMU sequence gap) 을 5 cadence (5min/1h/1h/6h/24h) 로 자동 수행. **1045 tests PASS (+26)**, mypy 102 source files clean, ruff clean.
+**한 문장:** AegisData v4.1.0 — **HW telemetry collector framework** (Claim 55). 8 source aggregator 가 PMU/EDAC/IOMMU/ethtool/NVML/BMC + TEE/FPGA mock 을 단일 :class:`CollectorAggregator` 로 통합, T2 환경에서 ATV HW band 의 ~70 % 가 실 데이터로 채워짐. **1075 tests PASS (+30)**, mypy 113 source files clean, ruff clean.
 
-**v4.0 까지 release 완료:** v2.0.0 / v2.2.0 / v2.3.0 / v2.4.0 / v3.0.0 / v3.6.0 / v3.7.0 / v3.9.0 / **v4.0.0** 모두 GitHub tag + Release 발행됨.
+**v4.1 까지 release 완료:** v2.0.0 / v2.2.0 / v2.3.0 / v2.4.0 / v3.0.0 / v3.6.0 / v3.7.0 / v3.9.0 / v4.0.0 / **v4.1.0** 모두 GitHub tag + Release 발행됨.
+
+## 0-V. v4.1 (이 세션, 2026-04-29)
+
+`src/aegis/hw_telemetry/collectors/` — 8 source HW telemetry framework:
+
+| Collector | Source | T2? | T3 swap |
+|---|---|---|---|
+| PMU | `/proc/stat`, `/proc/loadavg` | ✅ | — |
+| EDAC | `/sys/devices/system/edac/` | ✅ | — |
+| IOMMU | `/sys/kernel/iommu_groups/` | ✅ | — |
+| Ethtool | `/proc/net/dev` | ✅ | — |
+| NVML | `pynvml` (optional) | ✅ (NVIDIA only) | — |
+| BMC Redfish | HTTP, opt-in | ✅ | — |
+| TEE Quote | mock (T2) | mock | TDX/SEV-SNP/CCA |
+| Aegis-FPGA | mock (T2) | mock | M21+ silicon |
+
+`AEGIS_HW_PROVIDER=real` 활성화 시 aggregator 가 실 데이터로 HW band 채움.
+미커버 slot 은 v2.3 simulator baseline 으로 fallback (zero-fill 노이즈 방지).
+
+Frozen collector priority order 가 patent Claim 55 의 일부.
 
 ## 0-W. v4.0 (이 세션, 2026-04-29)
 
