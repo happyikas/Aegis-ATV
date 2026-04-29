@@ -179,36 +179,83 @@ def _mock_quote(report_data_hex: str) -> TEEQuote:
 
 
 def _tdx_quote(report_data_hex: str) -> TEEQuote:
-    """Read a real TDX quote via /dev/tdx_guest.
+    """Read a real TDX TDREPORT via ``/dev/tdx_guest`` (v4.4).
 
-    Pattern: open the device, IOCTL with the report_data (64 bytes),
-    receive the quote bytes, parse the standard TDX quote envelope.
+    Issues ``TDX_CMD_GET_REPORT0`` via :mod:`aegis.attest.tee_ioctl`.
+    The TDREPORT we receive is the 1024-byte structure that a downstream
+    verifier (Intel ``dcap-quote-verification``) turns into a TD-quote.
 
-    Real implementation requires the ``tdx-attest-rs`` Python binding
-    or direct ioctl calls (the ABI is in
-    ``include/uapi/linux/tdx-guest.h`` upstream). Skipped here because
-    we don't have a TDX VM in CI. Falls back to mock with a warning.
+    TDREPORT → TD-quote conversion goes via QGS (Quote Generation
+    Service) over vsock — that's the verifier layer's job. We surface
+    the report as-is; verifiers consume it.
+
+    Falls back to mock when the device is missing.
     """
+    from aegis.attest.tee_ioctl import fetch_tdx_report
+
     if not Path("/dev/tdx_guest").exists():
-        # Provider was selected but device is missing — degrade gracefully.
         return _mock_quote_with_warning(report_data_hex, requested="tdx")
-    # Placeholder: real implementation would issue the TDX_CMD_GET_QUOTE ioctl.
-    return _mock_quote_with_warning(report_data_hex, requested="tdx")
+
+    raw_data = bytes.fromhex(report_data_hex)
+    raw_data = (raw_data + b"\x00" * 64)[:64]
+    report = fetch_tdx_report(raw_data)
+    if report is None:
+        return _mock_quote_with_warning(report_data_hex, requested="tdx")
+
+    return TEEQuote(
+        provider="tdx",
+        enclave_measurement=report.mrtd,
+        platform_measurement="",  # MRSEAM extraction needs verifier
+        report_data=report.report_data,
+        tcb_version="",  # Filled by verifier from TCB info struct
+        timestamp_ns=time.time_ns(),
+        quote_signature="",  # Real signature lives on the converted quote
+        signing_cert_fingerprint="",
+        raw_quote_hex=report.raw.hex(),
+        extras={
+            "report_kind": "TDREPORT",
+            "needs_qgs_conversion": True,
+            "report_bytes": str(len(report.raw)),
+        },
+    )
 
 
 def _sev_snp_quote(report_data_hex: str) -> TEEQuote:
-    """Read a real SEV-SNP attestation report via /dev/sev-guest.
+    """Read a real SEV-SNP attestation report via ``/dev/sev-guest`` (v4.4).
 
-    Pattern: open the device, write the request struct, read the
-    response, parse the SEV-SNP attestation report envelope.
+    Issues ``SNP_GET_REPORT`` via :mod:`aegis.attest.tee_ioctl`.
+    Unlike TDX, SEV-SNP returns a self-contained verifiable artefact —
+    no QGS conversion needed.
 
-    Real implementation requires the ``sev-snp-utils`` library or
-    direct sysfs/ioctl. Skipped here for the same reason as TDX.
-    Falls back to mock with a warning.
+    Falls back to mock when the device is missing.
     """
+    from aegis.attest.tee_ioctl import fetch_sev_snp_report
+
     if not Path("/dev/sev-guest").exists():
         return _mock_quote_with_warning(report_data_hex, requested="sev-snp")
-    return _mock_quote_with_warning(report_data_hex, requested="sev-snp")
+
+    raw_data = bytes.fromhex(report_data_hex)
+    raw_data = (raw_data + b"\x00" * 64)[:64]
+    report = fetch_sev_snp_report(raw_data, vmpl=0)
+    if report is None:
+        return _mock_quote_with_warning(report_data_hex, requested="sev-snp")
+
+    return TEEQuote(
+        provider="sev-snp",
+        enclave_measurement=report.measurement,
+        platform_measurement="",
+        report_data=report.report_data,
+        tcb_version="",
+        timestamp_ns=time.time_ns(),
+        quote_signature="",
+        signing_cert_fingerprint="",
+        raw_quote_hex=report.raw.hex(),
+        extras={
+            "report_kind": "SEV_SNP_REPORT",
+            "vmpl": "0",
+            "report_bytes": str(len(report.raw)),
+        },
+    )
 
 
 def _mock_quote_with_warning(report_data_hex: str, *, requested: str) -> TEEQuote:
