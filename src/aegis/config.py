@@ -112,5 +112,18 @@ class Settings(BaseSettings):
     aegis_tiered_archive_hot_retention_segments: int = 3
     aegis_tiered_archive_poll_seconds: float = 10.0
 
+    # v4.0 — AuditPatrol (Claim 54). Periodic background integrity
+    # check across all audit stores. Disabled by default; production
+    # deployments enable by setting AEGIS_AUDIT_PATROL_ENABLED=true.
+    aegis_audit_patrol_enabled: bool = False
+    aegis_audit_patrol_full_interval_sec: float = 21600.0      # 6 hours
+    aegis_audit_patrol_sample_interval_sec: float = 3600.0     # 1 hour
+    aegis_audit_patrol_sequence_interval_sec: float = 300.0    # 5 minutes
+    aegis_audit_patrol_consistency_interval_sec: float = 3600.0
+    aegis_audit_patrol_cold_interval_sec: float = 86400.0      # 24 hours
+    aegis_audit_patrol_sample_fraction: float = 0.01           # 1 %
+    aegis_audit_patrol_cold_segments_per_run: int = 3
+    aegis_audit_patrol_poll_seconds: float = 30.0
+
 
 settings = Settings()
