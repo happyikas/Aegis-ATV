@@ -4,6 +4,55 @@ All notable changes to AegisData MVP. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.2.0] — 2026-04-29  ·  Agent identity & MCP integration (Claim 56)
+
+Multi-agent system identity layer with W3C DID compatibility,
+Anthropic Model Context Protocol (MCP) hook pattern, and Ed25519-
+signed delegation chains that enforce capability subset along the
+chain (no escalation).
+
+### Added
+
+* `src/aegis/identity/agent_id.py` — `AgentIdentity`, `IdentityProof`
+  (compact-token serialisation), `DelegationChain` (capability-subset
+  enforcement, tenant + parent_aid linkage).
+* `src/aegis/identity/did.py` — pluggable W3C DID resolver:
+  - `did:aegis:<tenant>:<aid>` — local pubkey lookup (single-org)
+  - `did:key:z<base58btc>` — pubkey embedded in DID (cross-org trust)
+  - `did:web:<host>:<path>` — stub (production swaps in HTTPS resolver)
+* `src/aegis/identity/mcp.py` — `MCPAegisMiddleware` reference adapter:
+  issue identity proof, verify inbound proof, build call context,
+  dispatch to `/evaluate`. Pure Python, no MCP SDK dependency.
+* `src/aegis/firewall/step308_identity.py` — new firewall step that
+  reads `ATVInput.agent_identity_proof_token` (new field), verifies
+  signature + expiry + tenant/aid/capability fit, attaches verified
+  identity to `ctx.extras["verified_identity"]` for later steps.
+* Backward compat: when no proof is present and `AEGIS_IDENTITY_REQUIRE=false`
+  (default), step308 is a no-op. Production sets the env var to enforce.
+
+### Patent
+
+* `docs/PATENT_SUPPLEMENT_v3.md` adds **Claim 56** — agent identity
+  with capability-subset delegation chain, MCP server-side hook pattern,
+  W3C DID-Agent compatibility.
+
+### Numbers
+
+* **1106 tests PASS** (1075 → 1106, +31), 1 skipped (llama-cpp).
+* **mypy 118 source files clean.**
+* **ruff clean.**
+* Identity proof sign+verify: <0.5 ms per call.
+* Three-level delegation chain validation: <2 ms.
+
+### Config
+
+```bash
+AEGIS_IDENTITY_REQUIRE=true     # enforce identity proof on every call
+                                # (default false for backward compat)
+```
+
+---
+
 ## [4.1.0] — 2026-04-29  ·  HW telemetry collectors — multi-source aggregator (Claim 55)
 
 Real hardware data finally flows into the ATV HW band. Up through

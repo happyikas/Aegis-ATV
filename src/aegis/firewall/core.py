@@ -46,6 +46,7 @@ def default_steps() -> list[StepFn]:
     """Return the canonical ordered step list. Lazy-imported to avoid cycles."""
     from aegis.firewall import (
         step305_safe_allowlist,
+        step308_identity,
         step309_instruction_drift,
         step310_args,
         step311_donor_rules,
@@ -61,6 +62,7 @@ def default_steps() -> list[StepFn]:
 
     return [
         step305_safe_allowlist.run,  # v2.1 Day-1 #1 — flag known-safe calls so step340 skips sLLM round-trip
+        step308_identity.run,        # v4.2 — agent identity verification (Claim 56)
         step309_instruction_drift.run,  # v2.2 Day-1 #3 — block when CLAUDE.md/AGENTS.md/.mcp.json drifted from baseline
         step310_args.run,
         step311_donor_rules.run,  # D11 + v2.1.2 — donor pattern rule pack + cloud/sql_unbounded

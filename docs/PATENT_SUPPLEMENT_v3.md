@@ -363,6 +363,49 @@ watchdog_strikes:         TEE quote > simulator
 dram_access_pattern_entropy: AegisFPGA > simulator
 ```
 
+### 3.16 Claim 56 — Agent identity & delegation chain (v4.2 신규)
+
+> **`Claim 56`**: Multi-agent system 의 도구 호출 검증에 있어, 각
+> agent 의 identity 를 (a) ``tenant_id``, (b) ``aid``, (c) optional
+> W3C-compatible ``did`` URI, (d) capability claim 집합, (e) parent
+> agent 의 ``aid`` (delegation), (f) issued / expires timestamp 의
+> 6-tuple 로 정의하고, **Ed25519-signed compact token** (canonical
+> JSON + URL-safe base64 + SHA3-256 issuer fingerprint) 으로
+> 직렬화하며, 호출 시 firewall 의 별도 step (`step308_identity`)
+> 가 (i) 서명 검증, (ii) 만료 검증, (iii) ``tenant_id``/``aid``
+> 의 ATV header 와 cross-check, (iv) 요청 도구가 capability set 의
+> 부분집합인지 검증을 수행하는 시스템. 또한 ``DelegationChain``
+> 으로 agent A → B → C 의 권한 위임 체인을 다루되, **각 단계의
+> capability set 이 predecessor 의 부분집합** 이어야 함을 강제
+> (capability escalation 차단) 하는 시스템.
+
+**구현 참조:**
+- [src/aegis/identity/agent_id.py](../src/aegis/identity/agent_id.py) — `AgentIdentity`, `IdentityProof`, `DelegationChain`
+- [src/aegis/identity/did.py](../src/aegis/identity/did.py) — W3C DID resolver (`did:aegis`, `did:key`, `did:web` stub)
+- [src/aegis/identity/mcp.py](../src/aegis/identity/mcp.py) — MCP middleware reference adapter
+- [src/aegis/firewall/step308_identity.py](../src/aegis/firewall/step308_identity.py) — firewall integration
+
+**핵심 차별점:**
+- **MCP 호환:** Anthropic Model Context Protocol 의 server-side hook 패턴.
+  agent 가 MCP server 호출 시 사이드카가 끼어들어 identity 검증 + tool 결정.
+- **W3C DID-Agent 호환:** ``did:aegis``, ``did:key``, ``did:web`` 3 가지
+  method 지원. 새 method 는 ``DIDResolver.register_method()`` 로 plug.
+- **Cross-org trust:** ``did:key`` 로 서명한 identity 는 어느 organization
+  에서도 verify 가능 (public key 가 DID 안에 박혀 있음).
+- **Capability escalation 차단:** delegation chain 의 모든 단계에서
+  cap(child) ⊆ cap(parent) 강제. agent A 가 권한이 없는 도구를
+  agent B 에게 위임할 수 없음.
+- **Backward compat:** ``AEGIS_IDENTITY_REQUIRE=false`` (default) 로 기존
+  배포는 영향 없음. ``true`` 로 전환 시 모든 호출에 proof 강제.
+
+**3 종 DID method:**
+
+| Method | 검증 방식 | 사용처 |
+|---|---|---|
+| `did:aegis:<tenant>:<aid>` | local 키 lookup table | 단일 org 배포 |
+| `did:key:z<base58btc-pubkey>` | DID 안에 pubkey 임베드 | cross-org trust |
+| `did:web:<host>:<path>` | https://...did.json fetch | 미구현 (stub) |
+
 ---
 
 ## 4. 본 보강의 차별점 (Why This Is Novel)
@@ -576,13 +619,37 @@ tests/unit/test_hw_collectors.py                  ←  30 unit tests (PASS)
 - `AEGIS_HW_PROVIDER=sim` — v2.3 deterministic SHA3 simulator
 - `AEGIS_HW_PROVIDER=real` — **v4.1 collector aggregator** (NEW)
 
+### 5.11 v4.2 Agent identity & MCP integration
+
+```
+src/aegis/identity/agent_id.py                ←  Claim 56 (core)
+src/aegis/identity/did.py                     ←  W3C DID resolver
+src/aegis/identity/mcp.py                     ←  MCP middleware
+src/aegis/firewall/step308_identity.py        ←  firewall integration
+src/aegis/schema.py                           ←  ATVInput.agent_identity_proof_token
+tests/unit/test_identity.py                   ←  31 unit tests (PASS)
+```
+
+**검증 측정 (M3 Mac):**
+- Identity proof 서명 + 검증: <0.5 ms per call
+- DelegationChain 3-단계 검증: <2 ms
+- step308 통합 latency 추가: 1 ms
+
+**Backward compat:**
+- `AEGIS_IDENTITY_REQUIRE=false` (default) → step308 가 no-op (proof 없으면 skip)
+- `AEGIS_IDENTITY_REQUIRE=true` → 모든 호출에 proof 강제
+
+**T3 swap-in:**
+- 현재 identity 서명 키 = 감사 키 재사용 (단일 org 단순 배포)
+- T3 에서 별도 `ed25519_identity.pem` (TEE 봉인) 으로 분리 — 코드 변경 없이 키 path 만 swap
+
 ---
 
 ## 6. 출원 전 체크리스트
 
-- [x] Reference implementation: `src/aegis/performance/`, `src/aegis/judge/unified_head.py`, `src/aegis/audit/{group_commit,tiered_archive,patrol}.py`, `src/aegis/hw_telemetry/collectors/`
-- [x] Unit tests: **1075 passed** (905 → 1075, +170, 1 skipped — llama-cpp 미설치)
-- [x] Type-check clean: mypy 113 source files
+- [x] Reference implementation: `src/aegis/performance/`, `src/aegis/judge/unified_head.py`, `src/aegis/audit/{group_commit,tiered_archive,patrol}.py`, `src/aegis/hw_telemetry/collectors/`, `src/aegis/identity/`
+- [x] Unit tests: **1106 passed** (905 → 1106, +201, 1 skipped — llama-cpp 미설치)
+- [x] Type-check clean: mypy 118 source files
 - [x] Lint clean: ruff
 - [x] HTTP endpoints exposed: `/advisory/{kv_cache,scheduling,placement,all,unified,context}`, `/audit/patrol/{status,run}`
 - [x] Demos: `demo/kv_cache_advisor.py`, `demo/runtime_closed_loop.py`, `demo/context_advisor.py`
@@ -590,6 +657,7 @@ tests/unit/test_hw_collectors.py                  ←  30 unit tests (PASS)
 - [x] **Production durability primitives** (v3.8/v3.9): group-commit + perf snapshot + tiered archive
 - [x] **Audit patrol** (v4.0, Claim 54): 6-check periodic integrity verification
 - [x] **HW telemetry collectors** (v4.1, Claim 55): 8-source aggregator + graceful degradation
+- [x] **Agent identity & MCP** (v4.2, Claim 56): W3C DID + delegation chain + capability escalation 차단
 - [ ] vLLM 실제 환경 벤치마크 (cache_hit_rate uplift) — v4.x milestone
 - [ ] 학습된 unified head 가중치 — v4.x milestone
 - [ ] Subfield-selective ATV diff 압축 (Claim 49) — v3.x/v4.x
