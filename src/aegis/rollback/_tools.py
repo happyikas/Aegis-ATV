@@ -2,9 +2,9 @@
 
 Donor: aegis-mvp v1.0.0 ``atmu/rules/_tools.py``. Imported here as a
 private module of ``aegis.rollback`` because the rollback strategies
-need to dispatch on tool name. When D11 ports the broader ATMU rule
-classes, this can be promoted into a shared module under ``aegis/``
-proper.
+need to dispatch on tool name. When D11 ports the broader ATMU
+(Agent Telemetry Management Unit) rule classes, this can be promoted
+into a shared module under ``aegis/`` proper.
 """
 
 from __future__ import annotations

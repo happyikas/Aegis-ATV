@@ -1,6 +1,7 @@
 """POST /tool-outcome — host reports the post-release outcome of a
-tool invocation. Updates the matching ATMU intent_log record with
-status + result hash + side-effect receipt (patent ¶[0063H-1]).
+tool invocation. Updates the matching ATMU (Agent Telemetry
+Management Unit) intent_log record with status + result hash +
+side-effect receipt (patent ¶[0063H-1]).
 
 v3.2 — optional perf-feedback fields (cache_hit_rate, context_util,
 tokens_per_second, runtime_latency_ms, memory_peak_bytes) close the

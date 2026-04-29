@@ -1,5 +1,7 @@
 """POST /evaluate — main entrypoint that composes the Firewall.
 
+ATMU below = Agent Telemetry Management Unit (patent §5A).
+
 Stages, per patent v7.10 §5 + §5A:
 
     build_atv                          (M8)

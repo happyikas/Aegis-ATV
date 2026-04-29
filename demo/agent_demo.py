@@ -51,7 +51,8 @@ def _verdict_color(decision: str) -> str:
 
 
 def _intent_id_from_verdict(verdict: dict[str, Any]) -> str | None:
-    """The /evaluate response surfaces ATMU's record_id in step_traces."""
+    """The /evaluate response surfaces the ATMU (Agent Telemetry
+    Management Unit) record_id in step_traces."""
     for v in verdict.get("step_traces", {}).values():
         if v.startswith("intent_record_id="):
             return v.split("=", 1)[1]

@@ -88,7 +88,8 @@ def encode_aid_tag_transitions(hw: HWCounters) -> np.ndarray:
 
 
 def encode_atmu_anomaly(hw: HWCounters) -> np.ndarray:
-    """16-D — ATMU anomaly slots (M10 patent §[0063] + Claim 18)."""
+    """16-D — ATMU (Agent Telemetry Management Unit) anomaly slots
+    (M10 patent §[0063] + Claim 18)."""
     arr = np.zeros(16, dtype=np.float32)
     arr[0] = _clamp01(hw.iommu_tag_violations / 5.0)
     arr[1] = _clamp01(hw.watchdog_strikes / 5.0)
