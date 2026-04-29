@@ -1,11 +1,25 @@
 # AegisData MVP — 세션 핸드오프 (Session Handoff)
 
-**상태 스냅샷:** 2026-04-29 (**v4.3.0**)
+**상태 스냅샷:** 2026-04-29 (**v4.4.0**)
 **Repo:** [happyikas/Aegis-ATV](https://github.com/happyikas/Aegis-ATV) (private)
 **대상:** 새 Claude Code 챗 창에서 이 프로젝트 작업을 이어가는 사람 (또는 새 Claude 인스턴스)
-**한 문장:** AegisData v4.3.0 — **Compliance Evidence Automation** (Claim 57). 9-framework 의 #9 (Compliance) 구현. SOC 2 / EU AI Act / HIPAA / ISO 42001 의 31 controls 중 29 자동 매핑 (2 not_implemented 정직 표시). Deterministic sampling + JSON/Markdown 출력. **1138 tests PASS (+32)**, mypy 122 source files clean, ruff clean.
+**한 문장:** AegisData v4.4.0 — **TEE-rooted Attestation Deployment** (Claim 58). 진짜 silicon (Intel TDX / AMD SEV-SNP) ioctl 바인딩 + pluggable verifier + sealed-key abstraction. Auto-detect: device 있으면 real, 없으면 mock fallback — single binary 가 T2 + T3 양쪽 동작. **1177 tests PASS (+39)**, mypy 125 source files clean, ruff clean.
 
-**v4.3 까지 release 완료:** v2.0.0 / v2.2.0 / v2.3.0 / v2.4.0 / v3.0.0 / v3.6.0 / v3.7.0 / v3.9.0 / v4.0.0 / v4.1.0 / v4.2.0 / **v4.3.0** 모두 GitHub tag + Release 발행됨.
+**v4.4 까지 release 완료:** v2.0.0 / v2.2.0 / v2.3.0 / v2.4.0 / v3.0.0 / v3.6.0 / v3.7.0 / v3.9.0 / v4.0.0 / v4.1.0 / v4.2.0 / v4.3.0 / **v4.4.0** 모두 GitHub tag + Release 발행됨.
+
+## 0-S. v4.4 (이 세션, 2026-04-29)
+
+`src/aegis/attest/` + `src/aegis/sign/sealed_key.py` — T3 deployment readiness.
+
+- `tee_ioctl.py`: 실 TDX/SEV-SNP ioctl (ctypes 기반, no third-party deps)
+- `tee_quote.py`: `_tdx_quote()` / `_sev_snp_quote()` placeholder → real path
+- `tee_verifier.py`: pluggable backend (production: Intel DCAP / AMD KDS register)
+- `sealed_key.py`: SealedKeyProvider abstraction (LocalSealedKey + SEV-SNP/TDX stubs)
+- `mock_tee_quote.py` 가 auto-detecting collector 로 업그레이드
+- 새 endpoint: `GET /attestation/tee` (verify 포함), `POST /attestation/tee/verify`
+- `docs/T3_DEPLOYMENT_GUIDE.md`: Azure CVM, AWS r7iz, NVIDIA H100 CC 가이드
+
+**솔직 평가:** 진짜 deployment 1 건은 silicon 필요. v4.4 는 **deployment-ready 코드** — silicon 도착 시 코드 변경 없음.
 
 ## 0-T. v4.3 (이 세션, 2026-04-29)
 
