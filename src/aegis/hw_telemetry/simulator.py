@@ -218,14 +218,27 @@ def simulate(inp: ATVInput, *, attack: str = "") -> HWCounters:
 def simulate_from_env(inp: ATVInput) -> HWCounters | None:
     """Convenience for callers that want env-driven on/off + attack injection.
 
-    Reads ``AEGIS_HW_PROVIDER`` (``none`` / ``sim``) and
-    ``AEGIS_HW_INJECT_ATTACK`` (comma-separated mode list). Returns
-    ``None`` if the provider is anything other than ``sim`` so the
-    existing T2 zero-fill path in :func:`aegis.atv.builder.build_atv`
-    stays untouched.
+    ``AEGIS_HW_PROVIDER`` selects the source:
+
+    * ``none`` (default) — return None; HW band stays zero-filled.
+    * ``sim`` — run the v2.3 deterministic simulator.
+      ``AEGIS_HW_INJECT_ATTACK`` (comma-separated mode list) injects
+      the chosen attacks for demo / regression testing.
+    * ``real`` (v4.1) — run the
+      :class:`aegis.hw_telemetry.collectors.CollectorAggregator`
+      against the real host's PMU / EDAC / NVML / ethtool / IOMMU /
+      BMC interfaces, falling back to the simulator baseline for any
+      slot no collector covers. Returns the aggregated counters.
+
+    The existing T2 zero-fill path in :func:`aegis.atv.builder.build_atv`
+    is preserved when provider is ``none``.
     """
     provider = os.environ.get("AEGIS_HW_PROVIDER", "none").lower().strip()
-    if provider != "sim":
-        return None
-    attack = os.environ.get("AEGIS_HW_INJECT_ATTACK", "")
-    return simulate(inp, attack=attack)
+    if provider == "sim":
+        attack = os.environ.get("AEGIS_HW_INJECT_ATTACK", "")
+        return simulate(inp, attack=attack)
+    if provider == "real":
+        # Lazy import to avoid forcing collectors module load when not used
+        from aegis.hw_telemetry.collectors import aggregate_from_env as _agg
+        return _agg(inp)
+    return None

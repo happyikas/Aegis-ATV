@@ -71,7 +71,11 @@ class Settings(BaseSettings):
     # surface untouched. ``sim`` switches on the deterministic
     # SHA3-seeded simulator in aegis.hw_telemetry, populating the
     # 200-D ATV HW band and feeding M12's cost-divergence escalation.
-    aegis_hw_provider: Literal["none", "sim"] = "none"
+    # ``real`` (v4.1) runs the CollectorAggregator against host PMU /
+    # EDAC / NVML / ethtool / IOMMU / BMC / TEE-quote / Aegis-FPGA
+    # interfaces, falling back to the simulator baseline per slot
+    # when an interface is missing.
+    aegis_hw_provider: Literal["none", "sim", "real"] = "none"
     # Comma-separated attack mode list for demos / tests
     # (token_flops_mismatch, hbm_exfil, cost_underreport, thermal_spike,
     # network_exfil, iommu_violation). Unknown modes silently ignored.
