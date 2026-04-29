@@ -229,6 +229,15 @@ def create_app(
     from aegis.api.audit_patrol import make_router as _audit_patrol_router
     app.include_router(_audit_patrol_router(patrol=patrol))
 
+    # v4.3 — Compliance evidence collection (Claim 57).
+    from aegis.api.compliance import make_router as _compliance_router
+    app.include_router(_compliance_router(
+        audit_db=real_db,
+        intent_log=real_intent_log,
+        cost_ledger=cost_ledger,
+        encrypted_journal=encrypted_journal,
+    ))
+
     if _STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 

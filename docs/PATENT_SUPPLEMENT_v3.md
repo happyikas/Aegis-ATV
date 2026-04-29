@@ -406,6 +406,51 @@ dram_access_pattern_entropy: AegisFPGA > simulator
 | `did:key:z<base58btc-pubkey>` | DID 안에 pubkey 임베드 | cross-org trust |
 | `did:web:<host>:<path>` | https://...did.json fetch | 미구현 (stub) |
 
+### 3.17 Claim 57 — Compliance evidence automation (v4.3 신규)
+
+> **`Claim 57`**: 청구항 1 의 audit primitives (Ed25519+Merkle audit
+> chain, AES-GCM encrypted journal, ATMU intent log, cost ledger,
+> AuditPatrol report) 를 4 종 compliance framework 의 control 에
+> 자동 매핑하는 시스템:
+> (a) **SOC 2 TSC** (CC6/CC7/CC8 + A1.2),
+> (b) **EU AI Act Annex IV** (Article 12 + Annex IV §2-§6),
+> (c) **HIPAA** (45 CFR § 164.312(a)-(d)),
+> (d) **ISO/IEC 42001 AIMS** (A.5.2/A.6/A.8/A.9/A.10).
+> 각 control 의 evidence 는 audit store 에 대한 **deterministic
+> SHA3-seeded sampling** (seed = control.id + period_start_ns) 으로
+> 선택되어, 동일 (audit, period, framework) 입력에서 **bit-identical
+> evidence packet** 을 재현 가능 (compliance audit 재실행 가능성을
+> patent 청구로 보호).
+
+**구현 참조:**
+- [src/aegis/compliance/frameworks.py](../src/aegis/compliance/frameworks.py) — 4 framework × ~30 controls
+- [src/aegis/compliance/evidence.py](../src/aegis/compliance/evidence.py) — `EvidenceCollector` + deterministic sampling
+- [src/aegis/api/compliance.py](../src/aegis/api/compliance.py) — `GET /compliance/frameworks`, `POST /compliance/evidence`
+
+**핵심 차별점:**
+- 기존 GRC 도구 (Vanta / Drata / Secureframe) 는 일반 IT 시스템의
+  evidence — AI 시스템 / agent 도구 호출에 특화 매핑 없음
+- 우리는 **AI-specific** controls (EU AI Act Annex IV, ISO 42001 AIMS)
+  와 **일반 IT** controls (SOC 2, HIPAA) 를 동시 cover
+- **Deterministic sampling** 으로 동일 audit period 의 evidence 가
+  매번 동일 — \"왜 이 5 개 record 만 sample 인가?\" 에 결정론적 답
+- **Coverage 의 정직한 표시** — 매핑 안 되는 control 은
+  ``not_implemented`` 로 명시 (auditor 가 missing 영역을 즉시 인지)
+
+**Coverage 매핑 요약:**
+
+| Framework | Controls | Mapped | Not impl. |
+|---|---:|---:|---:|
+| SOC 2 | 9 | 9 | 0 |
+| EU AI Act | 9 | 8 | 1 (training procedure) |
+| HIPAA | 7 | 6 | 1 (transmission TLS) |
+| ISO 42001 | 6 | 6 | 0 |
+| **Total** | **31** | **29** | **2** |
+
+**Output formats:**
+- JSON: 기계 가독, audit trail 보관
+- Markdown: 인간 가독, SOC 2 / ISO auditor 가 read-through 가능
+
 ---
 
 ## 4. 본 보강의 차별점 (Why This Is Novel)
@@ -643,21 +688,42 @@ tests/unit/test_identity.py                   ←  31 unit tests (PASS)
 - 현재 identity 서명 키 = 감사 키 재사용 (단일 org 단순 배포)
 - T3 에서 별도 `ed25519_identity.pem` (TEE 봉인) 으로 분리 — 코드 변경 없이 키 path 만 swap
 
+### 5.12 v4.3 Compliance evidence automation
+
+```
+src/aegis/compliance/frameworks.py            ←  Claim 57 — 4 framework × 31 controls
+src/aegis/compliance/evidence.py              ←  EvidenceCollector + deterministic sampling
+src/aegis/api/compliance.py                   ←  GET/POST /compliance/{frameworks,evidence}
+tests/unit/test_compliance.py                 ←  32 unit tests (PASS)
+```
+
+**Coverage:**
+- SOC 2: 9/9 controls mapped
+- EU AI Act: 8/9 (training procedure는 model provider 책임)
+- HIPAA: 6/7 (transmission TLS는 외부 mesh)
+- ISO 42001: 6/6 mapped
+- **Total: 29/31** controls covered, 2 properly marked `not_implemented`
+
+**HTTP API:**
+- `GET /compliance/frameworks` — 4 framework 목록
+- `POST /compliance/evidence` — JSON + Markdown 출력
+
 ---
 
 ## 6. 출원 전 체크리스트
 
-- [x] Reference implementation: `src/aegis/performance/`, `src/aegis/judge/unified_head.py`, `src/aegis/audit/{group_commit,tiered_archive,patrol}.py`, `src/aegis/hw_telemetry/collectors/`, `src/aegis/identity/`
-- [x] Unit tests: **1106 passed** (905 → 1106, +201, 1 skipped — llama-cpp 미설치)
-- [x] Type-check clean: mypy 118 source files
+- [x] Reference implementation: `src/aegis/performance/`, `src/aegis/judge/unified_head.py`, `src/aegis/audit/{group_commit,tiered_archive,patrol}.py`, `src/aegis/hw_telemetry/collectors/`, `src/aegis/identity/`, `src/aegis/compliance/`
+- [x] Unit tests: **1138 passed** (905 → 1138, +233, 1 skipped — llama-cpp 미설치)
+- [x] Type-check clean: mypy 122 source files
 - [x] Lint clean: ruff
-- [x] HTTP endpoints exposed: `/advisory/{kv_cache,scheduling,placement,all,unified,context}`, `/audit/patrol/{status,run}`
+- [x] HTTP endpoints exposed: `/advisory/{kv_cache,scheduling,placement,all,unified,context}`, `/audit/patrol/{status,run}`, `/compliance/{frameworks,evidence}`
 - [x] Demos: `demo/kv_cache_advisor.py`, `demo/runtime_closed_loop.py`, `demo/context_advisor.py`
 - [x] vLLM design doc: `docs/VLLM_INTEGRATION_DESIGN.md`
 - [x] **Production durability primitives** (v3.8/v3.9): group-commit + perf snapshot + tiered archive
 - [x] **Audit patrol** (v4.0, Claim 54): 6-check periodic integrity verification
 - [x] **HW telemetry collectors** (v4.1, Claim 55): 8-source aggregator + graceful degradation
 - [x] **Agent identity & MCP** (v4.2, Claim 56): W3C DID + delegation chain + capability escalation 차단
+- [x] **Compliance evidence automation** (v4.3, Claim 57): SOC 2 / EU AI Act / HIPAA / ISO 42001 자동 매핑
 - [ ] vLLM 실제 환경 벤치마크 (cache_hit_rate uplift) — v4.x milestone
 - [ ] 학습된 unified head 가중치 — v4.x milestone
 - [ ] Subfield-selective ATV diff 압축 (Claim 49) — v3.x/v4.x

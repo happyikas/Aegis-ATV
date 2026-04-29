@@ -1,11 +1,21 @@
 # AegisData MVP — 세션 핸드오프 (Session Handoff)
 
-**상태 스냅샷:** 2026-04-29 (**v4.2.0**)
+**상태 스냅샷:** 2026-04-29 (**v4.3.0**)
 **Repo:** [happyikas/Aegis-ATV](https://github.com/happyikas/Aegis-ATV) (private)
 **대상:** 새 Claude Code 챗 창에서 이 프로젝트 작업을 이어가는 사람 (또는 새 Claude 인스턴스)
-**한 문장:** AegisData v4.2.0 — **Agent identity + MCP + W3C DID** (Claim 56). 9-framework 의 #8 (Agent identity) 구현. Ed25519-signed identity proof + delegation chain (capability escalation 차단) + 3 종 DID method. **1106 tests PASS (+31)**, mypy 118 source files clean, ruff clean.
+**한 문장:** AegisData v4.3.0 — **Compliance Evidence Automation** (Claim 57). 9-framework 의 #9 (Compliance) 구현. SOC 2 / EU AI Act / HIPAA / ISO 42001 의 31 controls 중 29 자동 매핑 (2 not_implemented 정직 표시). Deterministic sampling + JSON/Markdown 출력. **1138 tests PASS (+32)**, mypy 122 source files clean, ruff clean.
 
-**v4.2 까지 release 완료:** v2.0.0 / v2.2.0 / v2.3.0 / v2.4.0 / v3.0.0 / v3.6.0 / v3.7.0 / v3.9.0 / v4.0.0 / v4.1.0 / **v4.2.0** 모두 GitHub tag + Release 발행됨.
+**v4.3 까지 release 완료:** v2.0.0 / v2.2.0 / v2.3.0 / v2.4.0 / v3.0.0 / v3.6.0 / v3.7.0 / v3.9.0 / v4.0.0 / v4.1.0 / v4.2.0 / **v4.3.0** 모두 GitHub tag + Release 발행됨.
+
+## 0-T. v4.3 (이 세션, 2026-04-29)
+
+`src/aegis/compliance/` — 4 framework × 31 control 자동 매핑.
+
+- `frameworks.py`: SOC 2 (9) + EU AI Act (9) + HIPAA (7) + ISO 42001 (6) controls
+- `evidence.py`: EvidenceCollector + deterministic SHA3 sampling
+- `api/compliance.py`: GET /compliance/frameworks + POST /compliance/evidence (json|markdown)
+
+**Coverage:** 29/31 covered, 2 honestly `not_implemented` (training procedure → model provider; TLS → mesh layer).
 
 ## 0-U. v4.2 (이 세션, 2026-04-29)
 

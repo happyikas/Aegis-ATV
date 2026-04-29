@@ -4,6 +4,62 @@ All notable changes to AegisData MVP. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.3.0] — 2026-04-29  ·  Compliance evidence automation (Claim 57)
+
+Turns the existing audit primitives into structured compliance
+evidence packets for **SOC 2 / EU AI Act / HIPAA / ISO 42001**.
+**29 of 31 controls** automatically covered; the 2 not_implemented
+are honestly flagged (training procedure = model provider's
+responsibility; TLS transmission = external mesh layer).
+
+### Added
+
+* `src/aegis/compliance/frameworks.py` — 4 framework definitions:
+  - **SOC 2 TSC** — CC6/CC7/CC8 + A1.2 (9 controls)
+  - **EU AI Act Annex IV** — Article 12 + Annex IV §2-§6 (9 controls)
+  - **HIPAA** — 45 CFR § 164.312(a)-(d) (7 controls)
+  - **ISO/IEC 42001 AIMS** — A.5.2/A.6/A.8/A.9/A.10 (6 controls)
+* `src/aegis/compliance/evidence.py` — `EvidenceCollector` walks the
+  audit stores (audit DB, encrypted journal, ATMU intent log, cost
+  ledger, AuditPatrol reports) and produces a `ComplianceReport`
+  with one `ControlEvidence` per control.
+* **Deterministic sampling** — same (audit, period, framework) →
+  bit-identical evidence packet. Seed = SHA3(control_id + period_start).
+  Audit replay reproducible.
+* Output formats: JSON (machine-readable), Markdown (auditor-friendly).
+* `src/aegis/api/compliance.py` — `GET /compliance/frameworks` (list)
+  + `POST /compliance/evidence` (generate per-period packet).
+
+### Patent
+
+* `docs/PATENT_SUPPLEMENT_v3.md` adds **Claim 57** — automated mapping
+  of cryptographically-signed agent audit primitives to compliance
+  control frameworks with deterministic sample selection.
+
+### Numbers
+
+* **1138 tests PASS** (1106 → 1138, +32), 1 skipped (llama-cpp).
+* **mypy 122 source files clean.**
+* **ruff clean.**
+* 4 frameworks × 31 total controls; 29 covered, 2 honestly not_implemented.
+
+### Operator UX
+
+```bash
+# List frameworks:
+curl /compliance/frameworks
+
+# Generate Q1 SOC 2 evidence packet (Markdown):
+curl -X POST /compliance/evidence -d '{
+  "framework": "soc2",
+  "period_start_ns": 1735689600000000000,
+  "period_end_ns": 1743465600000000000,
+  "format": "markdown"
+}' > soc2-2026-Q1.md
+```
+
+---
+
 ## [4.2.0] — 2026-04-29  ·  Agent identity & MCP integration (Claim 56)
 
 Multi-agent system identity layer with W3C DID compatibility,
