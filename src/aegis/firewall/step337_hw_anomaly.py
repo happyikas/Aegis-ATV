@@ -1,5 +1,8 @@
 """Step 337 — HW band anomaly gate (v2.4).
 
+The ``atmu_anomaly`` subfield referenced below is the Agent Telemetry
+Management Unit (ATMU) anomaly band of the ATV HW envelope.
+
 Closes the gap surfaced by v2.3's ``smoke_hw_double_check.py`` demo:
 ``thermal_spike`` / ``network_exfil`` / ``iommu_violation`` attacks
 populate the ATV HW band visibly but didn't trip step340's M12

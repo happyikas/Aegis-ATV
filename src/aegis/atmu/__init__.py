@@ -1,4 +1,11 @@
-"""Agent Transaction Management Unit (patent §5A)."""
+"""ATMU — Agent Telemetry Management Unit (patent §5A).
+
+The Write-Ahead Intent Log + 2-PC state machine + checkpoint /
+compensation primitives that bracket every tool invocation. Despite
+the name "transaction" semantics in the implementation, the canonical
+expansion of the acronym is **Agent Telemetry Management Unit** for
+patent and documentation purposes.
+"""
 
 from aegis.atmu.checkpoint import HIGH_BLAST_THRESHOLD, make_checkpoint
 from aegis.atmu.compensating import plan_for

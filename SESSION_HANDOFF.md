@@ -145,7 +145,7 @@ uv run mypy src 2>&1 | tail -2             # Success: no issues found in 63 sour
 
 ## 1. 프로젝트 한 줄 요약
 
-**AegisData = AI 에이전트 시대의 envoy.** 모든 자율 AI 에이전트의 도구 호출이 통과하는 사이드카 firewall. 7-step Action Firewall + ATMU 2PC + Ed25519/Merkle/AES-GCM audit + 5-layer Burn-in baseline + Cost Attestation Ledger + Hierarchical Agent Memory. **40-claim 미국 임시 특허** (US provisional `ATV_v7_10`) 가 백킹.
+**AegisData = AI 에이전트 시대의 envoy.** 모든 자율 AI 에이전트의 도구 호출이 통과하는 사이드카 firewall. 7-step Action Firewall + **ATMU (Agent Telemetry Management Unit)** 2PC + Ed25519/Merkle/AES-GCM audit + 5-layer Burn-in baseline + Cost Attestation Ledger + Hierarchical Agent Memory. **40-claim 미국 임시 특허** (US provisional `ATV_v7_10`) 가 백킹.
 
 **현재 티어:** T2 (소프트웨어). **다음 티어:** T3 (TEE/FPGA/CSD 하드웨어 — M17 mock provider 까지 완성, M18-M22 진행 가능).
 

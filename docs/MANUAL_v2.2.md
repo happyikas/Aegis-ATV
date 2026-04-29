@@ -177,7 +177,7 @@ Claude Code  ─── PreToolUse JSON ──▶  python3 aegis_hook.py
                                           └─ FastAPI:
                                               ├─ build_atv  + run_firewall
                                               ├─ Ed25519 sign + Merkle chain (M5/M9)
-                                              ├─ ATMU 2PC intent_log (M10)
+                                              ├─ ATMU (Agent Telemetry Management Unit) 2PC intent_log (M10)
                                               ├─ Cost ledger (M12)
                                               ├─ AES-GCM journal (M15)
                                               └─ HAM L3+L4 (M16)

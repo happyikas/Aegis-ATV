@@ -202,7 +202,7 @@ def encode_qom_scores(inp: ATVInput) -> np.ndarray:
 
 
 def encode_resource_access_pattern(inp: ATVInput) -> np.ndarray:
-    return _fixed_slot_vector({}, RESOURCE_KEYS, 32)  # populated by future ATMU integration
+    return _fixed_slot_vector({}, RESOURCE_KEYS, 32)  # populated by future ATMU (Agent Telemetry Management Unit) integration
 
 
 def encode_prompt_structure(inp: ATVInput) -> np.ndarray:

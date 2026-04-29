@@ -23,7 +23,7 @@
 | HAM L1 (register-cache) | OrderedDict in-process | HBM register file (real L1) | 캐시 backing |
 | HAM L2 (NVMe-tier) | (T2에서는 미구현) | CSD-DRAM (Solidigm/Samsung NVMe-CSD) | 신규 backing |
 | 서명 알고리즘 | Ed25519 단일 | Ed25519 + ML-DSA 이중 (Claim 25) | 신규 cosign |
-| 체크포인트 (M10 ATMU) | host RAM | CXL 직접 체크포인팅, zero-copy restore | 카피 제거 |
+| 체크포인트 (M10 ATMU = Agent Telemetry Management Unit) | host RAM | CXL 직접 체크포인팅, zero-copy restore | 카피 제거 |
 | `linkage_consistency_features` (2060..2079) | 0 | SW↔HW band cross-tampering vector | 신규 computation |
 
 **핵심**: 외부 사용자가 보는 JSON 모양·endpoint·서명 검증 절차는 **변하지 않는다**. `tier_profile` 필드와 16개의 0 → 실수 변화만 보인다. 이게 patent Claim 24의 "단일 스키마 T2/T3 uniformity" 의 의도다.

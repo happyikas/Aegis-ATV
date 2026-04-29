@@ -1,8 +1,9 @@
 """Shared pytest fixtures + safe environment.
 
 Forces dummy embedding/judge so tests never reach the network, and points
-every filesystem-touching setting (signing key, audit DB, JSONL, ATMU
-intent log, cost ledger, cost signing key) at a session-scoped temp dir
+every filesystem-touching setting (signing key, audit DB, JSONL,
+ATMU (Agent Telemetry Management Unit) intent log, cost ledger,
+cost signing key) at a session-scoped temp dir
 so importing ``aegis.main`` doesn't litter the repo with ./keys/ or
 ./data/ files.
 """

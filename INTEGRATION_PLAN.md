@@ -11,7 +11,7 @@
 - **사이드카 모드** (기존 MVP/) — 조직·다중 테넌트 배포용 FastAPI 서버
 - **플러그인 모드** (aegis-mvp/ 기여) — 개발자 1명이 5분 안에 install해서 즉시 차단 보여주는 Claude Code 플러그인
 
-두 모드는 **같은 ATV·ATMU·Burn-in 코어**를 공유한다.
+두 모드는 **같은 ATV·ATMU (Agent Telemetry Management Unit)·Burn-in 코어**를 공유한다.
 
 ---
 

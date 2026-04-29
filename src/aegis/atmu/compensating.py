@@ -2,7 +2,8 @@
 
 For tools whose external side effects cannot be reversed by checkpoint
 restoration (outbound payments, sent emails, irreversible API calls),
-the ATMU pre-records a compensation plan at intent time. If a
+the ATMU (Agent Telemetry Management Unit) pre-records a compensation
+plan at intent time. If a
 post-release verdict flips to policy violation, the plan is executed
 or queued.
 """

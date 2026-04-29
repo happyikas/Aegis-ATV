@@ -29,7 +29,7 @@ the dummy implementation rather than failing the request.
 |---|---|---|
 | `AEGIS_AUDIT_DB` | `./data/audit.sqlite` | WAL mode, indexed by aid |
 | `AEGIS_AUDIT_JSONL` | `./data/audit.jsonl` | Append-only mirror |
-| `AEGIS_INTENT_LOG_DB` | `./data/intent_log.sqlite` | ATMU WAL |
+| `AEGIS_INTENT_LOG_DB` | `./data/intent_log.sqlite` | ATMU (Agent Telemetry Management Unit) WAL |
 | `AEGIS_COST_LEDGER_DB` | `./data/cost_attestation.sqlite` | Separate ledger |
 | `AEGIS_COST_LEDGER_JSONL` | `./data/cost_attestation.jsonl` | Mirror |
 | `AEGIS_JOURNAL_PATH` | `./data/journal.bin` | AES-256-GCM journal |

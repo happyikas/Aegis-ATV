@@ -10,7 +10,8 @@ Public surface:
 
 The session-aware branch of :func:`bulk_restore` looks up invocation IDs
 through :data:`session_invocations_lookup` — a hook that defaults to
-returning an empty set. D11 (ATMU rule port) wires the MVP intent log in
+returning an empty set. D11 (ATMU = Agent Telemetry Management Unit;
+rule port) wires the MVP intent log in
 so ``aegis rollback --session SID`` can resolve session → invocations.
 """
 

@@ -50,7 +50,7 @@
     "policy_pack": {
       "type": "string",
       "default": "default.policy.yaml",
-      "description": "Path to ATMU policy YAML (must be TEE-signed in production)."
+      "description": "Path to ATMU (Agent Telemetry Management Unit) policy YAML (must be TEE-signed in production)."
     },
     "burnin_baseline": {
       "type": "string",

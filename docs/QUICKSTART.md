@@ -136,7 +136,7 @@ step 350 — approval dispatch (if REQUIRE_APPROVAL)
 step 360 — Ed25519 sign + Merkle-chain append + AES-GCM journal write
 step 370 — exec recommendation annotation (PROCEED/SUPPRESS/DEFER)
    ↓
-ATMU intent log: tentative → prepared
+ATMU (Agent Telemetry Management Unit) intent log: tentative → prepared
    ↓
 Burn-in observation: bump per-layer sample counters
    ↓

@@ -71,8 +71,8 @@ v2.0.0 부터 같은 코드베이스가 두 가지 배포 모드를 지원합니
 `CHANGELOG.md` v2.0.0 참조):
 
 - **Sidecar 모드** (default) — 멀티 테넌트 FastAPI 서비스. Claude Code 후크가
-  `localhost:8000/evaluate` 로 POST. 풀 M1–M17 surface (서명, ATMU, cost
-  ledger, HAM, Burn-in).
+  `localhost:8000/evaluate` 로 POST. 풀 M1–M17 surface (서명, ATMU
+  (Agent Telemetry Management Unit), cost ledger, HAM, Burn-in).
 - **Plugin (`local`) 모드** (신규, Solo Free) — 단일 개발자용 in-process 후크.
   서비스 / HTTP / API 키 불필요. 후크가 firewall 파이프라인 (310→311→312→
   320→330→335→340) 을 자체 프로세스에서 실행.

@@ -689,7 +689,7 @@ export AEGIS_INSTRUCTION_BASELINE_PATH=$(pwd)/.aegis/instruction_baseline.json
 This release merges the `aegis-mvp v1.0.0` Claude Code plugin (142
 files, 62 tests) into the existing AegisData T2 sidecar (M1–M17, 455
 tests). The result is a **single codebase, two deployment modes**,
-sharing one ATV / ATMU / Burn-in core:
+sharing one ATV / ATMU (Agent Telemetry Management Unit) / Burn-in core:
 
 * **Sidecar mode** (default) — multi-tenant FastAPI; the host hook
   POSTs to ``localhost:8000/evaluate``. Audit signing, cost ledger,

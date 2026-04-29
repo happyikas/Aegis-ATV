@@ -258,7 +258,7 @@ verdict: REQUIRE_APPROVAL — "DROP TABLE on production users — human review r
 
 Action Firewall이 통과시켜도, 실제 도구 실행이 실패할 수 있다. 그러면 부분 실행 상태가 남아 더 위험할 수 있다.
 
-특허는 **Agent Transaction Management Unit (ATMU, Claim 2/15)**을 정의한다. 이는 모든 호출을 **2단계 커밋(2-Phase Commit)** 패턴으로 감싼다:
+특허는 **ATMU — Agent Telemetry Management Unit (Claim 2/15)**을 정의한다. 이는 모든 호출을 **2단계 커밋(2-Phase Commit)** 패턴으로 감싼다:
 
 ```
                       ┌──────────┐

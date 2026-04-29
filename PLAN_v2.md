@@ -176,7 +176,7 @@ s-16 marginal_value_score       value/cost
 
 ## 3. 신규 구현 (M10‑M16)
 
-### 3.1 M10 — Agent Transaction Management Unit (ATMU, 소프트웨어 2PC)
+### 3.1 M10 — Agent Telemetry Management Unit (ATMU, 소프트웨어 2PC)
 
 특허 Section 5A. SW 버전: SQLite 트랜잭션 + JSONL WAL.
 

@@ -110,7 +110,7 @@ host (your agent runtime)
 │    step 370 — exec recommendation: PROCEED / SUPPRESS / DEFER (M9)  │
 └─────────────────────────────────────────────────────────────────────┘
   │
-  ├─→ ATMU intent log: tentative → prepared → committed/aborted (M10)
+  ├─→ ATMU (Agent Telemetry Management Unit) intent log: tentative → prepared → committed/aborted (M10)
   ├─→ Cost Attestation Ledger (separate Ed25519 key per Claim 34, M12)
   ├─→ Burn-in observer (5-layer × 4-phase, M11)
   └─→ Verdict { decision, reason, atv_id, signature, step_traces }

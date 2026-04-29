@@ -1,4 +1,5 @@
-"""Unit tests for the ATMU package — patent §5A + APPENDIX B (M10)."""
+"""Unit tests for the ATMU (Agent Telemetry Management Unit) package
+— patent §5A + APPENDIX B (M10)."""
 
 from __future__ import annotations
 
