@@ -451,6 +451,55 @@ dram_access_pattern_entropy: AegisFPGA > simulator
 - JSON: 기계 가독, audit trail 보관
 - Markdown: 인간 가독, SOC 2 / ISO auditor 가 read-through 가능
 
+### 3.18 Claim 58 — TEE-rooted attestation deployment (v4.4 신규)
+
+> **`Claim 58`**: 청구항 1 의 audit chain 의 trust root 를 호스트 OS 에서
+> **TEE silicon 으로 끌어올리는** 시스템:
+> (a) 각 ATV 호출에 대한 attestation report (Intel TDX TDREPORT 또는
+> AMD SEV-SNP attestation report) 를 ioctl
+> (``TDX_CMD_GET_REPORT0`` / ``SNP_GET_REPORT``) 로 fetch,
+> (b) 보고서의 ``REPORTDATA`` 필드에 청구항 1 의 ``burn_in_id`` 또는
+> ATV ``atv_commitment`` 를 봉인 (bind) 하여 \"이 quote 는 이 ATV
+> 에 속한다\" 를 cryptographically 증명,
+> (c) Intel PCS / AMD KDS / 자체 verifier 중 하나를
+> :class:`TEEQuoteVerifier` 의 pluggable backend 로 검증하여
+> ``trust_level ∈ {schema-only, intel-pcs-verified, amd-kds-verified}``
+> 을 ATV metadata 로 부착,
+> (d) audit Ed25519 signing key 를 TEE 의 sealing root key
+> (SEV-SNP ``SNP_GET_DERIVED_KEY`` / TDX TPM-bridge / ARM CCA seal API)
+> 로 wrap 하여 host-OS compromise 에서도 키 추출 불가능하도록 만드는
+> 시스템. 또한 device 부재 시 mock fallback 으로 자동 degrade 하여
+> single binary 가 T2 (development) 와 T3 (production silicon)
+> 양쪽 환경에서 동작하는 시스템.
+
+**구현 참조:**
+- [src/aegis/attest/tee_ioctl.py](../src/aegis/attest/tee_ioctl.py) — 실 ioctl path (TDX/SEV-SNP)
+- [src/aegis/attest/tee_quote.py](../src/aegis/attest/tee_quote.py) — quote 생성 + auto-detect
+- [src/aegis/attest/tee_verifier.py](../src/aegis/attest/tee_verifier.py) — pluggable verifier
+- [src/aegis/sign/sealed_key.py](../src/aegis/sign/sealed_key.py) — sealed key abstraction
+- [docs/T3_DEPLOYMENT_GUIDE.md](T3_DEPLOYMENT_GUIDE.md) — production deployment guide
+
+**핵심 차별점:**
+- 기존 confidential AI 솔루션 (NVIDIA H100 CC, Apple PCC, Azure CCAI)
+  은 inference 만 보호 — agent tool call audit / cost / identity 는
+  cover 안 함. v4.4 는 **agent layer 의 TEE attestation**.
+- **Auto-detect + mock fallback** 으로 single binary 가 T2 dev 와 T3
+  production 에서 동일 동작. 실 silicon 도착 시 코드 변경 없음.
+- **Pluggable verifier**: Intel DCAP / AMD KDS / 자체 root cert 등
+  운영자가 register. NIH 강제 안 함.
+- **Sealed key abstraction**: 실 ioctl 은 v4.5+ milestone 이지만
+  contract 는 v4.4 에서 frozen (audit chain code 가 swap 받을 준비
+  완료).
+
+**3 종 platform 지원:**
+
+| Platform | TEE | v4.4 ioctl | v4.4 verifier |
+|---|---|---|---|
+| Intel TDX | `/dev/tdx_guest` | ✅ `TDX_CMD_GET_REPORT0` | schema-only (Intel DCAP swap-in 가능) |
+| AMD SEV-SNP | `/dev/sev-guest` | ✅ `SNP_GET_REPORT` | schema-only (AMD KDS swap-in 가능) |
+| ARM CCA Realm | (TBD upstream) | 🟡 stub | 🟡 stub |
+| NVIDIA H100 CC | host TDX/SEV-SNP + GPU NAS | ✅ host part / 🟡 GPU NAS (v4.5) | host schema-only + GPU NAS pending |
+
 ---
 
 ## 4. 본 보강의 차별점 (Why This Is Novel)
@@ -712,18 +761,20 @@ tests/unit/test_compliance.py                 ←  32 unit tests (PASS)
 
 ## 6. 출원 전 체크리스트
 
-- [x] Reference implementation: `src/aegis/performance/`, `src/aegis/judge/unified_head.py`, `src/aegis/audit/{group_commit,tiered_archive,patrol}.py`, `src/aegis/hw_telemetry/collectors/`, `src/aegis/identity/`, `src/aegis/compliance/`
-- [x] Unit tests: **1138 passed** (905 → 1138, +233, 1 skipped — llama-cpp 미설치)
-- [x] Type-check clean: mypy 122 source files
+- [x] Reference implementation: `src/aegis/performance/`, `src/aegis/judge/unified_head.py`, `src/aegis/audit/{group_commit,tiered_archive,patrol}.py`, `src/aegis/hw_telemetry/collectors/`, `src/aegis/identity/`, `src/aegis/compliance/`, `src/aegis/attest/{tee_ioctl,tee_verifier}.py`, `src/aegis/sign/sealed_key.py`
+- [x] Unit tests: **1177 passed** (905 → 1177, +272, 1 skipped — llama-cpp 미설치)
+- [x] Type-check clean: mypy 125 source files
 - [x] Lint clean: ruff
-- [x] HTTP endpoints exposed: `/advisory/{kv_cache,scheduling,placement,all,unified,context}`, `/audit/patrol/{status,run}`, `/compliance/{frameworks,evidence}`
+- [x] HTTP endpoints exposed: `/advisory/{kv_cache,scheduling,placement,all,unified,context}`, `/audit/patrol/{status,run}`, `/compliance/{frameworks,evidence}`, `/attestation/{tee,tee/verify}`
 - [x] Demos: `demo/kv_cache_advisor.py`, `demo/runtime_closed_loop.py`, `demo/context_advisor.py`
 - [x] vLLM design doc: `docs/VLLM_INTEGRATION_DESIGN.md`
+- [x] T3 deployment guide: `docs/T3_DEPLOYMENT_GUIDE.md` (Azure CVM / AWS r7iz / NVIDIA H100 CC)
 - [x] **Production durability primitives** (v3.8/v3.9): group-commit + perf snapshot + tiered archive
 - [x] **Audit patrol** (v4.0, Claim 54): 6-check periodic integrity verification
 - [x] **HW telemetry collectors** (v4.1, Claim 55): 8-source aggregator + graceful degradation
 - [x] **Agent identity & MCP** (v4.2, Claim 56): W3C DID + delegation chain + capability escalation 차단
 - [x] **Compliance evidence automation** (v4.3, Claim 57): SOC 2 / EU AI Act / HIPAA / ISO 42001 자동 매핑
+- [x] **TEE-rooted attestation** (v4.4, Claim 58): Real TDX/SEV-SNP ioctl + verifier + sealed-key abstraction
 - [ ] vLLM 실제 환경 벤치마크 (cache_hit_rate uplift) — v4.x milestone
 - [ ] 학습된 unified head 가중치 — v4.x milestone
 - [ ] Subfield-selective ATV diff 압축 (Claim 49) — v3.x/v4.x

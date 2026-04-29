@@ -248,22 +248,23 @@ def test_bmc_unavailable_with_partial_env() -> None:
 
 
 def test_mock_tee_quote_always_available() -> None:
+    """v4.4: collector now auto-detects TEE; without device returns mock."""
     c = MockTEEQuoteCollector()
     assert c.is_available() is True
     r = c.collect()
     assert r.available is True
     assert r.values["hypervisor_ring_violations"] == 0.0
-    assert "quote_sha3" in r.metadata
-    assert r.metadata["trust_level"] == "unverified"
+    assert r.metadata["tee_provider"] in ("mock", "tdx", "sev-snp", "none")
+    assert r.metadata["trust_level"] in ("mock", "tdx-attested", "sev-snp-attested")
 
 
 def test_mock_tee_quote_deterministic_per_host() -> None:
-    """Same host name → identical quote bytes."""
+    """Same host name → identical enclave measurement."""
     c1 = MockTEEQuoteCollector()
     c2 = MockTEEQuoteCollector()
     r1 = c1.collect()
     r2 = c2.collect()
-    assert r1.metadata["quote_sha3"] == r2.metadata["quote_sha3"]
+    assert r1.metadata["enclave_measurement"] == r2.metadata["enclave_measurement"]
 
 
 def test_mock_aegis_fpga() -> None:

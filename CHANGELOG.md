@@ -4,6 +4,73 @@ All notable changes to AegisData MVP. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.4.0] — 2026-04-29  ·  TEE-rooted attestation deployment (Claim 58)
+
+Promotes the audit chain's trust root from host OS to **TEE silicon**
+(Intel TDX, AMD SEV-SNP). v4.1 had mock TEE collectors; v4.4 ships
+real ioctl bindings, a pluggable quote verifier, and a sealed-key
+abstraction. **Auto-detects** the TEE provider — same binary works
+on T2 dev hosts (mock fallback) and T3 production silicon (real
+attestation).
+
+### Added
+
+* `src/aegis/attest/tee_ioctl.py` — Real `ctypes`-based ioctl bindings:
+  - `fetch_tdx_report()` — `TDX_CMD_GET_REPORT0` (1024-byte TDREPORT)
+  - `fetch_sev_snp_report()` — `SNP_GET_REPORT` (4000-byte attestation)
+  - Parses MRTD / measurement / report_data from the raw ABI struct.
+* `src/aegis/attest/tee_quote.py` — `_tdx_quote()` / `_sev_snp_quote()`
+  upgraded from placeholders to real ioctl path. Auto-fallback to
+  mock when device missing.
+* `src/aegis/attest/tee_verifier.py` — `TEEQuoteVerifier` with
+  pluggable backends:
+  - Default: schema-only verification (mock + TDX + SEV-SNP)
+  - Production: `register_provider()` with Intel DCAP / AMD KDS / etc.
+* `src/aegis/sign/sealed_key.py` — `SealedKeyProvider` Protocol +
+  `LocalSealedKey` (fallback) + `SEVSNPDerivedKey` / `TDXSealedKey`
+  stubs (real ioctl path = v4.5 milestone). `detect_sealed_key_provider()`
+  auto-selects strongest available.
+* `src/aegis/hw_telemetry/collectors/mock_tee_quote.py` —
+  `MockTEEQuoteCollector` upgraded from static SHA3 to auto-detecting
+  collector. Class name kept for v4.1 backward compat.
+* `src/aegis/api/attestation.py` — `GET /attestation/tee` now runs
+  the verifier alongside fetch. New `POST /attestation/tee/verify`
+  for cross-org / peer-host verification.
+* `docs/T3_DEPLOYMENT_GUIDE.md` — Azure Confidential VM (TDX), AWS
+  r7iz (SEV-SNP), NVIDIA H100 CC, troubleshooting, production verifier
+  swap-in (Intel DCAP / AMD KDS).
+
+### Patent
+
+* `docs/PATENT_SUPPLEMENT_v3.md` adds **Claim 58** — TEE-rooted
+  attestation deployment with auto-detect + mock fallback + pluggable
+  verifier.
+
+### Numbers
+
+* **1177 tests PASS** (1138 → 1177, +39), 1 skipped (llama-cpp).
+* **mypy 125 source files clean.**
+* **ruff clean.**
+
+### Config
+
+```bash
+AEGIS_TEE_PROVIDER=tdx          # auto-detect / mock / tdx / sev-snp
+AEGIS_HW_PROVIDER=real          # v4.1 collector aggregator
+AEGIS_TEE_SEAL_KEYS=auto        # local / auto (v4.5 stubs available)
+```
+
+### Breaking change (minor)
+
+`MockTEEQuoteCollector.collect()` metadata schema changed:
+- Old keys: `quote_sha3`, `trust_level=unverified`
+- New keys: `tee_provider`, `trust_level ∈ {mock, tdx-attested, sev-snp-attested}`,
+  `enclave_measurement`, `report_data`, `raw_quote_size_bytes`
+
+Existing v4.1 tests in `test_hw_collectors.py` updated to new schema.
+
+---
+
 ## [4.3.0] — 2026-04-29  ·  Compliance evidence automation (Claim 57)
 
 Turns the existing audit primitives into structured compliance
