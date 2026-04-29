@@ -1,11 +1,23 @@
 # AegisData MVP — 세션 핸드오프 (Session Handoff)
 
-**상태 스냅샷:** 2026-04-28 (**v3.9.0**)
+**상태 스냅샷:** 2026-04-29 (**v4.0.0**)
 **Repo:** [happyikas/Aegis-ATV](https://github.com/happyikas/Aegis-ATV) (private)
 **대상:** 새 Claude Code 챗 창에서 이 프로젝트 작업을 이어가는 사람 (또는 새 Claude 인스턴스)
-**한 문장:** AegisData v3.9.0 — **production durability 도입** (group commit + 영속 perf snapshot + tiered archive). T2 demo 가 commercial-grade durability 패턴으로 진화. **1019 tests PASS (+37)**, mypy 100 source files clean, ruff clean.
+**한 문장:** AegisData v4.0.0 — **AuditPatrol** 도입 (Claim 54). 백그라운드 daemon 이 6 종 무결성 검증 (Merkle, Ed25519, AES-GCM, SHA3 commitment, cross-store consistency, ATMU sequence gap) 을 5 cadence (5min/1h/1h/6h/24h) 로 자동 수행. **1045 tests PASS (+26)**, mypy 102 source files clean, ruff clean.
 
-**v3.9 까지 release 완료:** v2.0.0 / v2.2.0 / v2.3.0 / v2.4.0 / v3.0.0 / v3.6.0 / v3.7.0 / **v3.9.0** 모두 GitHub tag + Release 발행됨.
+**v4.0 까지 release 완료:** v2.0.0 / v2.2.0 / v2.3.0 / v2.4.0 / v3.0.0 / v3.6.0 / v3.7.0 / v3.9.0 / **v4.0.0** 모두 GitHub tag + Release 발행됨.
+
+## 0-W. v4.0 (이 세션, 2026-04-29)
+
+ATMU = **Agent Telemetry Management Unit** (canonical expansion 확정, PR #10).
+
+`AuditPatrol` (Claim 54): proactive 무결성 검증.
+- 5 patrol scope × 6 검증 category × 5 severity cadence
+- `src/aegis/audit/patrol.py` + `src/aegis/api/audit_patrol.py`
+- 모든 store (audit DB, JSONL, encrypted journal, ATMU intent_log, cost ledger, cold tier) 커버
+- HTTP: `GET /audit/patrol/status`, `POST /audit/patrol/run`
+- Opt-in: `AEGIS_AUDIT_PATROL_ENABLED=true`
+- 26 unit tests, 1000-record full sweep ~50ms (M3 Mac)
 
 ## 0-X. v3.8 + v3.9 (이 세션 후속, 2026-04-28)
 

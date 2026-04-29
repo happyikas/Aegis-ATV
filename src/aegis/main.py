@@ -83,8 +83,10 @@ def create_app(
         )
     # M15 — encrypted ATV journal. Auto-create the data key on first run.
     # v3.8 — Optional group-commit wrapper for higher throughput.
+    journal_data_key: bytes | None = None
     if encrypted_journal is None:
         data_key = load_or_create_data_key(Path(settings.aegis_journal_data_key_path))
+        journal_data_key = data_key
         if settings.aegis_journal_group_commit:
             from aegis.audit.group_commit import make_journal
             encrypted_journal = make_journal(  # type: ignore[assignment]
@@ -186,6 +188,46 @@ def create_app(
         @app.on_event("shutdown")
         def _stop_migrator() -> None:
             migrator.stop()
+
+    # v4.0 — AuditPatrol (Claim 54). Background integrity check across
+    # the audit chain, JSONL mirror, encrypted journal, ATMU intent log,
+    # cost ledger, and (when configured) the v3.9 cold tier.
+    patrol = None
+    if settings.aegis_audit_patrol_enabled:
+        from aegis.audit.patrol import AuditPatrol, PatrolConfig
+        patrol = AuditPatrol(
+            public_key=real_key.public_key(),
+            audit_db=real_db,
+            jsonl=real_log,
+            intent_log=real_intent_log,
+            cost_ledger=cost_ledger,
+            encrypted_journal=encrypted_journal,
+            cold_archive_dir=(
+                Path(settings.aegis_tiered_archive_cold_dir)
+                if settings.aegis_tiered_archive_cold_dir else None
+            ),
+            cold_data_key=journal_data_key,
+            config=PatrolConfig(
+                full_interval_sec=settings.aegis_audit_patrol_full_interval_sec,
+                sample_interval_sec=settings.aegis_audit_patrol_sample_interval_sec,
+                sequence_interval_sec=settings.aegis_audit_patrol_sequence_interval_sec,
+                consistency_interval_sec=settings.aegis_audit_patrol_consistency_interval_sec,
+                cold_interval_sec=settings.aegis_audit_patrol_cold_interval_sec,
+                sample_fraction=settings.aegis_audit_patrol_sample_fraction,
+                cold_segments_per_run=settings.aegis_audit_patrol_cold_segments_per_run,
+                poll_seconds=settings.aegis_audit_patrol_poll_seconds,
+            ),
+        )
+        patrol.start()
+        app.state.audit_patrol = patrol
+
+        @app.on_event("shutdown")
+        def _stop_patrol() -> None:
+            if patrol is not None:
+                patrol.stop()
+
+    from aegis.api.audit_patrol import make_router as _audit_patrol_router
+    app.include_router(_audit_patrol_router(patrol=patrol))
 
     if _STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
