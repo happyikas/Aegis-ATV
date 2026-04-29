@@ -4,6 +4,74 @@ All notable changes to AegisData MVP. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.0.0] — 2026-04-29  ·  AuditPatrol — periodic background integrity check (Claim 54)
+
+Closes the open question from the v3.9 whitepaper: "what catches
+silent corruption / bit-rot / missing records *between* reads?"
+v3.x verifies integrity **on demand** (Ed25519 sigs at write, AES-GCM
+auth tags at decrypt, `aegis verify-audit` CLI). v4.0 adds a
+**continuous background patrol** that walks the stores on its own
+cadence and surfaces findings before the next reader trips over them.
+
+### Added
+
+* `src/aegis/audit/patrol.py` — `AuditPatrol` daemon with five patrol
+  scopes:
+  - **sequence** (5 min default) — ATMU (Agent Telemetry Management
+    Unit) `intent_log.seq` gap detection
+  - **sample** (1 h) — random 1 % subset; signature + SHA3 recompute
+  - **consistency** (1 h) — cross-check SQLite ↔ JSONL ↔ encrypted
+    journal (record presence + AEAD tag)
+  - **full** (6 h) — every aid's chain in audit DB + cost ledger
+    (Merkle + Ed25519)
+  - **cold** (24 h) — sample N segments from the v3.9 cold tier and
+    re-decrypt
+  Each scope returns a `PatrolReport` with structured `PatrolFinding`s
+  classified by category (signature, hash_mismatch, chain_break, aead,
+  consistency, sequence_gap) and severity (warning, critical).
+  Rolling 50-report history kept in memory for ops dashboards.
+* `src/aegis/api/audit_patrol.py` — `GET /audit/patrol/status` and
+  `POST /audit/patrol/run` endpoints.
+* `src/aegis/main.py` — auto-wires the patrol when
+  `AEGIS_AUDIT_PATROL_ENABLED=true`.
+
+### Patent
+
+* `docs/PATENT_SUPPLEMENT_v3.md` adds **Claim 54** — periodic 6-check
+  integrity attestation. T3 hardware (M19+) extension: patrol report
+  itself signed under the cost-attestation key (Claim 34) so the
+  patrol can't lie either.
+
+### Config (all default off)
+
+```bash
+AEGIS_AUDIT_PATROL_ENABLED=true
+AEGIS_AUDIT_PATROL_FULL_INTERVAL_SEC=21600          # 6h
+AEGIS_AUDIT_PATROL_SAMPLE_INTERVAL_SEC=3600         # 1h
+AEGIS_AUDIT_PATROL_SEQUENCE_INTERVAL_SEC=300        # 5min
+AEGIS_AUDIT_PATROL_CONSISTENCY_INTERVAL_SEC=3600    # 1h
+AEGIS_AUDIT_PATROL_COLD_INTERVAL_SEC=86400          # 24h
+AEGIS_AUDIT_PATROL_SAMPLE_FRACTION=0.01             # 1 %
+AEGIS_AUDIT_PATROL_COLD_SEGMENTS_PER_RUN=3
+AEGIS_AUDIT_PATROL_POLL_SECONDS=30
+```
+
+### Tests
+
+* `tests/unit/test_audit_patrol.py` (26 tests) — every scope covered
+  with both clean-chain and corrupted-chain inputs (signature tamper,
+  hash mismatch, sequence gap, AEAD tamper, JSONL drift, cold-tier
+  decrypt). Lifecycle (start/stop/double-start). Endpoint integration.
+
+### Numbers
+
+* **1045 tests PASS** (1019 → 1045, +26), 1 skipped (llama-cpp).
+* **mypy 102 source files clean.**
+* **ruff clean.**
+* All new functionality opt-in; existing test surface unaffected.
+
+---
+
 ## [3.9.0] — 2026-04-28  ·  Production durability — group-commit + tiered archive
 
 Bridges the gap between T2 demo (memory + per-call sync) and the four
