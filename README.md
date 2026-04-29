@@ -236,6 +236,18 @@ See [`tools/README.md`](tools/README.md) for install + tool mapping.
 | [`SHOW_HN.md`](SHOW_HN.md) | Hacker News submission copy + comment-thread playbook |
 | [`TWITTER_THREAD.md`](TWITTER_THREAD.md) | Three X/Twitter thread variants with timing + hashtag guidance |
 
+### Enterprise sales / design partner
+
+| Doc | What's in it |
+|---|---|
+| [`docs/DESIGN_PARTNER_PROGRAM.md`](docs/DESIGN_PARTNER_PROGRAM.md) | **★ Public-facing design partner landing** — Coding AI vertical, 30-day free pilot, self-assessment 5 questions |
+| [`docs/DESIGN_PARTNER_PLAYBOOK.md`](docs/DESIGN_PARTNER_PLAYBOOK.md) | Internal sales playbook — 7 영업 artifacts (outreach templates, pilot LOI, discovery questions, KPIs, case study template) |
+| [`docs/TARGET_CUSTOMERS.md`](docs/TARGET_CUSTOMERS.md) | Target customer matrix (한국 Tier 1 / 글로벌 Tier 2 / Vendor Tier 3) + 8-week action plan |
+| [`docs/DECK_INDEX.md`](docs/DECK_INDEX.md) | 3-deck navigation (A: Continuous Compliance / B: Agent Transaction Safety / C: Regulated AI Operating Model) |
+| [`docs/DECK_A_CONTINUOUS_COMPLIANCE.md`](docs/DECK_A_CONTINUOUS_COMPLIANCE.md) | CISO / CFO / Compliance officer — 30 min × 15 slides |
+| [`docs/DECK_B_AGENT_TRANSACTION_SAFETY.md`](docs/DECK_B_AGENT_TRANSACTION_SAFETY.md) | Platform engineering / SRE / Eng VP — 30 min × 15 slides |
+| [`docs/DECK_C_REGULATED_AI_OPERATING_MODEL.md`](docs/DECK_C_REGULATED_AI_OPERATING_MODEL.md) | Chief AI Officer / Regulated industry — 45 min × 20 slides |
+
 ---
 
 ## Configuration
