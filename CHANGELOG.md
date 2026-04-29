@@ -4,6 +4,58 @@ All notable changes to AegisData MVP. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [4.1.0] — 2026-04-29  ·  HW telemetry collectors — multi-source aggregator (Claim 55)
+
+Real hardware data finally flows into the ATV HW band. Up through
+v4.0, the 200-D HW band was either zero-filled (T2 default) or fed
+by the v2.3 SHA3 simulator. v4.1 introduces an 8-source collector
+framework that reads from standard Linux interfaces (`/proc`, `/sys`),
+NVML, ethtool, Redfish — and graceful-degrades to the simulator
+baseline for any slot that doesn't have a real source on this host.
+
+### Added
+
+* `src/aegis/hw_telemetry/collectors/` — new package:
+  - `base.py` — `HWCollector` Protocol + `CollectorResult` dataclass.
+  - `pmu.py` — CPU PMU via `/proc/stat` + `/proc/loadavg`.
+  - `edac.py` — DRAM ECC via Linux EDAC subsystem.
+  - `iommu.py` — DMA fanout via `/sys/kernel/iommu_groups/`.
+  - `ethtool.py` — NIC counters via `/proc/net/dev`.
+  - `nvml.py` — NVIDIA GPU via optional `pynvml` dependency.
+  - `bmc_redfish.py` — out-of-band BMC via Redfish HTTP.
+  - `mock_tee_quote.py` — Intel TDX / AMD SEV-SNP / ARM CCA placeholder.
+  - `mock_aegis_fpga.py` — M21+ custom silicon placeholder.
+  - `aggregator.py` — `CollectorAggregator` with frozen merge priority,
+    `availability_report()` for ops, and `aggregate_from_env()`
+    factory.
+* `src/aegis/hw_telemetry/simulator.py` — `simulate_from_env()` now
+  routes `AEGIS_HW_PROVIDER=real` to the aggregator (the v2.3 `sim`
+  path stays unchanged).
+* `src/aegis/config.py` — `aegis_hw_provider` literal extended with
+  `"real"`.
+
+### Patent
+
+* `docs/PATENT_SUPPLEMENT_v3.md` adds **Claim 55** — multi-source HW
+  telemetry aggregator with frozen collector priority order.
+
+### Numbers
+
+* **1075 tests PASS** (1045 → 1075, +30), 1 skipped (llama-cpp).
+* **mypy 113 source files clean.**
+* **ruff clean.**
+* All new functionality opt-in via `AEGIS_HW_PROVIDER=real`.
+
+### T3 swap-in path
+
+When real silicon arrives (M19+):
+- `MockTEEQuoteCollector` → real TDX/SEV-SNP/CCA quote provider
+- `MockAegisFPGACollector` → real PCIe/MMIO read of FPGA counters
+
+Aggregator + firewall + audit chain stay unchanged.
+
+---
+
 ## [4.0.0] — 2026-04-29  ·  AuditPatrol — periodic background integrity check (Claim 54)
 
 Closes the open question from the v3.9 whitepaper: "what catches
