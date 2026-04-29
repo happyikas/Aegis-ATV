@@ -1,11 +1,23 @@
 # AegisData MVP — 세션 핸드오프 (Session Handoff)
 
-**상태 스냅샷:** 2026-04-29 (**v4.1.0**)
+**상태 스냅샷:** 2026-04-29 (**v4.2.0**)
 **Repo:** [happyikas/Aegis-ATV](https://github.com/happyikas/Aegis-ATV) (private)
 **대상:** 새 Claude Code 챗 창에서 이 프로젝트 작업을 이어가는 사람 (또는 새 Claude 인스턴스)
-**한 문장:** AegisData v4.1.0 — **HW telemetry collector framework** (Claim 55). 8 source aggregator 가 PMU/EDAC/IOMMU/ethtool/NVML/BMC + TEE/FPGA mock 을 단일 :class:`CollectorAggregator` 로 통합, T2 환경에서 ATV HW band 의 ~70 % 가 실 데이터로 채워짐. **1075 tests PASS (+30)**, mypy 113 source files clean, ruff clean.
+**한 문장:** AegisData v4.2.0 — **Agent identity + MCP + W3C DID** (Claim 56). 9-framework 의 #8 (Agent identity) 구현. Ed25519-signed identity proof + delegation chain (capability escalation 차단) + 3 종 DID method. **1106 tests PASS (+31)**, mypy 118 source files clean, ruff clean.
 
-**v4.1 까지 release 완료:** v2.0.0 / v2.2.0 / v2.3.0 / v2.4.0 / v3.0.0 / v3.6.0 / v3.7.0 / v3.9.0 / v4.0.0 / **v4.1.0** 모두 GitHub tag + Release 발행됨.
+**v4.2 까지 release 완료:** v2.0.0 / v2.2.0 / v2.3.0 / v2.4.0 / v3.0.0 / v3.6.0 / v3.7.0 / v3.9.0 / v4.0.0 / v4.1.0 / **v4.2.0** 모두 GitHub tag + Release 발행됨.
+
+## 0-U. v4.2 (이 세션, 2026-04-29)
+
+`src/aegis/identity/` — agent identity package:
+
+- `agent_id.py`: `AgentIdentity` (tenant + aid + did + capabilities + parent_aid + expiry), `IdentityProof` (Ed25519 + compact-token), `DelegationChain` (subset-enforcement)
+- `did.py`: pluggable W3C DID resolver. 3 method: `did:aegis:` (local), `did:key:` (cross-org), `did:web:` (stub)
+- `mcp.py`: `MCPAegisMiddleware` reference adapter for Anthropic Model Context Protocol
+- `step308_identity.py`: firewall step inserted at position 305→**308**→309. No-op when `AEGIS_IDENTITY_REQUIRE=false` (default), enforces when `true`
+- ATV schema 추가 field: `agent_identity_proof_token`
+
+**Backward compat:** opt-in via env var. 기존 1075 test 영향 없음.
 
 ## 0-V. v4.1 (이 세션, 2026-04-29)
 

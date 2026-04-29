@@ -259,6 +259,11 @@ class ATVInput(BaseModel):
     # cost
     cost_estimate: CostEfficiencyMetrics = Field(default_factory=CostEfficiencyMetrics)
 
+    # v4.2 — Agent identity proof (Claim 56). Optional compact-token
+    # form of an :class:`aegis.identity.IdentityProof`. ``step308_identity``
+    # verifies it; downstream steps consume ``ctx.extras["verified_identity"]``.
+    agent_identity_proof_token: str | None = None
+
 
 # ─────────────────────────────────────────────────────────────────────
 # Verdict
