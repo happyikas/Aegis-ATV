@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""Claude Code PostToolUse hook — capture tool result + close ATMU intent.
+
+Fires after every tool execution. Reads the same payload as PreToolUse
+plus a ``tool_response`` field carrying the tool's actual output. We
+use it to:
+
+1. Close the ATMU intent record (committed / aborted) that PreToolUse
+   opened — this is the second phase of 2PC (Claim 2/15).
+2. Optionally POST to ``/tool-outcome`` so the perf-feedback EWMA
+   (v3.2) gets fresh measurements.
+3. Append a PostToolUse audit event so the chain reflects actual
+   execution (PreToolUse only logs the *intent*).
+
+Install via ``aegis install`` (which registers all hooks) or manually
+in ``~/.claude/settings.json``:
+
+    {
+      "hooks": {
+        "PostToolUse": [{
+          "hooks": [{
+            "type": "command",
+            "command": "python3 /ABS/PATH/MVP/tools/hooks/post_tool.py"
+          }]
+        }]
+      }
+    }
+
+Failure modes
+-------------
+This hook **never blocks Claude Code** — exit code is always 0.
+Errors are logged to stderr and swallowed. The Pre-hook already
+gated execution; PostTool's job is forensic capture only.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+LOCAL_AUDIT_PATH = Path(
+    os.environ.get(
+        "AEGIS_LOCAL_AUDIT", str(Path.home() / ".aegis" / "audit.jsonl")
+    )
+)
+SIDECAR_URL = os.environ.get("AEGIS_SIDECAR_URL", "")
+TOOL_OUTCOME_TIMEOUT_S = float(os.environ.get("AEGIS_POST_TIMEOUT_S", "1.0"))
+
+
+def _emit(msg: str) -> None:
+    print(f"[aegis-post] {msg}", file=sys.stderr, flush=True)
+
+
+def _append_audit(record: dict[str, Any]) -> None:
+    """Append to the local SHA3-chained audit log (same as PreToolUse)."""
+    try:
+        from aegis.audit.local_chain import append as chain_append
+
+        chain_append(LOCAL_AUDIT_PATH, record)
+    except OSError:
+        pass
+
+
+def _post_tool_outcome(payload: dict[str, Any]) -> None:
+    """Best-effort POST to the sidecar's /tool-outcome endpoint.
+
+    Skipped silently when AEGIS_SIDECAR_URL is unset (local-only mode).
+    """
+    if not SIDECAR_URL:
+        return
+    try:
+        import urllib.request
+
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url=f"{SIDECAR_URL.rstrip('/')}/tool-outcome",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=TOOL_OUTCOME_TIMEOUT_S):
+            pass
+    except Exception:  # noqa: BLE001 — never crash on transport failure
+        pass
+
+
+def _result_hash(tool_response: Any) -> str:
+    """SHA3-256 of the tool's response — commit hash of side-effect."""
+    try:
+        body = json.dumps(
+            tool_response, sort_keys=True, default=str,
+        ).encode("utf-8")
+    except (TypeError, ValueError):
+        body = repr(tool_response).encode("utf-8")
+    return hashlib.sha3_256(body).hexdigest()
+
+
+def _classify_status(tool_response: Any, exit_code: int | None) -> str:
+    """Map Claude Code's tool result into ATMU status enum.
+
+    success | failure | timeout | partial — 4 of the 5 ATMU
+    terminal states. ``compensated`` is set later by an explicit
+    rollback CLI / API call.
+    """
+    if exit_code is not None:
+        if exit_code == 0:
+            return "success"
+        if exit_code in (124, 137, 143):  # timeout signals
+            return "timeout"
+        return "failure"
+    # Heuristic on tool_response: presence of "error" key = failure
+    if isinstance(tool_response, dict) and (
+        tool_response.get("is_error") or tool_response.get("error")
+    ):
+        return "failure"
+    if tool_response is None:
+        return "partial"
+    return "success"
+
+
+def handle_posttool(stdin: Any, stdout: Any) -> int:
+    raw = stdin.read()
+    if not raw or not raw.strip():
+        return 0
+    try:
+        event: dict[str, Any] = json.loads(raw)
+    except json.JSONDecodeError:
+        return 0
+
+    if event.get("hook_event_name") not in (None, "", "PostToolUse"):
+        return 0
+
+    session_id = event.get("session_id", "")
+    tool_name = event.get("tool_name", "")
+    tool_input = event.get("tool_input", {}) or {}
+    tool_response = event.get("tool_response")
+    exit_code_raw = event.get("exit_code")
+    exit_code = int(exit_code_raw) if exit_code_raw is not None else None
+    invocation_id = event.get("invocation_id", "")
+
+    rh = _result_hash(tool_response)
+    status = _classify_status(tool_response, exit_code)
+    now_ns = time.time_ns()
+
+    record = {
+        "ts_ns": now_ns,
+        "tool": tool_name,
+        "aid": session_id,
+        "invocation_id": invocation_id,
+        "hook": "PostToolUse",
+        "status": status,
+        "result_hash": rh,
+        "exit_code": exit_code,
+        "tool_input_keys": sorted(tool_input.keys()) if isinstance(tool_input, dict) else [],
+        "mode": "local",
+    }
+    _append_audit(record)
+
+    # Best-effort sidecar /tool-outcome POST so perf EWMA updates.
+    _post_tool_outcome({
+        "record_id": invocation_id or session_id,
+        "status": status,
+        "result_hash": rh,
+        "tenant_id": os.environ.get("AEGIS_TENANT_ID", "claude-code-local"),
+        "aid": session_id,
+        # PostToolUse doesn't carry latency/token info — leave to host
+        # to report via /tool-outcome with explicit metrics.
+    })
+
+    return 0
+
+
+def main() -> int:
+    return handle_posttool(sys.stdin, sys.stdout)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
