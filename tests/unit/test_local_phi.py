@@ -244,6 +244,68 @@ def test_parse_real_decode_unparseable_falls_back_to_allow() -> None:
     assert decision == "ALLOW"
 
 
+# ---- Phi-3.5 markdown-fenced output (tests the strip + parse path) -----
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_decision", "expected_in_reason"),
+    [
+        # Phi-3.5-mini canonical greedy output: \n\n```json\n{...}\n```
+        (
+            '\n\n```json\n{"decision": "BLOCK", "reason": "credentials in args"}\n```',
+            "BLOCK",
+            "credentials",
+        ),
+        # Without the json tag (some models emit just ```)
+        (
+            '\n```\n{"decision": "ALLOW", "reason": "read-only"}\n```',
+            "ALLOW",
+            "read-only",
+        ),
+        # Trailing prose after the fence — common Phi-3.5 pattern
+        (
+            '\n```json\n{"decision": "REQUIRE_APPROVAL", "reason": "high impact"}\n```\n\n'
+            '### Answer\n\n```json\n{"decision": "BLOCK", ...',
+            "REQUIRE_APPROVAL",
+            "high impact",
+        ),
+        # Llama-1B raw style still works (no fence)
+        (
+            '{"decision": "BLOCK", "reason": "destructive verb"}',
+            "BLOCK",
+            "destructive",
+        ),
+    ],
+)
+def test_parse_real_decode_markdown_fence_phi35(
+    text: str, expected_decision: str, expected_in_reason: str,
+) -> None:
+    from aegis.judge.local_phi import _parse_real_decode
+
+    decision, conf, reason = _parse_real_decode(text)
+    assert decision == expected_decision, (
+        f"failed to extract {expected_decision} from:\n{text}\n→ got {decision!r} ({reason!r})"
+    )
+    assert expected_in_reason.lower() in reason.lower()
+    assert conf > 0.0
+
+
+def test_strip_markdown_fence_returns_inner_json() -> None:
+    """Direct unit test of the helper — must not crash on any input."""
+    from aegis.judge.local_phi import _strip_markdown_fence
+
+    # With fence
+    assert "decision" in _strip_markdown_fence(
+        '\n\n```json\n{"decision": "BLOCK"}\n```'
+    )
+    # Without fence — passes through trim
+    assert _strip_markdown_fence("  hello  ") == "hello"
+    # Empty
+    assert _strip_markdown_fence("") == ""
+    # Garbage
+    assert isinstance(_strip_markdown_fence("```json\nbroken"), str)
+
+
 # ---- get_judge() integration ------------------------------------------
 
 
