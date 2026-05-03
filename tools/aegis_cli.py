@@ -36,12 +36,14 @@ import sqlite3
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 DB = Path(".aegis/wal.db")
 HERE = Path(__file__).resolve().parent
 PROJECT_ROOT = HERE.parent
 HOOK_SCRIPT = HERE / "aegis_hook.py"               # sidecar mode (POST /evaluate)
 LOCAL_HOOK_SCRIPT = HERE / "aegis_local_hook.py"   # local mode (in-process)
+POST_HOOK_SCRIPT = HERE / "hooks" / "post_tool.py"
 STOP_HOOK_SCRIPT = HERE / "hooks" / "session_end.py"
 PLUGIN_MANIFEST = PROJECT_ROOT / ".claude-plugin" / "plugin.json"
 POLICIES_DIR = PROJECT_ROOT / "policies"
@@ -281,7 +283,34 @@ def _validate_plugin_manifest() -> tuple[bool, str]:
     return True, str(version)
 
 
-def _build_pretool_command(mode: str) -> str:
+VALID_LOCAL_JUDGES = ("dummy", "hybrid")
+
+
+def _hook_python_executable() -> str:
+    """Return the Python interpreter Claude Code should use for hooks.
+
+    The Aegis hooks ``import numpy``, ``import pydantic``, etc., so they
+    must run inside the project's venv — bare ``python3`` on macOS is
+    typically system Python without our deps and will crash with
+    ``ModuleNotFoundError: numpy`` the moment Claude Code fires the hook.
+
+    Resolution order:
+
+    1. ``<repo_root>/.venv/bin/python`` — the canonical ``uv``-managed
+       venv. Present after ``uv sync``.
+    2. ``sys.executable`` — the current interpreter (likely the venv's
+       python when ``aegis`` is invoked via ``uv run aegis install``).
+    3. ``"python3"`` — last-resort PATH lookup.
+    """
+    venv_py = PROJECT_ROOT / ".venv" / "bin" / "python"
+    if venv_py.exists():
+        return str(venv_py)
+    if sys.executable and Path(sys.executable).exists():
+        return sys.executable
+    return "python3"
+
+
+def _build_pretool_command(mode: str, *, judge: str = "dummy") -> str:
     """Compose the shell command embedded into the PreToolUse hook.
 
     Sidecar mode uses the existing ``tools/aegis_hook.py`` (POST /evaluate);
@@ -291,8 +320,9 @@ def _build_pretool_command(mode: str) -> str:
     * ``AEGIS_EMBEDDING_PROVIDER=dummy``  — Solo Free runs without an
       OpenAI key by default; users who explicitly want real embeddings
       can edit settings.json by hand.
-    * ``AEGIS_JUDGE_PROVIDER=dummy``      — same rationale, dummy
-      regex judge instead of Claude Haiku.
+    * ``AEGIS_JUDGE_PROVIDER`` — ``dummy`` (default, keyword-only) or
+      ``hybrid`` (heuristic + keyword + M13 attribution head, still
+      offline). Required for AWS-secret + loop scenarios to BLOCK.
     * ``AEGIS_POLICY_DIR``                — absolute path to policies/
       so step310 can find sensitive_paths.json from any cwd.
     * ``PYTHONPATH``                      — absolute path to src/ so the
@@ -300,19 +330,82 @@ def _build_pretool_command(mode: str) -> str:
       user having to ``uv sync`` first.
     """
     if mode == "local":
+        if judge not in VALID_LOCAL_JUDGES:
+            raise ValueError(
+                f"--judge must be one of {VALID_LOCAL_JUDGES}, got {judge!r}"
+            )
+        py = _hook_python_executable()
         return (
             f"AEGIS_EMBEDDING_PROVIDER=dummy "
-            f"AEGIS_JUDGE_PROVIDER=dummy "
+            f"AEGIS_JUDGE_PROVIDER={judge} "
             f"AEGIS_POLICY_DIR={POLICIES_DIR} "
             f"PYTHONPATH={SRC_DIR} "
-            f"python3 {LOCAL_HOOK_SCRIPT}"
+            f"{py} {LOCAL_HOOK_SCRIPT}"
         )
-    return f"python3 {HOOK_SCRIPT}"
+    return f"{_hook_python_executable()} {HOOK_SCRIPT}"
+
+
+def _build_posttool_command(mode: str) -> str:
+    """Compose the shell command embedded into the PostToolUse hook.
+
+    Both modes share the same ``tools/hooks/post_tool.py`` script —
+    PostToolUse closes the ATMU intent record (2PC phase 2) and feeds
+    /tool-outcome (sidecar) or just appends to the local audit chain
+    (local). We pre-pend ``PYTHONPATH=src`` so the subprocess can
+    ``import aegis.audit.local_chain`` without ``uv sync`` first, and
+    use the venv's interpreter so deps resolve.
+    """
+    py = _hook_python_executable()
+    if mode == "local":
+        return f"PYTHONPATH={SRC_DIR} {py} {POST_HOOK_SCRIPT}"
+    return f"{py} {POST_HOOK_SCRIPT}"
 
 
 def _pretool_hook_marker(mode: str) -> str:
     """Substring searched in existing settings to detect a prior install."""
     return str(LOCAL_HOOK_SCRIPT) if mode == "local" else str(HOOK_SCRIPT)
+
+
+# Substrings that identify any Aegis-owned hook entry in settings.json,
+# regardless of which repo path / judge / mode wrote it. ``--force``
+# uses these to evict stale entries before installing fresh ones, so
+# users who moved the repo or switched modes don't accumulate dead
+# command lines.
+_AEGIS_HOOK_FINGERPRINTS = (
+    "aegis_local_hook.py",
+    "aegis_hook.py",
+    "tools/hooks/post_tool.py",
+    "tools/hooks/session_end.py",
+)
+
+
+def _is_aegis_owned(command: str) -> bool:
+    return any(fp in command for fp in _AEGIS_HOOK_FINGERPRINTS)
+
+
+def _drop_aegis_entries(hooks_section: dict[str, list[dict[str, Any]]]) -> int:
+    """Remove every Aegis-owned hook entry from ``hooks_section``.
+
+    Returns the number of entries dropped. Used by ``aegis install
+    --force`` so stale entries (old repo paths, wrong python
+    interpreter, leftover from a removed v2.0 install, etc.) get
+    evicted instead of accumulating.
+    """
+    n_dropped = 0
+    for stage in ("PreToolUse", "PostToolUse", "Stop"):
+        entries = hooks_section.get(stage, [])
+        keep: list[dict[str, Any]] = []
+        for entry in entries:
+            ours = any(
+                _is_aegis_owned(h.get("command", ""))
+                for h in entry.get("hooks", [])
+            )
+            if ours:
+                n_dropped += 1
+            else:
+                keep.append(entry)
+        hooks_section[stage] = keep
+    return n_dropped
 
 
 def _default_baseline_path() -> Path:
@@ -613,6 +706,14 @@ def cmd_install(args: argparse.Namespace) -> int:
     * ``--mode local`` — registers ``tools/aegis_local_hook.py`` so
       the firewall pipeline runs in-process; no service required (Solo
       Free tier).
+    * ``--judge dummy|hybrid`` (local mode only) — chooses the offline
+      sLLM judge stack. ``dummy`` is keyword-only (fastest, may miss
+      AWS-secret + loop scenarios); ``hybrid`` is heuristic + keyword
+      + M13 attribution head (recommended for real coding-AI traffic).
+    * PostToolUse hook — both modes register
+      ``tools/hooks/post_tool.py`` so the ATMU intent (opened by
+      PreToolUse) is closed with the committed status / result hash.
+      Required for the audit chain to reflect actual tool execution.
     * Stop hook — both modes also register
       ``tools/hooks/session_end.py`` so transcript cost data is
       back-filled when each Claude Code session ends (D6).
@@ -620,12 +721,20 @@ def cmd_install(args: argparse.Namespace) -> int:
       ``.claude-plugin/plugin.json`` is missing or malformed.
     """
     mode = args.mode
+    judge = getattr(args, "judge", "dummy")
+    if mode == "local" and judge not in VALID_LOCAL_JUDGES:
+        print(
+            _red(f"--judge must be one of {VALID_LOCAL_JUDGES}, got {judge!r}"),
+            file=sys.stderr,
+        )
+        return 2
 
     ok, info = _validate_plugin_manifest()
     if not ok:
         print(_red(info), file=sys.stderr)
         return 1
-    print(f"[install] plugin v{info}, mode={mode}")
+    judge_str = f", judge={judge}" if mode == "local" else ""
+    print(f"[install] plugin v{info}, mode={mode}{judge_str}")
 
     pretool_script = LOCAL_HOOK_SCRIPT if mode == "local" else HOOK_SCRIPT
     if not pretool_script.exists():
@@ -634,6 +743,9 @@ def cmd_install(args: argparse.Namespace) -> int:
     if not pretool_script.stat().st_mode & 0o100:
         print(_yellow(f"making {pretool_script.name} executable"))
         pretool_script.chmod(pretool_script.stat().st_mode | 0o111)
+    if not POST_HOOK_SCRIPT.exists():
+        print(_red(f"hook script not found: {POST_HOOK_SCRIPT}"), file=sys.stderr)
+        return 1
 
     SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
 
@@ -656,7 +768,7 @@ def cmd_install(args: argparse.Namespace) -> int:
         existing = {}
         print(f"creating new {SETTINGS_PATH}")
 
-    pretool_cmd = _build_pretool_command(mode)
+    pretool_cmd = _build_pretool_command(mode, judge=judge)
     pretool_marker = _pretool_hook_marker(mode)
     pretool_entry = {
         "matcher": "*",
@@ -664,16 +776,39 @@ def cmd_install(args: argparse.Namespace) -> int:
     }
 
     hooks_section = existing.setdefault("hooks", {})
+
+    if args.force:
+        n_dropped = _drop_aegis_entries(hooks_section)
+        if n_dropped:
+            print(_yellow(
+                f"--force: evicted {n_dropped} stale Aegis hook entr"
+                f"{'y' if n_dropped == 1 else 'ies'}"
+            ))
+
     pretooluse = hooks_section.setdefault("PreToolUse", [])
 
     for entry in pretooluse:
         for h in entry.get("hooks", []):
             if pretool_marker in h.get("command", "") and not args.force:
                 print(_green(f"already installed — {h['command']!r}"))
-                print("(re-run with --force to add anyway)")
+                print("(re-run with --force to replace it)")
                 return 0
 
     pretooluse.append(pretool_entry)
+
+    # Register PostToolUse — closes ATMU intent (2PC phase 2). Idempotent.
+    posttool_cmd = _build_posttool_command(mode)
+    posttool_hooks = hooks_section.setdefault("PostToolUse", [])
+    posttool_already = any(
+        str(POST_HOOK_SCRIPT) in h.get("command", "")
+        for entry in posttool_hooks
+        for h in entry.get("hooks", [])
+    )
+    if not posttool_already:
+        posttool_hooks.append({
+            "matcher": "*",
+            "hooks": [{"type": "command", "command": posttool_cmd}],
+        })
 
     # Always register the Stop hook (D6 cost auto-import); idempotent.
     stop_hooks = hooks_section.setdefault("Stop", [])
@@ -683,15 +818,17 @@ def cmd_install(args: argparse.Namespace) -> int:
         for h in entry.get("hooks", [])
     )
     if not stop_already:
-        stop_cmd = f"python3 {STOP_HOOK_SCRIPT}"
+        stop_cmd = f"{_hook_python_executable()} {STOP_HOOK_SCRIPT}"
         stop_hooks.append({"hooks": [{"type": "command", "command": stop_cmd}]})
 
     SETTINGS_PATH.write_text(json.dumps(existing, indent=2) + "\n")
 
     print(_green(f"\u2713 installed Aegis hooks → {SETTINGS_PATH}"))
     print(f"  PreToolUse:  {pretool_cmd}")
+    if not posttool_already:
+        print(f"  PostToolUse: {posttool_cmd}")
     if not stop_already:
-        print(f"  Stop:        python3 {STOP_HOOK_SCRIPT}")
+        print(f"  Stop:        {_hook_python_executable()} {STOP_HOOK_SCRIPT}")
     print('  matcher: "*" (every tool — narrow this in settings.json if too noisy)')
     print()
     if mode == "sidecar":
@@ -933,6 +1070,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     inst.add_argument(
         "--force", action="store_true", help="add hook even if already installed"
+    )
+    inst.add_argument(
+        "--judge",
+        choices=list(VALID_LOCAL_JUDGES),
+        default="dummy",
+        help=(
+            "(--mode local only) sLLM judge stack. dummy: keyword-only "
+            "(fastest, may miss AWS-secret + loop scenarios). hybrid: "
+            "heuristic + keyword + M13 attribution head (recommended for "
+            "real coding-AI traffic, still offline). default: dummy"
+        ),
     )
     inst.set_defaults(fn=cmd_install)
 
