@@ -448,23 +448,33 @@ class LocalPhiJudge(Judge):
 
             client = DaemonClient()
             if client.is_running():
-                attr_dict: dict[str, float] = {}
-                attr_v = self._attribution().evaluate_full(
+                # Compute attribution + RAG in-process (cheap), then
+                # round-trip the LLM call to the daemon.
+                #
+                # NOTE: Local names here intentionally do NOT shadow the
+                # in-process branch's ``attr_dict`` / ``reason`` (which
+                # are declared below at "if mode == ...:" time). On
+                # daemon-success we return early; on daemon-fail we
+                # fall through and the in-process branch re-derives
+                # what it needs.
+                daemon_attr_v = self._attribution().evaluate_full(
                     summary, atv=atv, inp=inp,
                 )
-                attr_dict = attr_v.subfield_attribution
-                rag_block = _build_rag_block(atv, inp, summary)
-                daemon_resp = client.evaluate(summary, attr_dict, rag_block)
+                daemon_attr_dict = daemon_attr_v.subfield_attribution
+                daemon_rag_block = _build_rag_block(atv, inp, summary)
+                daemon_resp = client.evaluate(
+                    summary, daemon_attr_dict, daemon_rag_block,
+                )
                 if daemon_resp is not None:
-                    reason = daemon_resp.reason
-                    if rag_block:
-                        reason = f"{reason}  [+RAG]"
-                    reason = f"{reason}  [daemon]"
+                    daemon_reason = daemon_resp.reason
+                    if daemon_rag_block:
+                        daemon_reason = f"{daemon_reason}  [+RAG]"
+                    daemon_reason = f"{daemon_reason}  [daemon]"
                     elapsed_ms = (time.perf_counter_ns() - t0) / 1_000_000
                     return JudgeVerdict(
                         decision=daemon_resp.decision,  # type: ignore[arg-type]
                         confidence=daemon_resp.confidence,
-                        reason=reason,
+                        reason=daemon_reason,
                         model_hash=daemon_resp.model_hash,
                         latency_ms=round(elapsed_ms, 3),
                     )
