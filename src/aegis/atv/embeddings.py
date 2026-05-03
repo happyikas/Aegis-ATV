@@ -98,7 +98,10 @@ def _load_bge_llm(model_path_str: str) -> Any:
     to open — :class:`BGELocalEmbedding` then falls back to dummy.
     """
     try:
-        from llama_cpp import Llama  # type: ignore[import-not-found]
+        # ``llama_cpp`` is the optional ``aegis-mvp[local-llm]`` extra;
+        # CI sees import-not-found, local dev with the extra installed
+        # sees unused-ignore. Suppress both.
+        from llama_cpp import Llama  # type: ignore[import-not-found,unused-ignore]
     except ImportError:
         return None
     try:
