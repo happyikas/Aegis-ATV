@@ -582,6 +582,73 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────
+# 16. LLM-keep-alive daemon (cold-load elimination)
+# ─────────────────────────────────────────────────────────────────────
+printf "\n%s[16] LLM-keep-alive daemon%s\n" "$C_BOLD" "$C_RESET"
+if [[ "$LLAMA_CHECK" != "ok" ]]; then
+  note "skipped — llama-cpp-python not installed."
+elif [[ -z "$MODEL_FILE" ]]; then
+  note "skipped — no judge GGUF in $REPO_ROOT/models/."
+else
+  # Use a separate sandboxed sock + pid path so we don't disturb a
+  # daemon the user may be running for real.
+  SC_SOCK="$(mktemp -u)/llm.sock"
+  SC_PID="$(mktemp -u)/llm.pid"
+  mkdir -p "$(dirname "$SC_SOCK")"
+  AEGIS_SIDECAR_SOCK="$SC_SOCK" \
+  AEGIS_SIDECAR_PID="$SC_PID" \
+  AEGIS_JUDGE_MODEL_PATH="$MODEL_FILE" \
+  AEGIS_JUDGE_LOCAL_PHI_STUB=0 \
+  uv run aegis sidecar start --model "$MODEL_FILE" >/dev/null 2>&1
+  SC_RC=$?
+  if [[ "$SC_RC" != "0" ]]; then
+    fail "sidecar start failed rc=$SC_RC"
+  else
+    # Daemon is up. Measure subprocess wall-time for one inference.
+    SUB_OUT="$(AEGIS_SIDECAR_SOCK="$SC_SOCK" \
+              AEGIS_JUDGE_MODEL_PATH="$MODEL_FILE" \
+              "$PYTHON" - <<'PY' 2>&1
+import time
+from aegis.judge.local_phi import LocalPhiJudge
+from aegis.atv.builder import build_atv
+from aegis.schema import ATVHeader, ATVInput, CostEfficiencyMetrics
+inp = ATVInput(
+    header=ATVHeader(trace_id="t", span_id="s", tenant_id="t", aid="a", timestamp_ns=time.time_ns()),
+    agent_state_text="", plan_text="", tool_name="Bash", tool_args_json='{"command":"ls"}',
+    safety_flags={}, memory_fingerprint="sha3:t",
+    cost_estimate=CostEfficiencyMetrics(input_token_count=1, output_token_count=1),
+)
+atv = build_atv(inp)
+t0 = time.perf_counter_ns()
+v = LocalPhiJudge().evaluate_full('tool=Bash command="ls"', atv=atv, inp=inp)
+ms = (time.perf_counter_ns() - t0) / 1_000_000
+served_by_daemon = "[daemon]" in v.reason
+print(f"DAEMON_USED={served_by_daemon}")
+print(f"LATENCY_MS={ms:.1f}")
+PY
+)"
+    DAEMON_USED="$(echo "$SUB_OUT" | grep '^DAEMON_USED=' | cut -d= -f2)"
+    LAT="$(echo "$SUB_OUT" | grep '^LATENCY_MS=' | cut -d= -f2)"
+    LAT_INT="${LAT%.*}"
+    AEGIS_SIDECAR_SOCK="$SC_SOCK" \
+    AEGIS_SIDECAR_PID="$SC_PID" \
+    uv run aegis sidecar stop >/dev/null 2>&1 || true
+    # 3000 ms cap: well under Claude Code's 5 s hook timeout AND a
+    # comfortable margin below Phi-3.5's 6.5 s cold-load baseline,
+    # which is what the daemon eliminates.
+    if [[ "$DAEMON_USED" == "True" && "${LAT_INT:-99999}" -lt "3000" ]]; then
+      ok "daemon served verdict in ${LAT} ms (via [daemon] marker)"
+    elif [[ "$DAEMON_USED" == "True" ]]; then
+      fail "daemon path used but latency ${LAT} ms exceeds 3 s cap (model too slow / system overloaded)"
+    else
+      fail "daemon path not exercised: used=$DAEMON_USED latency=$LAT"
+      note "$(echo "$SUB_OUT" | tail -3 | sed 's/^/    /')"
+    fi
+  fi
+  rm -rf "$(dirname "$SC_SOCK")" 2>/dev/null
+fi
+
+# ─────────────────────────────────────────────────────────────────────
 # Summary
 # ─────────────────────────────────────────────────────────────────────
 printf "\n────────────────────────────────────────────────────────────\n"

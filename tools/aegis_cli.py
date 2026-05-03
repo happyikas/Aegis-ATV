@@ -33,6 +33,7 @@ import argparse
 import json
 import os
 import shutil
+import signal
 import sqlite3
 import sys
 import time
@@ -1908,6 +1909,175 @@ def cmd_session(args: argparse.Namespace) -> int:
     return 2
 
 
+def cmd_sidecar(args: argparse.Namespace) -> int:
+    """Manage the local LLM-keep-alive daemon.
+
+    The daemon (``aegis.judge.llm_daemon``) is a one-purpose process:
+    it keeps a Llama-cpp GGUF resident in memory and serves
+    ``evaluate`` requests over a Unix socket. This eliminates the
+    per-PreToolUse cold load — Llama-1B drops from 2.1 s to ~150 ms,
+    Phi-3.5-mini from 6.5 s to ~150 ms (the latter is what makes
+    Phi-3.5 actually viable under Claude Code's 5 s hook timeout).
+
+    Three actions:
+
+    * ``start`` — spawn the daemon as a detached subprocess. Writes
+      ``~/.aegis/llm_sidecar.pid`` (PID + model path + sock path)
+      and creates ``~/.aegis/llm_sidecar.sock``. Polls the socket
+      until the daemon is ready or the timeout expires.
+    * ``stop``  — read the PID file, send SIGTERM, wait for the
+      socket to disappear. Idempotent (no-op if already stopped).
+    * ``status`` — table form: PID, uptime, model path + hash,
+      requests served. Useful for verifying the daemon is alive
+      AND serving the GGUF you expect.
+
+    The daemon is **optional** — when not running, ``LocalPhiJudge``
+    silently falls back to per-call in-process loading. That's the
+    pre-PR-#30 behaviour, so existing installs keep working
+    unchanged.
+    """
+    from aegis.judge.llm_daemon import (
+        DaemonClient,
+        is_pid_alive,
+        read_pid_file,
+    )
+
+    if args.action == "status":
+        info = read_pid_file()
+        if info is None:
+            print(_yellow("[sidecar] not running (no PID file)"))
+            return 0
+        pid = int(info.get("pid", 0))
+        if not is_pid_alive(pid):
+            print(_yellow(
+                f"[sidecar] PID {pid} is not alive — stale PID file at "
+                f"~/.aegis/llm_sidecar.pid (run `aegis sidecar stop` to clean)"
+            ))
+            return 1
+        client = DaemonClient()
+        ping = client.ping()
+        if ping is None:
+            print(_yellow(
+                f"[sidecar] PID {pid} alive but socket unresponsive — "
+                f"daemon may still be loading model. Try again in a few seconds."
+            ))
+            return 1
+        print(_green("✓ sidecar running"))
+        print(f"  pid:        {pid}")
+        print(f"  model:      {info.get('model_path', '?')}")
+        print(f"  model_hash: {ping.get('model_hash', '?')[:32]}…")
+        print(f"  uptime:     {ping.get('uptime_s', 0):.1f} s")
+        print(f"  served:     {ping.get('requests_served', 0)} request(s)")
+        print(f"  socket:     {info.get('sock_path', '?')}")
+        return 0
+
+    if args.action == "stop":
+        info = read_pid_file()
+        if info is None:
+            print(_yellow("[sidecar] not running (no PID file) — nothing to stop"))
+            return 0
+        pid = int(info.get("pid", 0))
+        if not is_pid_alive(pid):
+            # Stale PID file — clean it up.
+            from aegis.judge.llm_daemon import _pid_path, _sock_path
+            for p in (_pid_path(), _sock_path()):
+                if p.exists():
+                    p.unlink()
+            print(_yellow(f"[sidecar] PID {pid} not alive; cleaned up stale state"))
+            return 0
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError as e:
+            print(_red(f"[sidecar] failed to SIGTERM PID {pid}: {e}"), file=sys.stderr)
+            return 1
+        # Wait up to 10 s for socket to disappear (clean shutdown).
+        from aegis.judge.llm_daemon import _sock_path
+
+        sp = _sock_path()
+        deadline = time.time() + 10.0
+        while time.time() < deadline:
+            if not sp.exists() and not is_pid_alive(pid):
+                print(_green(f"✓ sidecar stopped (PID {pid})"))
+                return 0
+            time.sleep(0.1)
+        print(_yellow(
+            f"[sidecar] SIGTERM sent but daemon hasn't exited after 10 s. "
+            f"Try `kill -9 {pid}` if it's stuck."
+        ))
+        return 1
+
+    if args.action == "start":
+        existing = read_pid_file()
+        if existing is not None and is_pid_alive(int(existing.get("pid", 0))):
+            print(_yellow(
+                f"[sidecar] already running (PID {existing.get('pid')}). "
+                "Use `aegis sidecar stop` first to restart."
+            ))
+            return 0
+
+        # Resolve the GGUF path: --model wins, else AEGIS_JUDGE_MODEL_PATH,
+        # else fail with a helpful message.
+        model_path = args.model or os.environ.get("AEGIS_JUDGE_MODEL_PATH", "")
+        if not model_path or not Path(model_path).exists():
+            print(_red(
+                f"GGUF path not found: {model_path or '(unset)'}\n"
+                f"  set AEGIS_JUDGE_MODEL_PATH or pass --model PATH\n"
+                f"  download with: uv run aegis pull-model"
+            ), file=sys.stderr)
+            return 2
+
+        # Spawn detached subprocess that runs `python -m aegis.judge.llm_daemon
+        # serve <path>`. We use a child runner script in tools/ so the daemon
+        # process tree is grokkable in `ps`.
+        py = _hook_python_executable()
+        log_path = Path.home() / ".aegis" / "llm_sidecar.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a") as logfh:
+            import subprocess
+            proc = subprocess.Popen(
+                [py, "-c",
+                 "import sys; from aegis.judge.llm_daemon import serve_forever; "
+                 f"serve_forever({model_path!r})"],
+                stdout=logfh, stderr=logfh, stdin=subprocess.DEVNULL,
+                start_new_session=True,
+                env={**os.environ, "PYTHONPATH": str(SRC_DIR)},
+            )
+
+        # Poll for readiness — model load can take 2-7 s depending on size.
+        from aegis.judge.llm_daemon import DaemonClient
+        client = DaemonClient()
+        deadline = time.time() + 30.0
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                print(_red(
+                    f"[sidecar] daemon exited rc={proc.returncode} during start. "
+                    f"Check log: {log_path}"
+                ), file=sys.stderr)
+                return 1
+            ping = client.ping(timeout_s=1.0)
+            if ping is not None:
+                model_name = Path(model_path).name
+                print(_green("✓ sidecar started"))
+                print(f"  pid:        {proc.pid}")
+                print(f"  model:      {model_name}")
+                print(f"  model_hash: {ping.get('model_hash', '?')[:32]}…")
+                print("  socket:     ~/.aegis/llm_sidecar.sock")
+                print(f"  log:        {log_path}")
+                print()
+                print("Hooks will now use the daemon for all step340 LLM calls.")
+                print("Stop with: aegis sidecar stop")
+                return 0
+            time.sleep(0.5)
+        print(_red(
+            f"[sidecar] daemon failed to come up within 30 s. "
+            f"Check log: {log_path}"
+        ), file=sys.stderr)
+        return 1
+
+    print(_red(f"unknown action: {args.action}"), file=sys.stderr)
+    return 2
+
+
 def cmd_audit(args: argparse.Namespace) -> int:
     """Inspect / rotate / verify the local audit log.
 
@@ -2231,6 +2401,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="audit log path (default: $AEGIS_LOCAL_AUDIT or ~/.aegis/audit.jsonl)",
     )
     au.set_defaults(fn=cmd_audit)
+
+    sc = sub.add_parser(
+        "sidecar",
+        help="Manage the local LLM-keep-alive daemon (eliminates cold-load on every PreToolUse)",
+    )
+    sc.add_argument(
+        "action",
+        choices=["start", "stop", "status"],
+        help=(
+            "start: spawn the daemon (loads GGUF once, listens on Unix socket); "
+            "stop: SIGTERM + clean up state; "
+            "status: liveness + model hash + uptime."
+        ),
+    )
+    sc.add_argument(
+        "--model", default=None,
+        help="(start) GGUF path (default: $AEGIS_JUDGE_MODEL_PATH)",
+    )
+    sc.set_defaults(fn=cmd_sidecar)
 
     pm = sub.add_parser(
         "pull-model",
