@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     aegis_embedding_provider: Literal["openai", "dummy", "bge-local"] = "dummy"
     aegis_embedding_model: str = "text-embedding-3-small"
 
+    # Solo Free real embedding (BGE GGUF via llama-cpp). Empty path
+    # falls back to dummy/openai per ``aegis_embedding_provider``.
+    aegis_embedding_model_path: str = ""
+
     aegis_judge_provider: Literal[
         "haiku", "dummy", "local-phi", "attribution_head", "hybrid"
     ] = "dummy"

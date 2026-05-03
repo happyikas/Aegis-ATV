@@ -238,12 +238,12 @@ HOME="$HOME_REAL"
 # ─────────────────────────────────────────────────────────────────────
 printf "\n%s[9] Real local-sLLM verdict%s\n" "$C_BOLD" "$C_RESET"
 LLAMA_CHECK="$("$PYTHON" -c 'import importlib;importlib.import_module("llama_cpp");print("ok")' 2>/dev/null || echo missing)"
-MODEL_GLOB="$REPO_ROOT/models/*.gguf"
-MODEL_FILE="$(ls $MODEL_GLOB 2>/dev/null | head -1)"
+# Find a *judge* GGUF (skip embedding GGUFs whose names start with "bge-").
+MODEL_FILE="$(ls "$REPO_ROOT"/models/*.gguf 2>/dev/null | grep -v -i 'bge-' | head -1)"
 if [[ "$LLAMA_CHECK" != "ok" ]]; then
   note "skipped — llama-cpp-python not installed.  uv sync --extra local-llm"
 elif [[ -z "$MODEL_FILE" ]]; then
-  note "skipped — no GGUF in $REPO_ROOT/models/.  uv run aegis pull-model"
+  note "skipped — no judge GGUF in $REPO_ROOT/models/.  uv run aegis pull-model"
 else
   REAL_OUT="$(AEGIS_JUDGE_MODEL_PATH="$MODEL_FILE" \
               AEGIS_JUDGE_LOCAL_PHI_STUB=0 \
@@ -288,6 +288,66 @@ PY
     else
       fail "model_hash mismatch — verdict ran but hash != file SHA3"
     fi
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────
+# 10. Real local embedding (BGE) — only if BGE GGUF + llama-cpp present
+# ─────────────────────────────────────────────────────────────────────
+printf "\n%s[10] Real BGE embedding%s\n" "$C_BOLD" "$C_RESET"
+BGE_FILE="$(ls "$REPO_ROOT"/models/bge-*.gguf 2>/dev/null | head -1)"
+if [[ "$LLAMA_CHECK" != "ok" ]]; then
+  note "skipped — llama-cpp-python not installed."
+elif [[ -z "$BGE_FILE" ]]; then
+  note "skipped — no BGE GGUF in $REPO_ROOT/models/.  uv run aegis pull-model --model bge-base-en"
+else
+  BGE_OUT="$(AEGIS_EMBEDDING_PROVIDER=bge-local \
+             AEGIS_EMBEDDING_MODEL_PATH="$BGE_FILE" \
+             "$PYTHON" - <<'PY' 2>&1
+import time
+import numpy as np
+from aegis.atv.embeddings import BGELocalEmbedding, DummyEmbedding, reset_bge_cache
+
+reset_bge_cache()
+bge = BGELocalEmbedding()
+dum = DummyEmbedding()
+
+# Two semantically-similar phrases vs one different — BGE should
+# show clearly higher similarity for the matched pair.
+texts = [
+    "delete production database",          # destructive
+    "drop production tables",              # also destructive (similar)
+    "list files in temp directory",        # benign
+]
+t0 = time.perf_counter_ns()
+v_real = [bge.embed(t, 768) for t in texts]
+real_ms = (time.perf_counter_ns() - t0) / 1_000_000
+
+v_dum = [dum.embed(t, 768) for t in texts]
+
+sim_real_pos = float(np.dot(v_real[0], v_real[1]))   # destructive ↔ destructive
+sim_real_neg = float(np.dot(v_real[0], v_real[2]))   # destructive ↔ benign
+sim_dum_pos  = float(np.dot(v_dum[0], v_dum[1]))
+sim_dum_neg  = float(np.dot(v_dum[0], v_dum[2]))
+
+print(f"REAL_MS={real_ms:.0f}")
+print(f"REAL_POS={sim_real_pos:.3f}")
+print(f"REAL_NEG={sim_real_neg:.3f}")
+print(f"DUM_POS={sim_dum_pos:.3f}")
+print(f"DUM_NEG={sim_dum_neg:.3f}")
+# REAL provider is meaningful when sim(destructive, destructive) is
+# meaningfully higher than sim(destructive, benign).
+print(f"SEMANTIC={'yes' if sim_real_pos > sim_real_neg + 0.10 else 'NO'}")
+PY
+  )"
+  if echo "$BGE_OUT" | grep -q '^SEMANTIC=yes'; then
+    POS="$(echo "$BGE_OUT" | grep '^REAL_POS=' | cut -d= -f2)"
+    NEG="$(echo "$BGE_OUT" | grep '^REAL_NEG=' | cut -d= -f2)"
+    MS="$(echo "$BGE_OUT" | grep '^REAL_MS=' | cut -d= -f2)"
+    ok "real BGE: cos(destructive, destructive)=$POS > cos(destructive, benign)=$NEG  (${MS} ms)"
+  else
+    fail "BGE produced no semantic signal — is the GGUF corrupt?"
+    note "$(echo "$BGE_OUT" | tail -5 | sed 's/^/    /')"
   fi
 fi
 

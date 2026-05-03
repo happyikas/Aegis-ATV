@@ -124,12 +124,15 @@ def isolated_install(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 
 
 def _install_args(  # type: ignore[no-untyped-def]
-    force: bool = False, mode: str = "sidecar", judge: str = "dummy",
+    force: bool = False, mode: str = "sidecar",
+    judge: str = "dummy", embedding: str = "dummy",
 ):
     """Build a minimal Namespace-like object for cmd_install."""
     import argparse
 
-    return argparse.Namespace(force=force, mode=mode, judge=judge)
+    return argparse.Namespace(
+        force=force, mode=mode, judge=judge, embedding=embedding,
+    )
 
 
 def test_cmd_install_creates_settings_when_absent(isolated_install: Path) -> None:
@@ -1147,3 +1150,104 @@ def test_human_size_formats() -> None:
     assert "KB" in aegis_cli._human_size(2048)
     assert "MB" in aegis_cli._human_size(5 * 1024 * 1024)
     assert "GB" in aegis_cli._human_size(2 * 1024**3)
+
+
+# ---- Solo Free real embedding: --embedding flag + BGE wiring -----------
+
+
+def test_install_default_embedding_is_dummy() -> None:
+    args = aegis_cli.build_parser().parse_args(["install"])
+    assert args.embedding == "dummy"
+
+
+def test_install_embedding_bge_local_accepted() -> None:
+    args = aegis_cli.build_parser().parse_args(
+        ["install", "--mode", "local", "--embedding", "bge-local"]
+    )
+    assert args.embedding == "bge-local"
+
+
+def test_install_embedding_invalid_rejected() -> None:
+    with pytest.raises(SystemExit):
+        aegis_cli.build_parser().parse_args(
+            ["install", "--mode", "local", "--embedding", "openai-prod"]
+        )
+
+
+def test_install_local_with_bge_writes_embedding_path_env(
+    isolated_install: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """``--embedding bge-local`` must embed AEGIS_EMBEDDING_MODEL_PATH +
+    AEGIS_EMBEDDING_PROVIDER=bge-local in the hook command."""
+    monkeypatch.setattr(aegis_cli, "MODELS_DIR", tmp_path / "models")
+    aegis_cli.cmd_install(_install_args(
+        mode="local", judge="dummy", embedding="bge-local",
+    ))
+    settings = json.loads(
+        (isolated_install / ".claude" / "settings.json").read_text()
+    )
+    cmd = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert "AEGIS_EMBEDDING_PROVIDER=bge-local" in cmd
+    assert "AEGIS_EMBEDDING_MODEL_PATH=" in cmd
+    assert "bge-base-en" in cmd  # the default embedding model filename
+
+
+def test_install_dummy_embedding_does_not_write_path(
+    isolated_install: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Default ``--embedding dummy`` keeps the hook free of model-path env."""
+    monkeypatch.setattr(aegis_cli, "MODELS_DIR", tmp_path / "models")
+    aegis_cli.cmd_install(_install_args(mode="local", judge="dummy"))
+    settings = json.loads(
+        (isolated_install / ".claude" / "settings.json").read_text()
+    )
+    cmd = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert "AEGIS_EMBEDDING_PROVIDER=dummy" in cmd
+    assert "AEGIS_EMBEDDING_MODEL_PATH" not in cmd
+
+
+def test_build_pretool_command_invalid_embedding_raises() -> None:
+    with pytest.raises(ValueError, match="embedding"):
+        aegis_cli._build_pretool_command(
+            "local", judge="dummy", embedding="vertex-ai",
+        )
+
+
+def test_install_hybrid_with_bge_writes_both_model_paths(
+    isolated_install: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Hybrid + bge-local = both judge AND embedding GGUF paths embedded."""
+    monkeypatch.setattr(aegis_cli, "MODELS_DIR", tmp_path / "models")
+    aegis_cli.cmd_install(_install_args(
+        mode="local", judge="hybrid", embedding="bge-local",
+    ))
+    settings = json.loads(
+        (isolated_install / ".claude" / "settings.json").read_text()
+    )
+    cmd = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert "AEGIS_JUDGE_MODEL_PATH=" in cmd
+    assert "AEGIS_EMBEDDING_MODEL_PATH=" in cmd
+    assert "AEGIS_JUDGE_PROVIDER=hybrid" in cmd
+    assert "AEGIS_EMBEDDING_PROVIDER=bge-local" in cmd
+
+
+def test_bge_status_for_install_warns_when_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(aegis_cli, "MODELS_DIR", tmp_path / "empty")
+    ok, msg = aegis_cli._bge_status_for_install("bge-local")
+    assert ok is False
+    assert "Embedding GGUF not found" in msg
+    assert "pull-model" in msg
+    assert "bge-base-en" in msg
+
+
+def test_pull_model_argparse_accepts_bge_models() -> None:
+    args = aegis_cli.build_parser().parse_args(
+        ["pull-model", "--model", "bge-base-en"]
+    )
+    assert args.model == "bge-base-en"
+    args = aegis_cli.build_parser().parse_args(
+        ["pull-model", "--model", "bge-small-en"]
+    )
+    assert args.model == "bge-small-en"

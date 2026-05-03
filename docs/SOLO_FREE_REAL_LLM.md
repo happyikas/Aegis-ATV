@@ -1,50 +1,64 @@
-# Solo Free 진짜 sLLM 활성화 가이드
+# Solo Free 진짜 sLLM + 진짜 Embedding 활성화 가이드
 
 > Claude Code 싱글 사용자용 무료 배포 — 외부 API 키 / 결제 없이 **실제
-> 로컬 LLM** 으로 tool 호출 verdict 를 받는 전체 셋업.
+> 로컬 LLM** 으로 verdict 를 내고 **실제 BGE encoder** 로 ATV 의
+> agent_state 를 의미 있는 768-D 벡터로 임베딩하는 전체 셋업.
 
-소요 시간: **약 10분** (770MB GGUF 다운로드 시간 포함).
-필요 디스크: **~1GB** (모델 + llama-cpp wheel).
+소요 시간: **약 12분** (Llama 770MB + BGE 100MB 다운로드).
+필요 디스크: **~1.1GB** (모델 두 개 + llama-cpp wheel).
 
 ---
 
 ## 1. 왜 이게 필요한가
 
-`aegis install --mode local --judge hybrid` 을 그냥 돌리면 다음이 동작합니다:
+`aegis install --mode local --judge hybrid` 만 돌리면 다음이 동작합니다:
 
-| Tier | 무엇? | LLM? |
+| 컴포넌트 | 무엇? | 진짜 LLM? |
 |---|---|:---:|
-| 1 | M13 attribution head — 30-feature 선형 분류기 | ❌ |
-| 2 | LocalPhi (stub mode) — Tier 1 결과 wrapper | ❌ |
-| 4 | Dummy regex — fallback | ❌ |
+| Judge Tier 1 | M13 attribution head — 30-feature 선형 분류기 | ❌ |
+| Judge Tier 2 | LocalPhi (stub) — Tier 1 wrapper | ❌ |
+| Judge Tier 4 | Dummy regex — fallback | ❌ |
+| Embedding | DummyEmbedding — SHA3 noise | ❌ |
 
-→ **실제 LLM 토큰 호출 0회.** 정규식 + 선형 분류기로만 보호.
+→ **실제 LLM 토큰 호출 0회 + 의미 없는 임베딩.**
 
-이 가이드를 따르면 Tier 2 가 진짜 Llama-3.2-1B 로 바뀝니다:
+이 가이드를 따르면:
 
-| Tier | 무엇? | LLM? |
+| 컴포넌트 | 무엇? | 진짜 LLM? |
 |---|---|:---:|
-| 1 | M13 attribution head | ❌ (빠른 1차) |
-| **2** | **LocalPhi (real) — Llama-3.2-1B-Q4 on-device** | **✅** |
-| 4 | Dummy regex | ❌ (fallback) |
+| Judge Tier 1 | M13 attribution head | ❌ (빠른 1차, 0.3ms) |
+| **Judge Tier 2** | **LocalPhi (real) — Llama-3.2-1B-Q4 on-device** | **✅ ~80ms** |
+| Judge Tier 4 | Dummy regex | ❌ (fallback) |
+| **Embedding** | **BGELocalEmbedding — BGE-base-en-v1.5 768-D** | **✅ ~10ms** |
 
 Tier 1 이 결정 못 한 gray-zone 만 Tier 2 LLM 으로 escalate. 평균
-시나리오의 80%는 Tier 1 (1ms) 에서 끝나고, 나머지 20% 만 LLM (~80ms)
-호출.
+시나리오의 80%는 Tier 1 (1ms) 에서 끝나고, 나머지 20% 만 LLM 호출.
+
+**Embedding 의 가치:** ATV 의 `agent_state_embedding` (768-D) 슬롯이
+의미 있는 벡터로 채워짐. 현재는 M13 weight 가 0 이라 verdict 에 직접
+영향 없지만, 다음 트랙들의 발판:
+1. **M13 v2 학습** — Burn-in Shadow phase 에서 (ATV, verdict) 쌍 수집
+   할 때 noise 위가 아닌 진짜 의미 위에서 학습
+2. **RAG step340** — "이 호출과 코사인 유사한 과거 BLOCK 사례 N개" 를
+   LLM prompt 에 주입 (1B 모델의 정확도 약점 보완)
+3. **session_behavioral_drift** — 세션 시작 시점 vs 현재 의미 거리
 
 ---
 
-## 2. 셋업 (3 명령어)
+## 2. 셋업 (4 명령어)
 
 ```bash
-# 1. 모델 다운로드 (Llama-3.2-1B Q4, 770 MB)
-uv run aegis pull-model
+# 1. 모델 두 개 다운로드 (Llama-3.2-1B Q4 770MB + BGE-base-en Q4 100MB)
+uv run aegis pull-model                            # judge GGUF
+uv run aegis pull-model --model bge-base-en        # embedding GGUF
 
 # 2. llama-cpp-python 설치 (Apple Silicon Metal 가속)
 CMAKE_ARGS="-DGGML_METAL=on" uv sync --extra local-llm
 
 # 3. .env 에 모델 경로 등록
 echo "AEGIS_JUDGE_MODEL_PATH=$(pwd)/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf" >> .env
+echo "AEGIS_EMBEDDING_MODEL_PATH=$(pwd)/models/bge-base-en-v1.5-q4_k_m.gguf" >> .env
+echo "AEGIS_EMBEDDING_PROVIDER=bge-local" >> .env
 ```
 
 설치 검증:
@@ -58,24 +72,27 @@ echo "AEGIS_JUDGE_MODEL_PATH=$(pwd)/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf" >>
 ```
 [9] Real local-sLLM verdict
   ✓ real Llama verdict: ALLOW  (2489 ms, model_hash matches file SHA3)
-✓ 8/8 checks passed — green-light for real Claude Code
+[10] Real BGE embedding
+  ✓ real BGE: cos(destructive, destructive)=0.820 > cos(destructive, benign)=0.490  (341 ms)
+✓ 9/9 checks passed — green-light for real Claude Code
 ```
 
-`[9]` 가 `skipped` 면 §6 트러블슈팅 참조.
+`[9]` / `[10]` 이 `skipped` 면 §6 트러블슈팅 참조.
 
 ---
 
 ## 3. Claude Code 에 연결
 
 ```bash
-uv run aegis install --mode local --judge hybrid --force
+uv run aegis install --mode local --judge hybrid --embedding bge-local --force
 ```
 
 설치 시 다음 라인이 나와야 합니다:
 
 ```
-[install] plugin v2.0.0, mode=local, judge=hybrid
+[install] plugin v2.0.0, mode=local, judge=hybrid, embedding=bge-local
   ✓ local-sLLM ready: /…/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf (real LLM verdicts active)
+  ✓ local embedding ready: bge-base-en-v1.5-q4_k_m.gguf (768-D real BGE encoder)
 ```
 
 Claude Code 재시작 → 모든 tool 호출이 firewall + 진짜 sLLM 통과.
@@ -88,17 +105,28 @@ Claude Code 재시작 → 모든 tool 호출이 firewall + 진짜 sLLM 통과.
 uv run aegis pull-model --list
 ```
 
+### Judge 모델 (verdict 내는 LLM)
+
 | 모델 | 크기 | 속도 (M1 CPU) | 품질 | 추천 |
 |---|---:|---:|:---:|---|
 | `llama-3.2-1b` (default) | 770 MB | ~80 ms | ★★ | 균형 잡힌 기본 |
 | `qwen-0.5b` | 400 MB | ~30 ms | ★ | 가장 작음, JSON 정확도 낮음 |
 | `phi-3.5-mini` | 2.2 GB | ~150 ms | ★★★★ | 정확도 우선, 디스크 충분 |
 
+### Embedding 모델 (ATV agent_state 인코딩)
+
+| 모델 | 크기 | 차원 | 속도 (M1 CPU) | MTEB | 추천 |
+|---|---:|---:|---:|---:|---|
+| `bge-base-en` (default) | 100 MB | 768 | ~10 ms | 63.55 | ATV 768-D 슬롯과 정확히 매치 |
+| `bge-small-en` | 33 MB | 384 | ~5 ms | 62.17 | 더 작음, 768-D 슬롯에 zero-pad |
+
 ```bash
-uv run aegis pull-model --model phi-3.5-mini   # 더 강력한 모델로 바꾸기
+uv run aegis pull-model --model phi-3.5-mini   # judge 더 강력
+uv run aegis pull-model --model bge-small-en   # embedding 더 작게
 ```
 
-`AEGIS_JUDGE_MODEL_PATH` 만 새 GGUF 로 바꾸면 즉시 적용됨 (재설치 불필요).
+`AEGIS_JUDGE_MODEL_PATH` / `AEGIS_EMBEDDING_MODEL_PATH` 만 새 GGUF 로
+바꾸면 즉시 적용됨 (재설치 불필요).
 
 ---
 
@@ -124,12 +152,28 @@ tail ~/.aegis/audit.jsonl | jq .
 
 ### 5.3 latency 확인
 
-진짜 LLM:
+진짜 Judge LLM (Llama-1B):
 - Cold call (첫 호출): 2-3초 (모델 메모리 로드)
 - Warm call: 50–150ms (M1 CPU)
 
-Stub mode:
+진짜 Embedding (BGE-base):
+- Cold call: 1.5-2초 (메모리 로드)
+- Warm call: 5-15ms (M1 CPU) — 매 verdict 마다 호출됨
+
+Stub / dummy mode:
 - 항상 <1ms
+
+### 5.4 Embedding 이 진짜인지 확인
+
+```bash
+./scripts/dogfood_check.sh
+```
+
+`[10] Real BGE embedding` 라인:
+- `cos(destructive, destructive)=0.820` ≈ 진짜 BGE 의 의미 군집
+- `cos(destructive, benign)=0.490` ≈ 다른 의미는 거리 멀어짐
+
+dummy 면 두 값 모두 ~0.0 (semantic 신호 없음). 0.10+ 차이 = 진짜.
 
 ---
 
@@ -192,13 +236,17 @@ Stub mode:
 
 | 자원 | Solo Free 기본 |
 |---|---|
-| GGUF | 770 MB (`models/Llama-3.2-1B-Instruct-Q4_K_M.gguf`) |
+| Judge GGUF | 770 MB (`models/Llama-3.2-1B-Instruct-Q4_K_M.gguf`) |
+| Embedding GGUF | 100 MB (`models/bge-base-en-v1.5-q4_k_m.gguf`) |
 | llama-cpp-python wheel | ~70 MB |
-| Hook overhead per call | 1-150ms (대부분 1-5ms M13 layer) |
-| RAM (LLM 메모리) | ~1.2 GB (Llama-1B Q4 + KV cache) |
+| Hook overhead per call | 5-150ms (대부분 1-5ms M13 + 5-10ms BGE) |
+| RAM (Judge LLM 메모리) | ~1.2 GB (Llama-1B Q4 + KV cache) |
+| RAM (Embedding 메모리) | ~150 MB (BGE-base-en) |
 | RAM (firewall idle) | ~50 MB |
+| **합계 (active 시)** | **~1.5 GB RAM, ~1 GB disk** |
 
-8GB Mac mini 도 무리 없음. 4GB 머신에서는 `qwen-0.5b` 권장 (~600 MB RAM).
+8GB Mac mini 도 무리 없음. 4GB 머신에서는 `qwen-0.5b` + `bge-small-en`
+권장 (~700 MB RAM).
 
 ---
 
