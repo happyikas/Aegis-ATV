@@ -49,8 +49,10 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -124,7 +126,7 @@ def build_design_matrix(
 # ─────────────────────────────────────────────────────────────────────
 
 
-def _class_weights(labels: list[str]) -> np.ndarray:
+def _class_weights(labels: Sequence[str]) -> np.ndarray:
     """Inverse-frequency sample weight so 3-class imbalance doesn't
     dominate the loss."""
     n = len(labels)
@@ -171,12 +173,14 @@ def fit_nnls(
         # Spectral-radius-bounded step: 1/(2 L) where L = λ_max(2·XtWX) + 2·l2.
         eigmax = float(np.linalg.eigvalsh(XtWX)[-1])
         L = 2.0 * eigmax + 2.0 * l2
-        lr = 1.0 / max(L, 1e-9)
+        step: float = 1.0 / max(L, 1e-9)
+    else:
+        step = float(lr)
     for _ in range(n_iter):
         grad = 2.0 * (XtWX @ beta - XtWy) + 2.0 * l2 * beta
-        beta = beta - lr * grad
+        beta = beta - step * grad
         beta = np.clip(beta, 0.0, None)
-    return beta
+    return np.asarray(beta, dtype=np.float64)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -193,7 +197,7 @@ def _decide(score: float, t_appr: float, t_block: float) -> str:
 
 
 def calibrate_thresholds(
-    X: np.ndarray, y_labels: list[str], beta: np.ndarray,
+    X: np.ndarray, y_labels: Sequence[str], beta: np.ndarray,
 ) -> tuple[float, float]:
     """Grid-search ``(t_approval, t_block)`` maximising 3-class accuracy.
 
@@ -238,7 +242,7 @@ class TrainResult:
 
 
 def _confusion_matrix(
-    preds: list[str], labels: list[str],
+    preds: Sequence[str], labels: Sequence[str],
 ) -> dict[str, dict[str, int]]:
     classes = ("ALLOW", "REQUIRE_APPROVAL", "BLOCK")
     out: dict[str, dict[str, int]] = {c: dict.fromkeys(classes, 0) for c in classes}
@@ -248,7 +252,7 @@ def _confusion_matrix(
 
 
 def _accuracy(
-    X: np.ndarray, beta: np.ndarray, y_labels: list[str],
+    X: np.ndarray, beta: np.ndarray, y_labels: Sequence[str],
     t_appr: float, t_block: float,
 ) -> tuple[float, list[str]]:
     scores = X @ beta
@@ -322,8 +326,10 @@ def write_v2_json(
 
     Returns the SHA3-256 of the written file (the v2 ``model_hash``).
     """
-    v1_manifest: dict = json.loads(base_v1_path.read_bytes().decode("utf-8"))
-    v2_manifest: dict = {
+    v1_manifest: dict[str, Any] = json.loads(
+        base_v1_path.read_bytes().decode("utf-8"),
+    )
+    v2_manifest: dict[str, Any] = {
         "_comment": (
             "M13 attribution head v2 — weights learned from labelled "
             "(ATV, verdict) corpus via class-balanced non-negative least "
