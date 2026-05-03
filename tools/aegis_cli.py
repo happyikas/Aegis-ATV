@@ -1785,6 +1785,91 @@ def cmd_session(args: argparse.Namespace) -> int:
     return 2
 
 
+def cmd_audit(args: argparse.Namespace) -> int:
+    """Inspect / rotate / verify the local audit log.
+
+    Three actions:
+
+    * ``list``   — table of (active + rotated) audit files with size +
+      record count, plus aggregate.
+    * ``rotate`` — manually trigger size-based rotation (otherwise
+      happens automatically when the active file exceeds
+      ``AEGIS_AUDIT_MAX_BYTES``, default 50 MB).
+    * ``verify`` — alias for :func:`cmd_verify_audit`. Walks the entire
+      rotation set in append order and checks the SHA3 chain.
+
+    The audit log lives at ``$AEGIS_LOCAL_AUDIT`` (or
+    ``~/.aegis/audit.jsonl``). Rotated files share the same parent
+    dir with names ``audit.jsonl.1``, ``audit.jsonl.2``, etc. — most-
+    recent rotation has the lowest number.
+    """
+    from aegis.audit.rotation import (
+        list_rotation_chain,
+        max_bytes,
+        max_rotations,
+        total_size,
+    )
+    from aegis.audit.rotation import (
+        rotate as do_rotate,
+    )
+
+    audit_path = (
+        Path(args.audit) if args.audit
+        else Path(os.environ.get("AEGIS_LOCAL_AUDIT", ""))
+        if os.environ.get("AEGIS_LOCAL_AUDIT", "")
+        else Path.home() / ".aegis" / "audit.jsonl"
+    )
+
+    if args.action == "list":
+        files = list_rotation_chain(audit_path)
+        if not files:
+            print(f"[audit] no audit files at {audit_path}")
+            return 0
+        print(f"[audit] threshold={max_bytes() // 1024 // 1024} MB, "
+              f"keep={max_rotations()} rotations, "
+              f"total={total_size(audit_path) // 1024} KB")
+        print()
+        print(f"  {'file':<24}  {'size (KB)':>10}  {'records':>10}")
+        print("  " + "─" * 50)
+        for f in files:
+            n_records = sum(1 for line in f.read_text(encoding="utf-8").splitlines() if line.strip())
+            print(
+                f"  {f.name:<24}  {f.stat().st_size // 1024:>10}  {n_records:>10}"
+            )
+        return 0
+
+    if args.action == "rotate":
+        if not audit_path.exists():
+            print(_yellow(f"no active audit log at {audit_path}"))
+            return 0
+        size_before = audit_path.stat().st_size
+        new_top = do_rotate(audit_path)
+        if new_top == 0:
+            print(_yellow(
+                f"rotation skipped (max_rotations={max_rotations()}, "
+                f"max_bytes={max_bytes()})"
+            ))
+            return 0
+        print(_green(
+            f"✓ rotated {audit_path.name} "
+            f"({size_before // 1024} KB) → "
+            f"{audit_path.name}.{new_top}"
+        ))
+        files = list_rotation_chain(audit_path)
+        for f in files:
+            print(f"    {f.name}  ({f.stat().st_size // 1024} KB)")
+        return 0
+
+    if args.action == "verify":
+        # Delegate to the existing verify-audit command — that walker
+        # was updated in this PR to traverse the rotation chain.
+        ns = argparse.Namespace(audit=str(audit_path))
+        return cmd_verify_audit(ns)
+
+    print(_red(f"unknown action: {args.action}"), file=sys.stderr)
+    return 2
+
+
 def cmd_cost_record(args: argparse.Namespace) -> int:
     from cost.catalog import estimate_usd  # type: ignore[import-not-found]
     from wal.writer import _connect  # type: ignore[import-not-found]
@@ -2004,6 +2089,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="(list) max rows shown (default: 20)",
     )
     se.set_defaults(fn=cmd_session)
+
+    au = sub.add_parser(
+        "audit",
+        help="Inspect / rotate / verify the local audit log + rotations",
+    )
+    au.add_argument(
+        "action",
+        choices=["list", "rotate", "verify"],
+        help=(
+            "list: table of audit files with sizes + record counts; "
+            "rotate: manually trigger size-based rotation; "
+            "verify: walk the full rotation chain and check SHA3 integrity."
+        ),
+    )
+    au.add_argument(
+        "--audit", default=None,
+        help="audit log path (default: $AEGIS_LOCAL_AUDIT or ~/.aegis/audit.jsonl)",
+    )
+    au.set_defaults(fn=cmd_audit)
 
     pm = sub.add_parser(
         "pull-model",
