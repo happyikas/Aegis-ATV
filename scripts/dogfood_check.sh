@@ -411,6 +411,55 @@ PY
 fi
 
 # ─────────────────────────────────────────────────────────────────────
+# 12. Session-behavioural drift (BGE-derived topic_drift signal)
+# ─────────────────────────────────────────────────────────────────────
+printf "\n%s[12] Session drift detection%s\n" "$C_BOLD" "$C_RESET"
+if [[ "$LLAMA_CHECK" != "ok" ]]; then
+  note "skipped — llama-cpp-python not installed."
+elif [[ -z "$BGE_FILE" ]]; then
+  note "skipped — no BGE GGUF (cosine drift would be SHA3 noise)."
+else
+  DRIFT_OUT="$(AEGIS_SESSION_DIR=$(mktemp -d)/sessions \
+               AEGIS_EMBEDDING_PROVIDER=bge-local \
+               AEGIS_EMBEDDING_MODEL_PATH="$BGE_FILE" \
+               "$PYTHON" - <<'PY' 2>&1
+from aegis.atv.embeddings import get_provider, reset_bge_cache
+from aegis.atv.session_drift import update_and_score
+reset_bge_cache()
+prov = get_provider()
+sid = "dogfood-drift-test"
+
+# Anchor: debugging session
+anchor_text = "user wants to debug a python error in main.py"
+attack_text = "rm -rf /var/log/* && truncate database tables"
+
+emb1 = prov.embed(anchor_text, 768)
+emb2 = prov.embed(attack_text, 768)
+
+s1 = update_and_score(session_id=sid, current_embedding=emb1, current_plan_len=50)
+s2 = update_and_score(session_id=sid, current_embedding=emb2, current_plan_len=50)
+
+print(f"ANCHOR_DRIFT={s1.topic_drift:.3f}")
+print(f"DRIFT_AT_ATTACK={s2.topic_drift:.3f}")
+print(f"IS_ANCHOR_FIRST={s1.is_anchor_call}")
+PY
+  )"
+  ANCHOR_DRIFT="$(echo "$DRIFT_OUT" | grep '^ANCHOR_DRIFT=' | cut -d= -f2)"
+  ATTACK_DRIFT="$(echo "$DRIFT_OUT" | grep '^DRIFT_AT_ATTACK=' | cut -d= -f2)"
+  IS_ANCHOR="$(echo "$DRIFT_OUT" | grep '^IS_ANCHOR_FIRST=' | cut -d= -f2)"
+  # Anchor call must be 0 drift; attack call must show meaningful drift
+  # (>= 0.30 is the cosine retrieval threshold = unambiguous semantic shift).
+  if [[ "$IS_ANCHOR" == "True" ]] && \
+     awk "BEGIN { exit !($ANCHOR_DRIFT == 0) }" 2>/dev/null && \
+     awk "BEGIN { exit !($ATTACK_DRIFT >= 0.30) }" 2>/dev/null; then
+    ok "anchor drift=$ANCHOR_DRIFT (is_anchor=$IS_ANCHOR), attack drift=$ATTACK_DRIFT (≥ 0.30)"
+  else
+    fail "drift signal absent: anchor=$ANCHOR_DRIFT (is_anchor=$IS_ANCHOR), attack=$ATTACK_DRIFT"
+    note "$(echo "$DRIFT_OUT" | tail -5 | sed 's/^/    /')"
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────
 # Summary
 # ─────────────────────────────────────────────────────────────────────
 printf "\n────────────────────────────────────────────────────────────\n"

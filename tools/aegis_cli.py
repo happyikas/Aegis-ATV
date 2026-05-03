@@ -36,6 +36,7 @@ import shutil
 import sqlite3
 import sys
 import time
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -1549,6 +1550,84 @@ def cmd_case_memory(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_session(args: argparse.Namespace) -> int:
+    """Inspect / clear the per-session behavioural-drift store.
+
+    The local hook persists one JSON file per Claude Code session in
+    ``~/.aegis/sessions/`` (override with ``$AEGIS_SESSION_DIR``).
+    Each file holds the BGE anchor embedding + Welford running stats
+    + the last 32 cosine drifts, so the encoder can fill the
+    ``session_behavioral_drift`` ATV slot with a real signal instead
+    of zeros.
+
+    Three actions:
+
+    * ``list`` — table of (session_id, n_calls, age, max_drift),
+      sorted by recency.
+    * ``show`` — full JSON for one session (``--id <session_id>``).
+    * ``clear`` — delete all session files except the
+      ``--keep N`` most-recent (default keep=0, i.e. delete all).
+    """
+    from datetime import datetime
+
+    from aegis.atv import session_drift
+
+    if args.action == "list":
+        sessions = session_drift.list_sessions()
+        if not sessions:
+            print("[session] no sessions yet")
+            print(
+                f"  (sessions are persisted to "
+                f"{session_drift.session_dir()}/ once the hook fires)"
+            )
+            return 0
+        print(
+            f"{'session_id':<20} {'n_calls':>8} {'age':>8} "
+            f"{'max_drift':>10} {'started (UTC)':<20}"
+        )
+        print("─" * 78)
+        now_ns = time.time_ns()
+        for s in sessions[: args.limit]:
+            age_s = max(0, (now_ns - int(s.get("last_seen_ns", 0))) / 1e9)
+            age = f"{age_s/60:.0f}m" if age_s < 3600 else f"{age_s/3600:.1f}h"
+            started = datetime.fromtimestamp(
+                int(s.get("started_at_ns", 0)) / 1e9, tz=UTC,
+            ).strftime("%Y-%m-%d %H:%M:%S")
+            print(
+                f"{str(s['session_id'])[:20]:<20} "
+                f"{s['n_calls']:>8} {age:>8} "
+                f"{s['max_drift']:>10.3f} {started:<20}"
+            )
+        return 0
+
+    if args.action == "show":
+        if not args.id:
+            print(_red("--id required for `show`"), file=sys.stderr)
+            return 2
+        state = session_drift.load_session(args.id)
+        if state is None:
+            print(_yellow(f"no session found: {args.id}"))
+            return 1
+        # Print without the giant 768-D anchor vector.
+        d = state.to_json()
+        if d.get("anchor_embedding") is not None:
+            d["anchor_embedding"] = (
+                f"<768-D vector, first 4: "
+                f"{[round(float(x), 3) for x in d['anchor_embedding'][:4]]}…>"
+            )
+        print(json.dumps(d, indent=2))
+        return 0
+
+    if args.action == "clear":
+        n = session_drift.clear_sessions(keep_recent=args.keep)
+        print(_green(f"✓ removed {n} session file(s) "
+                     f"(kept {args.keep} most-recent)"))
+        return 0
+
+    print(_red(f"unknown action: {args.action}"), file=sys.stderr)
+    return 2
+
+
 def cmd_cost_record(args: argparse.Namespace) -> int:
     from cost.catalog import estimate_usd  # type: ignore[import-not-found]
     from wal.writer import _connect  # type: ignore[import-not-found]
@@ -1742,6 +1821,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="output npz path (default: models/case_memory_v1.npz)",
     )
     cm.set_defaults(fn=cmd_case_memory)
+
+    se = sub.add_parser(
+        "session",
+        help="Inspect / clear the per-session behavioural-drift store",
+    )
+    se.add_argument(
+        "action",
+        choices=["list", "show", "clear"],
+        help=(
+            "list: table of recent sessions; "
+            "show: full JSON for one session (--id); "
+            "clear: delete session files (--keep N preserves most-recent)."
+        ),
+    )
+    se.add_argument(
+        "--id", default=None, help="(show) session_id to inspect",
+    )
+    se.add_argument(
+        "--keep", type=int, default=0,
+        help="(clear) number of most-recent sessions to preserve (default: 0)",
+    )
+    se.add_argument(
+        "--limit", type=int, default=20,
+        help="(list) max rows shown (default: 20)",
+    )
+    se.set_defaults(fn=cmd_session)
 
     pm = sub.add_parser(
         "pull-model",
