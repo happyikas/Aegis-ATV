@@ -662,6 +662,159 @@ def _extract_audit_fields(rec: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _cmd_report_explain(audit_path: Path, target: str) -> int:
+    """Render a single decision's full explanation block.
+
+    ``target`` is a trace_id prefix (any unique starting substring is
+    accepted) or the literal ``"LAST"`` / ``"last"`` for the most-
+    recent record. Reads the local audit JSONL line-by-line — no need
+    to load the full file into memory.
+
+    The renderer pulls these from the record's ``explain`` block (added
+    in the same PR that introduced this command):
+
+    1. Decision header (verdict + reason + latency)
+    2. Firewall step traces (filtered to non-trivial)
+    3. M13 attribution top contributors
+    4. RAG retrieval (case count + top cosine + top label + top text)
+    5. Session drift snapshot (current + max + n_calls)
+    6. ATV fingerprint (dim + SHA3) for replay verification
+
+    Records written before this enrichment landed have no ``explain``
+    block; we degrade gracefully to "Decision header only" with a
+    yellow note.
+    """
+    target_lc = target.strip().lower()
+    want_last = target_lc in ("last", "*")
+    found: dict | None = None
+    last_record: dict | None = None
+
+    with audit_path.open(encoding="utf-8") as f:
+        for raw in f:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            # Only PreToolUse decision records carry decision/reason —
+            # skip PostToolUse forensic-only records.
+            if "decision" not in rec:
+                continue
+            last_record = rec
+            if not want_last:
+                trace = str(rec.get("trace_id", ""))
+                if trace.startswith(target):
+                    found = rec
+                    break
+
+    if want_last:
+        found = last_record
+    if found is None:
+        if want_last:
+            print(_red(f"[report] no PreToolUse decisions in {audit_path}"))
+        else:
+            print(_red(
+                f"[report] no record matches trace_id prefix {target!r} "
+                f"in {audit_path}"
+            ))
+        return 1
+
+    rec = found
+    decision = str(rec.get("decision", "?"))
+    badge = {"ALLOW": "✅", "BLOCK": "⛔", "REQUIRE_APPROVAL": "⚠️"}.get(
+        decision, "?"
+    )
+    print(f"AegisData Decision Explanation  {badge}")
+    print("═══════════════════════════════════════════════════════════════════")
+    print(f"  trace:     {str(rec.get('trace_id', ''))[:16]}…")
+    print(f"  decision:  {decision}")
+    print(f"  tool:      {rec.get('tool', '')}")
+    print(f"  aid:       {rec.get('aid', '')}")
+    print(f"  latency:   {rec.get('latency_ms', '?')} ms")
+    reason = str(rec.get("reason", ""))
+    if reason:
+        # Wrap long reason on whitespace.
+        print(f"  reason:    {reason[:300]}")
+    print()
+
+    explain = rec.get("explain") or {}
+    if not explain:
+        print(_yellow(
+            "  (no explain block — record predates `aegis report --explain` "
+            "or hook ran without enrichment)"
+        ))
+        return 0
+
+    # ── Step traces ──────────────────────────────────────────────────
+    traces = explain.get("step_traces") or {}
+    if traces:
+        print("  Firewall steps (non-trivial):")
+        for k, v in traces.items():
+            # Step keys come in as ``aegis.firewall.stepXXX_name.run`` —
+            # the human-friendly name is the module piece, not "run".
+            parts = str(k).split(".")
+            short = parts[-2] if len(parts) >= 2 and parts[-1] == "run" else k
+            print(f"    {short:<28}  {str(v)[:90]}")
+        print()
+
+    # ── M13 attribution ──────────────────────────────────────────────
+    m13_top = explain.get("m13_top") or []
+    m13_score = explain.get("m13_score")
+    if m13_top:
+        score_str = (
+            f"  (combined score = {m13_score:.4f})"
+            if isinstance(m13_score, (int, float)) else ""
+        )
+        print(f"  M13 attribution top contributors:{score_str}")
+        for entry in m13_top[:5]:
+            name = entry.get("subfield", "?")
+            score = entry.get("score", 0.0)
+            bar_len = int(round(min(1.0, max(0.0, float(score))) * 20))
+            bar = "█" * bar_len + "·" * (20 - bar_len)
+            print(f"    {name:<32}  [{bar}]  {float(score):.3f}")
+        print()
+
+    # ── RAG ──────────────────────────────────────────────────────────
+    rag = explain.get("rag")
+    if rag:
+        print(
+            f"  step340 RAG ({rag.get('n_retrieved', 0)} retrieved):"
+        )
+        print(
+            f"    top cos:    {rag.get('top_cos', 0.0):.3f}\n"
+            f"    top label:  {rag.get('top_label', '?')}\n"
+            f"    top case:   {str(rag.get('top_text', ''))[:90]}"
+        )
+        print()
+
+    # ── Session drift ────────────────────────────────────────────────
+    drift = explain.get("session_drift")
+    if drift:
+        cur = drift.get("topic_drift", 0.0)
+        mx = drift.get("max_drift", 0.0)
+        n = drift.get("n_calls", 0)
+        print("  Session behavioural drift:")
+        print(
+            f"    current topic_drift: {float(cur):.3f}  "
+            f"max so far: {float(mx):.3f}  (call {n} of session)"
+        )
+        print()
+
+    # ── ATV fingerprint ──────────────────────────────────────────────
+    atv_dim = explain.get("atv_dim")
+    atv_sha3 = explain.get("atv_sha3")
+    if atv_dim or atv_sha3:
+        print(
+            f"  ATV: {atv_dim}-D, SHA3 = {str(atv_sha3 or '')[:24]}…  "
+            f"(use `aegis verify-audit` to replay)"
+        )
+        print()
+
+    return 0
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     """Print a 5-line Agent Risk Report for the most recent session.
 
@@ -696,6 +849,10 @@ def cmd_report(args: argparse.Namespace) -> int:
         print("        (start a Claude Code session with `aegis install --mode local`")
         print("         or `--mode sidecar` so the hook can append decisions.)")
         return 1
+
+    # ── explain mode short-circuits the aggregate report ─────────────
+    if getattr(args, "explain", None):
+        return _cmd_report_explain(audit_path, args.explain)
 
     cutoff_ns = int(time.time() - since_secs) * 1_000_000_000 if since_secs else 0
 
@@ -1933,6 +2090,17 @@ def build_parser() -> argparse.ArgumentParser:
     rep.add_argument(
         "--verbose", "-v", action="store_true",
         help="Show top reasons table",
+    )
+    rep.add_argument(
+        "--explain",
+        default=None,
+        metavar="TRACE_OR_LAST",
+        help=(
+            "Render a layer-by-layer explanation of one decision: which "
+            "firewall steps fired, M13 attribution top contributors, "
+            "RAG cases retrieved, session drift. Pass a trace_id prefix "
+            "or 'LAST' / 'last' for the most-recent decision."
+        ),
     )
     rep.set_defaults(fn=cmd_report)
 

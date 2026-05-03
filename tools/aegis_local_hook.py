@@ -58,6 +58,138 @@ def _emit(msg: str) -> None:
     print(f"[aegis-local] {msg}", file=sys.stderr, flush=True)
 
 
+def _build_explain_block(atv: Any, inp: Any, verdict: Any) -> dict[str, Any]:
+    """Per-decision diagnostic block written into each audit record.
+
+    Captures every signal the firewall *consulted* (not just the one
+    that decided), so ``aegis report --explain TRACE`` can render a
+    layer-by-layer "why" for any past decision. Every field is a pure
+    function of the verdict / inp / atv tuple — we're just lifting
+    information that already exists in memory at PreToolUse time so
+    it survives in the audit chain instead of being lost.
+
+    Fields written
+    --------------
+    * ``step_traces``   — the ``Verdict.step_traces`` dict, filtered
+      to entries that are non-trivial (skipped / ok-only entries are
+      noise; we keep BLOCK / REQUIRE_APPROVAL / hybrid / numeric
+      payloads).
+    * ``m13_top``       — top-5 (subfield, score) pairs from the M13
+      attribution head, computed against the current ATV. Recomputed
+      here rather than lifted from the verdict because step340 only
+      sometimes embeds it in the reason string.
+    * ``rag``           — count, top cosine, top label of the cases
+      retrieved by step340 RAG (when BGE + memory are configured).
+      ``null`` when RAG was inactive.
+    * ``session_drift`` — ``topic_drift`` and ``n_calls`` for the
+      session this call belongs to (when bge-local + session_id
+      present, otherwise ``null``).
+    * ``atv_dim`` / ``atv_sha3`` — sanity-check shape + content hash
+      for downstream replay tools.
+
+    Try/except around every sub-section: if any signal-gathering
+    fails (e.g. M13 weights file unreadable), the block degrades to
+    fewer fields rather than blocking the tool call.
+    """
+    explain: dict[str, Any] = {}
+
+    # ── ATV shape + content fingerprint ──────────────────────────────
+    try:
+        import hashlib
+
+        import numpy as np
+        atv_arr = np.asarray(atv)
+        explain["atv_dim"] = int(atv_arr.shape[0])
+        explain["atv_sha3"] = hashlib.sha3_256(atv_arr.tobytes()).hexdigest()
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ── Step traces (filtered) ───────────────────────────────────────
+    try:
+        traces = dict(getattr(verdict, "step_traces", {}) or {})
+        # Drop entries that are pure "ok" / "skipped" — they're noise.
+        # Keep anything carrying numbers, BLOCK / REQUIRE_APPROVAL, or
+        # hybrid output strings (which include attribution breakdowns).
+        keep = {}
+        for k, v in traces.items():
+            if not isinstance(v, str):
+                continue
+            low = v.lower()
+            keep_this = (
+                "block" in low or "approval" in low or "hybrid" in low
+                or "drift" in low or "loop" in low
+                or any(c.isdigit() for c in v)
+            )
+            if keep_this:
+                keep[k] = v[:200]
+        explain["step_traces"] = keep
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ── M13 top-5 attribution ───────────────────────────────────────
+    try:
+        from aegis.judge.attribution_head import AttributionHead
+        head = AttributionHead()
+        v = head.evaluate_full("", atv=atv, inp=inp)
+        attribution = dict(getattr(v, "subfield_attribution", {}) or {})
+        if attribution:
+            top = sorted(
+                attribution.items(), key=lambda kv: -float(kv[1]),
+            )[:5]
+            explain["m13_top"] = [
+                {"subfield": name, "score": round(float(score), 4)}
+                for name, score in top
+            ]
+            explain["m13_score"] = round(
+                float(getattr(v, "confidence", 0.0)), 4,
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ── RAG retrieval ────────────────────────────────────────────────
+    try:
+        from aegis.config import settings as _settings
+        if _settings.aegis_embedding_provider == "bge-local":
+            import numpy as np
+
+            from aegis.judge.case_memory import load_default_memory
+            from aegis.schema import SLICE_AGENT_STATE_EMBEDDING
+            mem = load_default_memory()
+            if not mem.is_empty:
+                q = np.asarray(
+                    atv[SLICE_AGENT_STATE_EMBEDDING], dtype=np.float32,
+                )
+                hits = mem.search(q, k=3) if q.size == mem.dim else []
+                if hits:
+                    explain["rag"] = {
+                        "n_retrieved": len(hits),
+                        "top_cos": round(float(hits[0].similarity), 4),
+                        "top_label": str(hits[0].label),
+                        "top_text": str(hits[0].text)[:120],
+                    }
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ── Session drift snapshot ───────────────────────────────────────
+    try:
+        from aegis.atv.session_drift import load_session
+        sid = getattr(inp.header, "aid", "") or ""
+        # Heuristic: aid in our local hook is the Claude Code session_id
+        # (set in adapter._tool_args_to_input). Look for the session
+        # state directly.
+        state = load_session(sid)
+        if state is not None and state.drift_history:
+            explain["session_drift"] = {
+                "topic_drift": round(float(state.drift_history[-1]), 4),
+                "max_drift": round(float(max(state.drift_history)), 4),
+                "n_calls": int(state.n_calls),
+            }
+    except Exception:  # noqa: BLE001
+        pass
+
+    return explain
+
+
 def _append_audit(record: dict[str, Any]) -> None:
     """Append a chained audit record (v2.1.5 local-mode integrity).
 
@@ -107,6 +239,14 @@ def handle_pretool(stdin: Any, stdout: Any) -> int:
     decision = verdict.decision
     reason = verdict.reason or ""
 
+    # Build the audit record. The base fields are unchanged from the
+    # pre-#26 schema (`aegis verify-audit` and any downstream parsers
+    # keep working). The new ``explain`` block carries the per-decision
+    # signals so ``aegis report --explain`` can render the full "why"
+    # — step traces, M13 attribution, RAG cases, session drift. Every
+    # signal is a pure function of (atv, inp, verdict), so adding them
+    # here doesn't change firewall behaviour.
+    explain_block = _build_explain_block(atv, inp, verdict)
     _append_audit(
         {
             "ts_ns": time.time_ns(),
@@ -117,6 +257,7 @@ def handle_pretool(stdin: Any, stdout: Any) -> int:
             "trace_id": inp.header.trace_id,
             "latency_ms": round(elapsed_ms, 3),
             "mode": "local",
+            "explain": explain_block,
         }
     )
 
