@@ -1,0 +1,180 @@
+{
+  "_comment": "M13 attribution head v2 \u2014 weights learned from labelled (ATV, verdict) corpus via class-balanced non-negative least squares (aegis.burnin.m13_train). Same architecture as v1, same encoder-side named-slot weights, only the 30 subfield-aggregate weights and the two thresholds are retrained. Bit-identical inference path through AttributionHead \u2014 drop-in replacement.",
+  "version": 2,
+  "schema_version": "ATV-2080-v1",
+  "feature_aggregator": "sum_of_named_slots",
+  "subfield_weights": {
+    "agent_state_embedding": 0.0,
+    "action_history": 0.006898,
+    "inter_agent_graph": 0.049092,
+    "memory_provenance": 0.0,
+    "qom_scores": 0.037763,
+    "resource_access_pattern": 0.038765,
+    "prompt_structure": 0.0,
+    "aid_ats_scalars": 0.092875,
+    "encryption_metadata": 0.037918,
+    "output_content_fingerprint": 1.259915,
+    "tool_arg_inspection": 0.388158,
+    "action_blast_radius": 0.077916,
+    "output_channel_diversity": 0.459425,
+    "session_behavioral_drift": 0.026597,
+    "mcp_trust_signals": 0.024806,
+    "grounding_metrics": 0.04114,
+    "novelty_score": 0.045579,
+    "human_oversight_state": 0.036277,
+    "cost_efficiency_metrics": 0.080184,
+    "memory_timing_histograms": 0.039554,
+    "aid_tag_transitions": 0.000161,
+    "atmu_anomaly": 0.009852,
+    "dma_fanout": 0.039485,
+    "thermal_ecc_drift": 0.037469,
+    "watchdog_signals": 0.013435,
+    "network_telemetry": 0.020606,
+    "gpu_accelerator_state": 0.016961,
+    "hypervisor_signals": 0.000653,
+    "hw_cost_attestation": 0.04974,
+    "linkage_consistency_features": 0.016614
+  },
+  "named_slot_weights": {
+    "_comment": "Aggregator boost for slots with semantic meaning \u2014 multiplicative on the slot value before subfield sum.",
+    "tool_arg_inspection": [
+      [
+        "destructive_verb",
+        1.0
+      ],
+      [
+        "path_traversal",
+        0.85
+      ],
+      [
+        "encoded_payload",
+        0.8
+      ],
+      [
+        "sql_keyword",
+        0.75
+      ],
+      [
+        "shell_special",
+        0.4
+      ],
+      [
+        "url_count",
+        0.2
+      ],
+      [
+        "filesystem_write",
+        0.3
+      ],
+      [
+        "binary_blob",
+        0.5
+      ],
+      [
+        "credential_pattern",
+        1.0
+      ],
+      [
+        "regex_complexity",
+        0.1
+      ],
+      [
+        "unicode_invisible",
+        0.85
+      ],
+      [
+        "base64_blob",
+        0.3
+      ]
+    ],
+    "action_blast_radius": [
+      [
+        "blast_radius_norm",
+        1.0
+      ],
+      [
+        "reversibility",
+        -0.5
+      ],
+      [
+        "scope",
+        0.8
+      ],
+      [
+        "criticality",
+        1.0
+      ],
+      [
+        "external_side_effects",
+        0.6
+      ],
+      [
+        "data_loss_risk",
+        0.7
+      ]
+    ],
+    "prompt_structure": [
+      [
+        "length_norm",
+        0.1
+      ],
+      [
+        "line_density",
+        0.05
+      ],
+      [
+        "uppercase_ratio",
+        0.1
+      ],
+      [
+        "punctuation_density",
+        0.1
+      ],
+      [
+        "ignore_keyword",
+        1.0
+      ],
+      [
+        "system_keyword",
+        0.5
+      ],
+      [
+        "code_block",
+        0.1
+      ],
+      [
+        "url_count_proxy",
+        0.2
+      ]
+    ]
+  },
+  "thresholds": {
+    "block": 0.625,
+    "require_approval": 0.4
+  },
+  "model_hash_seed": "m13-attribution-head-v2-2026-05-02",
+  "_provenance": {
+    "trained_by": "aegis.burnin.m13_train",
+    "training_data": "synthetic corpus (n=245, train=196, test=49)",
+    "train_accuracy": 0.5357,
+    "test_accuracy": 0.551,
+    "confusion_test": {
+      "ALLOW": {
+        "ALLOW": 2,
+        "REQUIRE_APPROVAL": 6,
+        "BLOCK": 0
+      },
+      "REQUIRE_APPROVAL": {
+        "ALLOW": 0,
+        "REQUIRE_APPROVAL": 12,
+        "BLOCK": 11
+      },
+      "BLOCK": {
+        "ALLOW": 0,
+        "REQUIRE_APPROVAL": 5,
+        "BLOCK": 13
+      }
+    },
+    "predecessor": "m13-attribution-head-v1-2026-04-28"
+  }
+}

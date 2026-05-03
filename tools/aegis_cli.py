@@ -1168,6 +1168,16 @@ def _print_pull_next_steps(target: Path, spec: object | None = None) -> None:
 
 
 def cmd_burnin(args: argparse.Namespace) -> int:
+    # train-m13 / compare-m13 / shadow-status have zero dependency on the
+    # legacy burnin.retrain module (which is a sidecar-only port).
+    # Dispatch early so the import doesn't fail in plugin-mode installs.
+    if args.action == "train-m13":
+        return _cmd_burnin_train_m13(args)
+    if args.action == "compare-m13":
+        return _cmd_burnin_compare_m13(args)
+    if args.action == "shadow-status":
+        return _cmd_burnin_shadow_status(args)
+
     from burnin.retrain import retrain, revert  # type: ignore[import-not-found]
 
     if args.action == "retrain":
@@ -1185,7 +1195,213 @@ def cmd_burnin(args: argparse.Namespace) -> int:
         r = revert()
         print(f"[burnin revert] status={r['status']}  from={r.get('from')}")
         return 0
+    if args.action == "train-m13":
+        return _cmd_burnin_train_m13(args)
     return 2
+
+
+def _cmd_burnin_train_m13(args: argparse.Namespace) -> int:
+    """Train M13 attribution-head v2 weights from synthetic / shadow data.
+
+    Default behaviour (no ``--corpus``) generates a fresh synthetic corpus
+    via :func:`aegis.burnin.m13_data.generate` and trains v2. With
+    ``--corpus path.jsonl`` the trainer reads (ATV, label) pairs from a
+    Burn-in Shadow dump instead — this is the path real production
+    deployments will take once shadow data is collected.
+
+    Output: ``models/m13_attribution_head_v2.json`` — drop-in
+    replacement for v1 in :class:`AttributionHead`.
+    """
+    from pathlib import Path
+
+    from aegis.burnin.m13_data import generate
+    from aegis.burnin.m13_train import train_v2, write_v2_json
+
+    out_path = (
+        Path(args.out) if args.out
+        else PROJECT_ROOT / "models" / "m13_attribution_head_v2.json"
+    )
+
+    if args.corpus:
+        # Replay from Shadow dump — JSONL of (tool_name, args, label, ...)
+        import json as _json
+        import time as _time
+
+        from aegis.burnin.m13_data import LabeledExample
+        from aegis.schema import ATVHeader, ATVInput, CostEfficiencyMetrics
+
+        corpus: list = []
+        with Path(args.corpus).open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                rec = _json.loads(line)
+                corpus.append(LabeledExample(
+                    category=rec.get("category", "shadow"),
+                    label=rec["label"],
+                    inp=ATVInput(
+                        header=ATVHeader(
+                            trace_id=rec.get("trace_id", "t"),
+                            span_id=rec.get("span_id", "s"),
+                            tenant_id=rec.get("tenant_id", "shadow"),
+                            aid=rec.get("aid", "shadow"),
+                            timestamp_ns=_time.time_ns(),
+                        ),
+                        agent_state_text=rec.get("agent_state_text", ""),
+                        plan_text=rec.get("plan_text", ""),
+                        tool_name=rec["tool_name"],
+                        tool_args_json=rec["tool_args_json"],
+                        safety_flags={},
+                        memory_fingerprint="sha3:shadow",
+                        cost_estimate=CostEfficiencyMetrics(
+                            input_token_count=10, output_token_count=5,
+                        ),
+                    ),
+                ))
+        print(f"[train-m13] loaded {len(corpus)} examples from {args.corpus}")
+    else:
+        corpus = generate(per_category=args.per_category, seed=args.seed)
+        print(
+            f"[train-m13] generated {len(corpus)} synthetic examples "
+            f"(per_category={args.per_category}, seed={args.seed})"
+        )
+
+    if len(corpus) < 30:
+        print(
+            _red(f"refusing to train on {len(corpus)} examples — "
+                 "minimum 30 required for 30-feature classifier"),
+            file=sys.stderr,
+        )
+        return 1
+
+    print("[train-m13] training v2 weights via class-balanced NNLS…")
+    result = train_v2(corpus, test_fraction=args.test_fraction)
+
+    print(f"[train-m13] split: {result.n_train} train / {result.n_test} test")
+    print(f"[train-m13] train accuracy: {result.train_accuracy:.3f}")
+    print(f"[train-m13] test  accuracy: {result.test_accuracy:.3f}")
+    print(
+        f"[train-m13] thresholds: approval={result.threshold_approval:.3f}, "
+        f"block={result.threshold_block:.3f}"
+    )
+
+    print()
+    print("[train-m13] top 8 weights:")
+    top = sorted(
+        result.subfield_weights.items(), key=lambda kv: -kv[1],
+    )[:8]
+    for name, w in top:
+        print(f"  {name:<32}  {w:.4f}")
+
+    sha = write_v2_json(result, out_path)
+    print()
+    print(_green(f"✓ wrote {out_path}"))
+    print(f"  model_hash (SHA3-256): {sha[:32]}…")
+    print()
+    print("Next steps:")
+    print("  1. Review weights:")
+    print(f"       cat {out_path.relative_to(PROJECT_ROOT)} | jq '.subfield_weights'")
+    print("  2. Adopt v2 (replaces v1 in AttributionHead):")
+    print(f"       mv {out_path} models/m13_attribution_head_v1.json")
+    print("     OR keep both files and select via")
+    print(f"       AttributionHead(weights_path=Path('{out_path.name}'))")
+    print("  3. Verify regression suite still passes:")
+    print("       ./scripts/macmini_user_test.sh --hybrid")
+    return 0
+
+
+def _cmd_burnin_compare_m13(args: argparse.Namespace) -> int:
+    """Side-by-side v1 vs v2 evaluation on a fresh synthetic corpus."""
+    from pathlib import Path
+
+    from aegis.burnin.m13_eval import compare
+
+    v1_path = (
+        Path(args.v1) if args.v1
+        else PROJECT_ROOT / "models" / "m13_attribution_head_v1.json"
+    )
+    v2_path = (
+        Path(args.v2) if args.v2
+        else PROJECT_ROOT / "models" / "m13_attribution_head_v2.json"
+    )
+    if not v1_path.exists():
+        print(_red(f"v1 weights not found: {v1_path}"), file=sys.stderr)
+        return 1
+    if not v2_path.exists():
+        print(
+            _red(
+                f"v2 weights not found: {v2_path}\n"
+                "  run `aegis burnin train-m13` first to produce v2."
+            ),
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"[compare-m13] v1: {v1_path.name}")
+    print(f"[compare-m13] v2: {v2_path.name}")
+    print(f"[compare-m13] eval corpus: {args.per_category} × 7 categories")
+    result = compare(v1_path, v2_path, per_category=args.per_category)
+
+    print()
+    print("  Metric              v1          v2          Δ")
+    print("─" * 60)
+    print(
+        f"  3-class accuracy    {result.v1.accuracy:.3f}       "
+        f"{result.v2.accuracy:.3f}       {result.delta_accuracy:+.3f}"
+    )
+    print(
+        f"  False negatives     {result.v1.fn_count:<6}      "
+        f"{result.v2.fn_count:<6}      "
+        f"{result.v2.fn_count - result.v1.fn_count:+d}"
+    )
+    print(
+        f"  False positives     {result.v1.fp_count:<6}      "
+        f"{result.v2.fp_count:<6}      "
+        f"{result.v2.fp_count - result.v1.fp_count:+d}"
+    )
+    print(
+        f"  Asym cost (5×FN+FP) {result.v1.cost:<6.1f}      "
+        f"{result.v2.cost:<6.1f}      {-result.delta_cost:+.1f}"
+    )
+    print()
+    badge = {"v1": "🅰️", "v2": "🅱️", "tie": "≈"}.get(result.winner, "?")
+    print(f"  Winner: {result.winner.upper()}  {badge}")
+    if result.notes:
+        print()
+        for n in result.notes:
+            print(f"  note: {n}")
+    return 0 if result.winner != "v1" else 0  # informational, never error
+
+
+def _cmd_burnin_shadow_status(args: argparse.Namespace) -> int:
+    """Summarise the Burn-in Shadow log (count + label distribution)."""
+    from aegis.burnin.shadow import shadow_stats
+
+    stats = shadow_stats(args.shadow_log)
+    print(f"[shadow-status] records: {stats['n']}")
+    if stats["n"] == 0:
+        print("  (none yet — set AEGIS_BURNIN_SHADOW=1 in your hook env to enable)")
+        return 0
+    print("  label distribution:")
+    for label, count in sorted(stats["by_label"].items()):
+        print(f"    {label:<18} {count:>5}")
+    if stats["n"] >= 30:
+        print()
+        print(
+            _green(
+                f"  ✓ enough samples for `aegis burnin train-m13 "
+                f"--corpus {args.shadow_log or '~/.aegis/shadow.jsonl'}`"
+            )
+        )
+    else:
+        print(
+            _yellow(
+                f"  need ≥30 records to train (have {stats['n']}); "
+                "let the hook collect for a while longer"
+            )
+        )
+    return 0
 
 
 def cmd_cost_record(args: argparse.Namespace) -> int:
@@ -1294,11 +1510,61 @@ def build_parser() -> argparse.ArgumentParser:
     sn.set_defaults(fn=cmd_snapshots)
 
     bn = sub.add_parser("burnin")
-    bn.add_argument("action", choices=["retrain", "revert"])
+    bn.add_argument(
+        "action",
+        choices=["retrain", "revert", "train-m13", "compare-m13", "shadow-status"],
+        help=(
+            "retrain: Burn-in Shadow phase (M11) iforest baseline. "
+            "revert: roll back to previous baseline. "
+            "train-m13: learn M13 attribution-head v2 weights. "
+            "compare-m13: side-by-side v1 vs v2 evaluation. "
+            "shadow-status: summarise the Burn-in Shadow log."
+        ),
+    )
     bn.add_argument(
         "--since", default="30d", help="time window: 30d / 24h / ISO-date"
     )
     bn.add_argument("--dry-run", action="store_true")
+    # train-m13 specific (ignored by retrain/revert):
+    bn.add_argument(
+        "--corpus", default=None,
+        help=(
+            "(train-m13) JSONL path of (ATV, label) pairs from a "
+            "Burn-in Shadow dump. Default: auto-generate synthetic."
+        ),
+    )
+    bn.add_argument(
+        "--per-category", type=int, default=35,
+        help="(train-m13) synthetic examples per category (default: 35)",
+    )
+    bn.add_argument(
+        "--seed", type=int, default=2026_05_03,
+        help="(train-m13) RNG seed for synthetic generation (default: 2026_05_03)",
+    )
+    bn.add_argument(
+        "--test-fraction", type=float, default=0.2,
+        help="(train-m13) held-out fraction (default: 0.2)",
+    )
+    bn.add_argument(
+        "--out", default=None,
+        help="(train-m13) output JSON path (default: models/m13_attribution_head_v2.json)",
+    )
+    # compare-m13 specific:
+    bn.add_argument(
+        "--v1", default=None,
+        help="(compare-m13) v1 weights JSON path "
+             "(default: models/m13_attribution_head_v1.json)",
+    )
+    bn.add_argument(
+        "--v2", default=None,
+        help="(compare-m13) v2 weights JSON path "
+             "(default: models/m13_attribution_head_v2.json)",
+    )
+    # shadow-status specific:
+    bn.add_argument(
+        "--shadow-log", default=None,
+        help="(shadow-status) shadow JSONL path (default: $AEGIS_SHADOW_LOG or ~/.aegis/shadow.jsonl)",
+    )
     bn.set_defaults(fn=cmd_burnin)
 
     pm = sub.add_parser(
