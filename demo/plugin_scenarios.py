@@ -288,10 +288,21 @@ class ScenarioResult:
     step_traces: dict[str, str] = field(default_factory=dict)
 
 
-def run_scenario(s: Scenario, *, enhanced: bool = True) -> ScenarioResult:
-    """Run one scenario through the firewall, return the verdict."""
+def run_scenario(
+    s: Scenario,
+    *,
+    enhanced: bool = True,
+    report_dir: Path | None = None,
+) -> ScenarioResult:
+    """Run one scenario through the firewall, return the verdict.
+
+    When ``report_dir`` is provided, a Markdown + JSON report is
+    written to that directory after the verdict is computed.
+    """
     # Defer-import the firewall machinery so unrelated scenarios don't
     # pay the cost when running just one.
+    import time
+
     import numpy as np
 
     from aegis.atv.adapter import (
@@ -299,11 +310,12 @@ def run_scenario(s: Scenario, *, enhanced: bool = True) -> ScenarioResult:
         from_claude_code_payload_enhanced,
     )
     from aegis.atv.builder import build_atv
+    from aegis.atv.report_writer import build_report, write_report
     from aegis.firewall.core import run_firewall
 
     # Scenario 6 needs a custom delegation chain — handled below.
     if s.id == 6:
-        return _run_scenario_6()
+        return _run_scenario_6(report_dir=report_dir)
 
     # Scenario 3 needs the instruction baseline wired up before
     # build_atv runs so step309 sees the baseline. settings is a
@@ -330,8 +342,10 @@ def run_scenario(s: Scenario, *, enhanced: bool = True) -> ScenarioResult:
             k: v for k, v in s.payload.items() if not k.startswith("_aegis_")
         }
         inp = builder(clean_payload, tenant_id="checkup-tenant")
+        t0 = time.perf_counter_ns()
         atv: np.ndarray = build_atv(inp)
         verdict = run_firewall(atv, inp, atv_id=inp.header.span_id)
+        latency_ms = (time.perf_counter_ns() - t0) / 1_000_000
     finally:
         if saved_settings:
             from aegis.config import settings as _settings
@@ -353,6 +367,17 @@ def run_scenario(s: Scenario, *, enhanced: bool = True) -> ScenarioResult:
         if not step_fired and s.expected_step_substring not in (verdict.reason or ""):
             pass_fail = "PARTIAL"
 
+    # Persist a per-scenario report when requested.
+    if report_dir is not None:
+        report = build_report(
+            scenario_id=s.id, title=s.title, real_incident=s.real_incident,
+            inp=inp, atv=atv, verdict=verdict,
+            expected_decision=s.expected_decision, pass_fail=pass_fail,
+            latency_ms=latency_ms,
+            extras={"adapter": "enhanced" if enhanced else "sparse"},
+        )
+        write_report(report, report_dir)
+
     return ScenarioResult(
         id=s.id, title=s.title, expected=s.expected_decision,
         actual_decision=decision, actual_reason=verdict.reason or "",
@@ -361,12 +386,15 @@ def run_scenario(s: Scenario, *, enhanced: bool = True) -> ScenarioResult:
     )
 
 
-def _run_scenario_6() -> ScenarioResult:
+def _run_scenario_6(*, report_dir: Path | None = None) -> ScenarioResult:
     """Capability escalation — uses identity proof token."""
+    import time
+
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
     from aegis.atv.adapter import from_claude_code_payload_enhanced
     from aegis.atv.builder import build_atv
+    from aegis.atv.report_writer import build_report, write_report
     from aegis.firewall import step308_identity
     from aegis.firewall.core import run_firewall
     from aegis.identity.agent_id import AgentIdentity, issue
@@ -401,14 +429,31 @@ def _run_scenario_6() -> ScenarioResult:
     # Force step308 to require identity verification by setting env
     os.environ["AEGIS_IDENTITY_REQUIRE"] = "true"
     try:
+        t0 = time.perf_counter_ns()
         atv = build_atv(inp)
         verdict = run_firewall(atv, inp, atv_id=inp.header.span_id)
+        latency_ms = (time.perf_counter_ns() - t0) / 1_000_000
     finally:
         os.environ.pop("AEGIS_IDENTITY_REQUIRE", None)
 
     decision = verdict.decision
     expected = {"BLOCK"}
     pass_fail = "PASS" if decision in expected else "FAIL"
+
+    if report_dir is not None:
+        report = build_report(
+            scenario_id=6, title="Multi-agent capability escalation",
+            real_incident=(
+                "CrewAI / AutoGen don't enforce capability subset along "
+                "delegation chain. Child agent can claim tools the parent "
+                "wasn't authorised to use. step308 (Claim 56) blocks."
+            ),
+            inp=inp, atv=atv, verdict=verdict,
+            expected_decision=expected, pass_fail=pass_fail,
+            latency_ms=latency_ms,
+            extras={"adapter": "enhanced", "delegation": "child→parent"},
+        )
+        write_report(report, report_dir)
     return ScenarioResult(
         id=6, title="Multi-agent capability escalation",
         expected=expected, actual_decision=decision,
@@ -439,7 +484,20 @@ def main() -> int:
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--json", action="store_true",
                         help="Emit machine-readable JSON.")
+    parser.add_argument(
+        "--report-dir", type=str, default="",
+        help=(
+            "Directory to write per-scenario ATV reports "
+            "(scenario_N_TIMESTAMP.md + .json). "
+            "Default: ./reports when run via scripts/macmini_user_test.sh; "
+            "empty = no reports."
+        ),
+    )
     args = parser.parse_args()
+
+    report_dir: Path | None = None
+    if args.report_dir:
+        report_dir = Path(args.report_dir).resolve()
 
     with tempfile.TemporaryDirectory() as td:
         scenarios = build_scenarios(Path(td))
@@ -466,7 +524,9 @@ def main() -> int:
 
         results = []
         for s in targets:
-            r = run_scenario(s, enhanced=not args.no_enhanced)
+            r = run_scenario(
+                s, enhanced=not args.no_enhanced, report_dir=report_dir,
+            )
             results.append(r)
 
         if args.json:
