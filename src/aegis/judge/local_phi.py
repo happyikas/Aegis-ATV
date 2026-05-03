@@ -131,7 +131,11 @@ def _load_real_phi(model_path_str: str) -> Any:
     installed or the model fails to open.
     """
     try:
-        from llama_cpp import Llama  # type: ignore[import-not-found]
+        # ``llama_cpp`` is the optional ``aegis-mvp[local-llm]`` extra; CI
+        # doesn't install it (mypy reports import-not-found) but local
+        # dev with the extra installed has the symbol available
+        # (mypy then reports unused-ignore). Suppress both.
+        from llama_cpp import Llama  # type: ignore[import-not-found,unused-ignore]
     except ImportError:
         return None
     try:
@@ -150,14 +154,16 @@ def _real_evaluate(
     llm: Any,
     summary: str,
     attribution_dict: dict[str, float],
+    rag_block: str = "",
 ) -> tuple[Literal["ALLOW", "BLOCK", "REQUIRE_APPROVAL"], float, str]:
     """Run real Phi-4-mini-q4 with deterministic flags.
 
-    Prompt format embeds the M13 attribution dict so the LM has the
-    structured signal alongside the text summary. Output is a JSON
-    line we parse for {decision, reason}.
+    Prompt format embeds the M13 attribution dict + (optional) RAG
+    block of similar past cases so the LM has the structured signal
+    alongside the text summary. Output is a JSON line we parse for
+    {decision, reason}.
     """
-    prompt = _build_prompt(summary, attribution_dict)
+    prompt = _build_prompt(summary, attribution_dict, rag_block=rag_block)
     out = llm(
         prompt,
         max_tokens=80,        # one JSON line; rubric keeps this small
@@ -169,6 +175,54 @@ def _real_evaluate(
     )
     text = (out.get("choices", [{}])[0].get("text") or "").strip()
     return _parse_real_decode(text)
+
+
+def _build_rag_block(
+    atv: Any, inp: Any, summary: str,
+) -> str:
+    """Retrieve similar past cases via the BGE-derived agent_state slice.
+
+    Returns an empty string when:
+    * the case memory is empty (no npz / `aegis case-memory build` not
+      run yet);
+    * BGE-local is not the active embedding provider (the
+      ``agent_state_embedding`` slice is then SHA3 noise — meaningless
+      cosines);
+    * any retrieval error occurs (the prompt builder degrades silently
+      to "no RAG block" rather than crashing the firewall).
+
+    The returned string is already trimmed by
+    :func:`format_cases_for_prompt` — drops in directly between rubric
+    and format example.
+    """
+    try:
+        from aegis.config import settings
+        from aegis.judge.case_memory import (
+            format_cases_for_prompt,
+            load_default_memory,
+        )
+        from aegis.schema import SLICE_AGENT_STATE_EMBEDDING
+
+        # RAG only adds value when BGE provides a real semantic signal.
+        if settings.aegis_embedding_provider != "bge-local":
+            return ""
+
+        memory = load_default_memory()
+        if memory.is_empty:
+            return ""
+        if atv is None:
+            return ""
+
+        import numpy as np
+
+        query = np.asarray(atv[SLICE_AGENT_STATE_EMBEDDING], dtype=np.float32)
+        if query.size != memory.dim:
+            return ""
+
+        cases = memory.search(query, k=3)
+        return format_cases_for_prompt(cases)
+    except Exception:  # noqa: BLE001 — RAG must never block judge
+        return ""
 
 
 _RUBRIC = """\
@@ -192,7 +246,11 @@ _FORMAT_EXAMPLE = (
 )
 
 
-def _build_prompt(summary: str, attribution: dict[str, float]) -> str:
+def _build_prompt(
+    summary: str,
+    attribution: dict[str, float],
+    rag_block: str = "",
+) -> str:
     """Build the prompt for the local sLLM.
 
     Tuned for Llama-3.2-1B-Instruct-Q4_K_M (Solo Free default):
@@ -206,15 +264,23 @@ def _build_prompt(summary: str, attribution: dict[str, float]) -> str:
     * **Top attribution embedded.** The M13 head's top-5 contributors
       give the model a structured prior — same signal step340 already
       computed, so the model isn't re-deriving from raw text.
+    * **RAG block (optional).** When the case memory is loaded and BGE
+      embeddings are configured, the most-similar past cases are
+      injected as labelled in-context examples. This is the
+      patent's step340 RAG hook — empirically the single biggest
+      Llama-1B accuracy lift, since 1B-class models pattern-match
+      reliably even when they can't reason.
 
     Greedy decoding (temperature=0, top_k=1) + this prompt = bit-
-    deterministic output for the same (summary, attribution) pair.
+    deterministic output for the same (summary, attribution, rag) tuple.
     """
     top = sorted(attribution.items(), key=lambda kv: -kv[1])[:5]
     attr_lines = ", ".join(f"{name}: {score:.2f}" for name, score in top)
+    rag = f"{rag_block}\n" if rag_block else ""
     return (
         "You are AegisData's local sLLM judge for AI agent tool calls.\n"
         f"{_RUBRIC}\n"
+        f"{rag}"
         f"{_FORMAT_EXAMPLE}\n\n"
         "Tool call to classify:\n"
         f"  summary: {summary}\n"
@@ -338,8 +404,16 @@ class LocalPhiJudge(Judge):
                     summary, atv=atv, inp=inp
                 )
                 attr_dict = attr_v.subfield_attribution
+            # Step340 RAG: retrieve similar past cases when BGE +
+            # case memory are configured. Empty string falls back to
+            # the no-RAG prompt (i.e., bit-identical to PR #21).
+            rag_block = _build_rag_block(atv, inp, summary)
             llm = _load_real_phi(info)
-            decision, confidence, reason = _real_evaluate(llm, summary, attr_dict)
+            decision, confidence, reason = _real_evaluate(
+                llm, summary, attr_dict, rag_block=rag_block,
+            )
+            if rag_block:
+                reason = f"{reason}  [+RAG]"
             model_hash = _hash_model_file(info)
         else:
             decision = "ALLOW"

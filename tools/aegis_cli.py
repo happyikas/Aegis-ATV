@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sqlite3
 import sys
@@ -1404,6 +1405,150 @@ def _cmd_burnin_shadow_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_case_memory(args: argparse.Namespace) -> int:
+    """Build / inspect / import the step340 RAG case memory.
+
+    Three actions, all read/write the npz at
+    ``models/case_memory_v1.npz`` (override with ``--out``):
+
+    * ``build``  — embed the synthetic M13 corpus through BGE-base-en
+      and save. Default source for fresh installs.
+    * ``import`` — embed the rows of a Burn-in Shadow JSONL and save.
+      Use this once the user has accumulated real (label, text) pairs
+      from production traffic.
+    * ``status`` — count + label distribution + top-5 cosine pairs
+      (sanity-check that the memory has semantic structure).
+
+    All paths require BGE-local active
+    (``aegis pull-model --model bge-base-en`` + ``--extra local-llm``).
+    Without BGE, every cosine is meaningless and RAG would inject
+    noise into the LLM prompt — we hard-error rather than silently
+    embed garbage.
+    """
+    from pathlib import Path
+
+    from aegis.atv.embeddings import BGELocalEmbedding
+    from aegis.judge.case_memory import (
+        DEFAULT_CASE_MEMORY_PATH,
+        CaseMemory,
+    )
+
+    out_path = Path(args.out) if args.out else DEFAULT_CASE_MEMORY_PATH
+
+    if args.action == "status":
+        if not out_path.exists():
+            print(_yellow(f"no memory at {out_path} — run `aegis case-memory build`"))
+            return 0
+        memory = CaseMemory.load(out_path)
+        print(f"[case-memory] file:  {out_path}")
+        print(f"[case-memory] n:     {memory.n}")
+        print(f"[case-memory] dim:   {memory.dim}")
+        print(f"[case-memory] meta:  {memory.meta}")
+        if memory.n > 0:
+            from collections import Counter
+            counts = Counter(str(memory.labels[i]) for i in range(memory.n))
+            print("  labels:")
+            for label, c in sorted(counts.items()):
+                print(f"    {label:<18} {c:>5}")
+        return 0
+
+    # build / import: need BGE.
+    bge_path = os.environ.get("AEGIS_EMBEDDING_MODEL_PATH", "").strip()
+    if not bge_path or not Path(bge_path).exists():
+        print(_red(
+            "BGE GGUF not configured. Run:\n"
+            "  uv run aegis pull-model --model bge-base-en\n"
+            "  echo 'AEGIS_EMBEDDING_MODEL_PATH=$(pwd)/models/"
+            "bge-base-en-v1.5-q4_k_m.gguf' >> .env\n"
+            "  uv sync --extra local-llm"
+        ), file=sys.stderr)
+        return 2
+
+    provider = BGELocalEmbedding()
+
+    if args.action == "build":
+        from aegis.burnin.m13_data import generate
+        corpus = generate(per_category=args.per_category, seed=args.seed)
+        print(
+            f"[case-memory build] embedding {len(corpus)} synthetic examples "
+            f"through BGE-base-en…"
+        )
+        memory = CaseMemory.build_from_corpus(
+            corpus, embed_provider=provider,
+            meta={"source": "synthetic", "per_category": args.per_category,
+                  "seed": args.seed},
+        )
+    elif args.action == "import":
+        if not args.corpus:
+            print(_red("--corpus is required for `import`"), file=sys.stderr)
+            return 2
+        import json as _json
+        import time as _time
+
+        from aegis.burnin.m13_data import LabeledExample
+        from aegis.schema import ATVHeader, ATVInput, CostEfficiencyMetrics
+
+        corpus_objs = []
+        with Path(args.corpus).open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                rec = _json.loads(line)
+                corpus_objs.append(LabeledExample(
+                    category=rec.get("category", "shadow"),
+                    label=rec["label"],
+                    inp=ATVInput(
+                        header=ATVHeader(
+                            trace_id=rec.get("trace_id", "t"),
+                            span_id=rec.get("span_id", "s"),
+                            tenant_id=rec.get("tenant_id", "shadow"),
+                            aid=rec.get("aid", "shadow"),
+                            timestamp_ns=_time.time_ns(),
+                        ),
+                        agent_state_text=rec.get("agent_state_text", ""),
+                        plan_text=rec.get("plan_text", ""),
+                        tool_name=rec["tool_name"],
+                        tool_args_json=rec["tool_args_json"],
+                        safety_flags={},
+                        memory_fingerprint="sha3:shadow",
+                        cost_estimate=CostEfficiencyMetrics(
+                            input_token_count=10, output_token_count=5,
+                        ),
+                    ),
+                ))
+        print(
+            f"[case-memory import] embedding {len(corpus_objs)} shadow records "
+            f"through BGE-base-en…"
+        )
+        memory = CaseMemory.build_from_corpus(
+            corpus_objs, embed_provider=provider,
+            meta={"source": "shadow", "input_path": str(args.corpus)},
+        )
+    else:
+        print(_red(f"unknown action: {args.action}"), file=sys.stderr)
+        return 2
+
+    memory.save(out_path)
+    print(_green(f"✓ wrote {out_path}"))
+    print(f"  n={memory.n}, dim={memory.dim}")
+    print()
+    print("Next steps:")
+    print(
+        "  1. Verify the memory has semantic structure:\n"
+        "       uv run aegis case-memory status"
+    )
+    print(
+        "  2. Restart Claude Code so the hook picks up the new memory\n"
+        "     (the LocalPhiJudge prompt builder loads it on first call).\n"
+    )
+    print(
+        "  3. Run the dogfood check to confirm RAG fires:\n"
+        "       ./scripts/dogfood_check.sh --hybrid"
+    )
+    return 0
+
+
 def cmd_cost_record(args: argparse.Namespace) -> int:
     from cost.catalog import estimate_usd  # type: ignore[import-not-found]
     from wal.writer import _connect  # type: ignore[import-not-found]
@@ -1566,6 +1711,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="(shadow-status) shadow JSONL path (default: $AEGIS_SHADOW_LOG or ~/.aegis/shadow.jsonl)",
     )
     bn.set_defaults(fn=cmd_burnin)
+
+    cm = sub.add_parser(
+        "case-memory",
+        help="Build / inspect the step340 RAG case memory (BGE-derived nearest-neighbour index)",
+    )
+    cm.add_argument(
+        "action",
+        choices=["build", "import", "status"],
+        help=(
+            "build: embed synthetic M13 corpus into models/case_memory_v1.npz. "
+            "import: embed a Burn-in Shadow JSONL (--corpus). "
+            "status: show count + label distribution."
+        ),
+    )
+    cm.add_argument(
+        "--corpus", default=None,
+        help="(import) shadow JSONL produced via AEGIS_BURNIN_SHADOW=1",
+    )
+    cm.add_argument(
+        "--per-category", type=int, default=35,
+        help="(build) synthetic examples per category (default: 35)",
+    )
+    cm.add_argument(
+        "--seed", type=int, default=2026_05_03,
+        help="(build) RNG seed (default: 2026_05_03)",
+    )
+    cm.add_argument(
+        "--out", default=None,
+        help="output npz path (default: models/case_memory_v1.npz)",
+    )
+    cm.set_defaults(fn=cmd_case_memory)
 
     pm = sub.add_parser(
         "pull-model",
