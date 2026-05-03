@@ -539,6 +539,49 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────
+# 15. Install ↔ uninstall roundtrip (sandboxed)
+# ─────────────────────────────────────────────────────────────────────
+printf "\n%s[15] Install ↔ uninstall roundtrip%s  %s(sandboxed)%s\n" \
+  "$C_BOLD" "$C_RESET" "$C_DIM" "$C_RESET"
+SANDBOX2="$(mktemp -d)"
+mkdir -p "$SANDBOX2/.claude"
+HOME_REAL="$HOME"
+# Pre-existing third-party hook the user might have. Must survive
+# the install + uninstall round-trip.
+"$PYTHON" - <<PY
+import json
+from pathlib import Path
+p = Path("$SANDBOX2/.claude/settings.json")
+p.write_text(json.dumps({
+    "hooks": {
+        "PreToolUse": [
+            {"matcher": "Edit", "hooks": [{"type": "command",
+             "command": "/usr/local/bin/prettier-check"}]},
+        ],
+    },
+}, indent=2))
+PY
+HOME="$SANDBOX2" uv run aegis install --mode local --judge dummy >/dev/null 2>&1
+INSTALL_RC=$?
+HOME="$SANDBOX2" uv run aegis uninstall --no-backup >/dev/null 2>&1
+UNINSTALL_RC=$?
+# grep -c emits "0" AND exits 1 on zero matches → ``|| echo 0`` would
+# duplicate. Capture the body first, then default to 0 if grep had to fail.
+N_AEGIS="$(grep -c 'aegis_local_hook.py\|tools/hooks/post_tool.py\|tools/hooks/session_end.py' \
+  "$SANDBOX2/.claude/settings.json" 2>/dev/null)"
+N_AEGIS="${N_AEGIS:-0}"
+N_THIRD_PARTY="$(grep -c 'prettier-check' "$SANDBOX2/.claude/settings.json" 2>/dev/null)"
+N_THIRD_PARTY="${N_THIRD_PARTY:-0}"
+HOME="$HOME_REAL"
+rm -rf "$SANDBOX2"
+if [[ "$INSTALL_RC" == "0" && "$UNINSTALL_RC" == "0" \
+      && "$N_AEGIS" == "0" && "$N_THIRD_PARTY" == "1" ]]; then
+  ok "round-trip clean: 0 Aegis hooks remain, 1 third-party hook preserved"
+else
+  fail "round-trip broken: install=$INSTALL_RC uninstall=$UNINSTALL_RC aegis=$N_AEGIS third-party=$N_THIRD_PARTY"
+fi
+
+# ─────────────────────────────────────────────────────────────────────
 # Summary
 # ─────────────────────────────────────────────────────────────────────
 printf "\n────────────────────────────────────────────────────────────\n"
