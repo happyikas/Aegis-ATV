@@ -504,6 +504,41 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────
+# 14. Audit-log rotation + cross-file verify
+# ─────────────────────────────────────────────────────────────────────
+printf "\n%s[14] Audit rotation + verify%s\n" "$C_BOLD" "$C_RESET"
+ROTATION_TMPDIR="$(mktemp -d)"
+ROT_OUT="$(AEGIS_AUDIT_MAX_BYTES=2000 \
+           AEGIS_AUDIT_MAX_ROTATIONS=3 \
+           "$PYTHON" - <<PY 2>&1
+from pathlib import Path
+from aegis.audit.local_chain import append, verify_chain
+from aegis.audit.rotation import list_rotation_chain
+
+p = Path("$ROTATION_TMPDIR/audit.jsonl")
+for i in range(50):
+    append(p, {"i": i, "msg": f"r{i:04d}"})
+
+chain = list_rotation_chain(p)
+print(f"FILES={len(chain)}")
+ok, broken, total = verify_chain(p)
+print(f"VERIFY_OK={ok}")
+print(f"TOTAL={total}")
+PY
+)"
+rm -rf "$ROTATION_TMPDIR"
+N_FILES="$(echo "$ROT_OUT" | grep '^FILES=' | cut -d= -f2)"
+VERIFY_OK="$(echo "$ROT_OUT" | grep '^VERIFY_OK=' | cut -d= -f2)"
+TOTAL="$(echo "$ROT_OUT" | grep '^TOTAL=' | cut -d= -f2)"
+if [[ "$VERIFY_OK" == "True" && -n "$N_FILES" && "$N_FILES" -gt "1" \
+      && -n "$TOTAL" && "$TOTAL" -gt "0" ]]; then
+  ok "rotated $N_FILES files, $TOTAL records, chain verified across boundaries"
+else
+  fail "rotation/verify failed: files=$N_FILES verify=$VERIFY_OK total=$TOTAL"
+  note "$(echo "$ROT_OUT" | tail -3 | sed 's/^/    /')"
+fi
+
+# ─────────────────────────────────────────────────────────────────────
 # Summary
 # ─────────────────────────────────────────────────────────────────────
 printf "\n────────────────────────────────────────────────────────────\n"
