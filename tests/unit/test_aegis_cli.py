@@ -93,26 +93,43 @@ def test_parse_window_secs(spec: str, secs: int) -> None:
 
 @pytest.fixture
 def isolated_install(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """Redirect SETTINGS_PATH and HOOK_SCRIPT into tmp dirs.
+    """Redirect SETTINGS_PATH, hook scripts, and plugin manifest into tmp dirs.
 
-    cmd_install reads/writes the module-level SETTINGS_PATH and HOOK_SCRIPT,
-    so tests must monkeypatch those instead of $HOME.
+    cmd_install reads/writes module-level constants, so tests must
+    monkeypatch them rather than $HOME.
     """
     settings = tmp_path / ".claude" / "settings.json"
     hook = tmp_path / "tools" / "aegis_hook.py"
+    local_hook = tmp_path / "tools" / "aegis_local_hook.py"
+    post_hook = tmp_path / "tools" / "hooks" / "post_tool.py"
+    stop_hook = tmp_path / "tools" / "hooks" / "session_end.py"
+    manifest = tmp_path / ".claude-plugin" / "plugin.json"
     hook.parent.mkdir(parents=True, exist_ok=True)
+    post_hook.parent.mkdir(parents=True, exist_ok=True)
+    manifest.parent.mkdir(parents=True, exist_ok=True)
     hook.write_text("#!/usr/bin/env python3\nprint('stub hook')\n")
+    local_hook.write_text("#!/usr/bin/env python3\nprint('local')\n")
+    post_hook.write_text("#!/usr/bin/env python3\nprint('post')\n")
+    stop_hook.write_text("#!/usr/bin/env python3\nprint('stop')\n")
     hook.chmod(0o755)
+    local_hook.chmod(0o755)
+    manifest.write_text(json.dumps({"name": "aegis-mvp", "version": "2.0.0"}))
     monkeypatch.setattr(aegis_cli, "SETTINGS_PATH", settings)
     monkeypatch.setattr(aegis_cli, "HOOK_SCRIPT", hook)
+    monkeypatch.setattr(aegis_cli, "LOCAL_HOOK_SCRIPT", local_hook)
+    monkeypatch.setattr(aegis_cli, "POST_HOOK_SCRIPT", post_hook)
+    monkeypatch.setattr(aegis_cli, "STOP_HOOK_SCRIPT", stop_hook)
+    monkeypatch.setattr(aegis_cli, "PLUGIN_MANIFEST", manifest)
     return tmp_path
 
 
-def _install_args(force: bool = False, mode: str = "sidecar"):  # type: ignore[no-untyped-def]
+def _install_args(  # type: ignore[no-untyped-def]
+    force: bool = False, mode: str = "sidecar", judge: str = "dummy",
+):
     """Build a minimal Namespace-like object for cmd_install."""
     import argparse
 
-    return argparse.Namespace(force=force, mode=mode)
+    return argparse.Namespace(force=force, mode=mode, judge=judge)
 
 
 def test_cmd_install_creates_settings_when_absent(isolated_install: Path) -> None:
@@ -136,13 +153,49 @@ def test_cmd_install_idempotent_second_run(isolated_install: Path) -> None:
     assert len(data["hooks"]["PreToolUse"]) == 1
 
 
-def test_cmd_install_force_appends_extra_entry(isolated_install: Path) -> None:
+def test_cmd_install_force_replaces_existing_aegis_entries(
+    isolated_install: Path,
+) -> None:
+    """``--force`` must drop any prior Aegis-owned entries, then add fresh ones.
+
+    Previously --force appended a second entry (creating duplicates that
+    fired the firewall twice per tool call). The new semantics: evict
+    then add, so re-installs after path changes don't accumulate dead
+    command lines.
+    """
     aegis_cli.cmd_install(_install_args())
     rc = aegis_cli.cmd_install(_install_args(force=True))
     assert rc == 0
     settings = isolated_install / ".claude" / "settings.json"
     data = json.loads(settings.read_text())
-    assert len(data["hooks"]["PreToolUse"]) == 2
+    # Exactly one of each — not duplicated.
+    assert len(data["hooks"]["PreToolUse"]) == 1
+    assert len(data["hooks"]["PostToolUse"]) == 1
+    assert len(data["hooks"]["Stop"]) == 1
+
+
+def test_cmd_install_force_preserves_non_aegis_hooks(
+    isolated_install: Path,
+) -> None:
+    """``--force`` must not delete user-owned hooks (e.g. prettier, gitleaks)."""
+    aegis_cli.cmd_install(_install_args())
+    settings = isolated_install / ".claude" / "settings.json"
+    data = json.loads(settings.read_text())
+    # Inject a non-Aegis hook — it must survive --force.
+    data["hooks"]["PreToolUse"].append({
+        "matcher": "Edit",
+        "hooks": [{"type": "command", "command": "/usr/local/bin/prettier"}],
+    })
+    settings.write_text(json.dumps(data))
+    aegis_cli.cmd_install(_install_args(force=True))
+    final = json.loads(settings.read_text())
+    cmds = [
+        h["command"]
+        for e in final["hooks"]["PreToolUse"]
+        for h in e["hooks"]
+    ]
+    assert any("/usr/local/bin/prettier" in c for c in cmds), \
+        "third-party hook was wrongly evicted by --force"
 
 
 def test_cmd_install_backs_up_existing_settings(isolated_install: Path) -> None:
@@ -273,6 +326,135 @@ def test_validate_plugin_manifest_missing_required_fields(
     ok, msg = aegis_cli._validate_plugin_manifest()
     assert ok is False
     assert "name" in msg
+
+
+# ---- P0 (post #19): PostToolUse + --judge + venv python ------------------
+
+
+def test_install_registers_posttooluse(isolated_install: Path) -> None:
+    """`aegis install` must register PostToolUse so ATMU 2PC phase 2 closes.
+
+    Before this fix the hook chain only had PreToolUse + Stop, so every
+    intent stayed open and the perf-feedback EWMA never updated.
+    """
+    rc = aegis_cli.cmd_install(_install_args(mode="local"))
+    assert rc == 0
+    data = json.loads((isolated_install / ".claude" / "settings.json").read_text())
+    assert "PostToolUse" in data["hooks"]
+    cmds = [
+        h["command"]
+        for e in data["hooks"]["PostToolUse"]
+        for h in e["hooks"]
+    ]
+    assert any("post_tool.py" in c for c in cmds)
+
+
+def test_install_default_judge_is_dummy() -> None:
+    args = aegis_cli.build_parser().parse_args(["install"])
+    assert args.judge == "dummy"
+
+
+def test_install_judge_hybrid_accepted() -> None:
+    args = aegis_cli.build_parser().parse_args(
+        ["install", "--mode", "local", "--judge", "hybrid"]
+    )
+    assert args.judge == "hybrid"
+
+
+def test_install_judge_invalid_rejected() -> None:
+    with pytest.raises(SystemExit):
+        aegis_cli.build_parser().parse_args(
+            ["install", "--mode", "local", "--judge", "haiku"]
+        )
+
+
+def test_install_local_with_hybrid_writes_env_var(
+    isolated_install: Path,
+) -> None:
+    aegis_cli.cmd_install(_install_args(mode="local", judge="hybrid"))
+    data = json.loads((isolated_install / ".claude" / "settings.json").read_text())
+    cmd = data["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert "AEGIS_JUDGE_PROVIDER=hybrid" in cmd
+
+
+def test_install_local_with_dummy_writes_env_var(
+    isolated_install: Path,
+) -> None:
+    aegis_cli.cmd_install(_install_args(mode="local", judge="dummy"))
+    data = json.loads((isolated_install / ".claude" / "settings.json").read_text())
+    cmd = data["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert "AEGIS_JUDGE_PROVIDER=dummy" in cmd
+
+
+def test_build_pretool_command_invalid_judge_raises() -> None:
+    with pytest.raises(ValueError, match="judge"):
+        aegis_cli._build_pretool_command("local", judge="claude-opus")
+
+
+def test_hook_python_executable_prefers_venv(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """If <repo>/.venv/bin/python exists, it wins over sys.executable."""
+    fake_venv_py = tmp_path / ".venv" / "bin" / "python"
+    fake_venv_py.parent.mkdir(parents=True)
+    fake_venv_py.touch()
+    monkeypatch.setattr(aegis_cli, "PROJECT_ROOT", tmp_path)
+    assert aegis_cli._hook_python_executable() == str(fake_venv_py)
+
+
+def test_hook_python_executable_falls_back_when_no_venv(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(aegis_cli, "PROJECT_ROOT", tmp_path)
+    out = aegis_cli._hook_python_executable()
+    # Falls back to sys.executable (the running interpreter).
+    assert out == sys.executable or out == "python3"
+
+
+def test_install_command_uses_venv_python(isolated_install: Path) -> None:
+    """The hook command in settings.json must NOT use bare `python3`.
+
+    Bare `python3` on macOS is system Python (no numpy / pydantic) — the
+    hook would crash on first call. Real fix: use repo's .venv/bin/python.
+    """
+    aegis_cli.cmd_install(_install_args(mode="local"))
+    data = json.loads((isolated_install / ".claude" / "settings.json").read_text())
+    cmd = data["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    # Must contain a path-qualified python (either /…/.venv/bin/python or
+    # an absolute interpreter from sys.executable). Bare ` python3 ` (with
+    # spaces) would mean the user's shell has to resolve it.
+    assert " python3 " not in f" {cmd} ", \
+        f"hook command uses bare python3 — will crash on macOS:\n{cmd}"
+
+
+def test_drop_aegis_entries_removes_only_aegis_owned() -> None:
+    hooks = {
+        "PreToolUse": [
+            {"matcher": "*", "hooks": [{"command": "x aegis_local_hook.py y"}]},
+            {"matcher": "*", "hooks": [{"command": "/usr/local/bin/prettier"}]},
+        ],
+        "PostToolUse": [
+            {"matcher": "*", "hooks": [{"command": "y tools/hooks/post_tool.py"}]},
+        ],
+        "Stop": [
+            {"hooks": [{"command": "z tools/hooks/session_end.py"}]},
+        ],
+    }
+    n = aegis_cli._drop_aegis_entries(hooks)
+    assert n == 3
+    # Only the prettier entry survives.
+    assert len(hooks["PreToolUse"]) == 1
+    assert "prettier" in hooks["PreToolUse"][0]["hooks"][0]["command"]
+    assert hooks["PostToolUse"] == []
+    assert hooks["Stop"] == []
+
+
+def test_install_idempotent_posttooluse_too(isolated_install: Path) -> None:
+    """Re-running install without --force must not duplicate PostToolUse."""
+    aegis_cli.cmd_install(_install_args(mode="local"))
+    aegis_cli.cmd_install(_install_args(mode="local"))
+    data = json.loads((isolated_install / ".claude" / "settings.json").read_text())
+    assert len(data["hooks"]["PostToolUse"]) == 1
 
 
 def test_install_sidecar_command_uses_aegis_hook(isolated_install_phase5: Path) -> None:
