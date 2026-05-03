@@ -109,6 +109,9 @@ def _load_bge_llm(model_path_str: str) -> Any:
             model_path=model_path_str,
             n_ctx=512,        # BGE max context is 512 tokens; no point larger
             n_threads=4,
+            n_gpu_layers=-1,  # Metal/CUDA offload — same rationale as the
+                              # judge GGUF in local_phi.py (~4–8× speedup
+                              # vs CPU on M1).
             embedding=True,   # critical: switches the model to embed mode
             verbose=False,
         )

@@ -144,6 +144,10 @@ def _load_real_phi(model_path_str: str) -> Any:
             n_ctx=2048,        # ample for our few-shot prompt (~600 toks)
             seed=42,
             n_threads=4,       # 4 CPU threads is the M1/M2 sweet spot
+            n_gpu_layers=-1,   # offload all layers to GPU (Metal/CUDA);
+                               # silently degrades to CPU if llama-cpp
+                               # was built without GPU support. ~4–8×
+                               # speedup on M1 vs CPU-only.
             verbose=False,
         )
     except Exception:  # noqa: BLE001 - downstream returns None for any load failure
@@ -166,12 +170,18 @@ def _real_evaluate(
     prompt = _build_prompt(summary, attribution_dict, rag_block=rag_block)
     out = llm(
         prompt,
-        max_tokens=80,        # one JSON line; rubric keeps this small
+        # 200 tokens accommodates two distinct output styles we see in
+        # the wild: Llama-3.2-1B emits raw JSON in <30 tokens; Phi-3.5-
+        # mini wraps in markdown ```json fences and prepends a blank
+        # line plus a longer reason. We stop at ``` (closes the
+        # markdown block) or `}\n` (closes the raw JSON line) — the
+        # parser then tolerates either form.
+        max_tokens=200,
         temperature=0.0,      # greedy → deterministic
         top_k=1,
         top_p=1.0,
         repeat_penalty=1.0,
-        stop=["\n"],          # stop at first newline; parser handles unterminated JSON
+        stop=["```\n", "}\n\n", "}}"],
     )
     text = (out.get("choices", [{}])[0].get("text") or "").strip()
     return _parse_real_decode(text)
@@ -289,25 +299,67 @@ def _build_prompt(
     )
 
 
+def _strip_markdown_fence(text: str) -> str:
+    """Pull the first JSON-looking object out of markdown-wrapped output.
+
+    Phi-3.5-mini at greedy-decode emits things like::
+
+        \\n\\n```json
+        {"decision": "BLOCK", "reason": "..."}
+        ```
+
+    while Llama-3.2-1B emits raw JSON. Strip the fence + leading
+    whitespace + an optional ``json`` tag, then return the first
+    line that starts with ``{`` so the regex parser below finds it.
+    """
+    if "```" not in text:
+        return text.strip()
+    # Pull out the first fenced block — `json` tag optional.
+    import re
+    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    # No closing fence (we may have stopped on ```\n earlier) — strip
+    # opening fence and let the line-walker below find the JSON.
+    cleaned = text.replace("```json", "").replace("```", "").strip()
+    return cleaned
+
+
 def _parse_real_decode(
     text: str,
 ) -> tuple[Literal["ALLOW", "BLOCK", "REQUIRE_APPROVAL"], float, str]:
     """Robustly extract decision + reason from the local sLLM's output.
 
-    Handles three cases observed in the wild from Llama-3.2-1B-Q4_K_M:
+    Handles four output styles observed in the wild:
+
+    * Llama-3.2-1B raw JSON line
+    * Phi-3.5-mini markdown-fenced ``\\n\\n```json\\n{...}\\n``` ``
+    * Free-form prose containing the decision keyword
+    * Empty / unparseable (last-resort low-conf ALLOW)
+
+    Phi-3.5 in particular ALWAYS prepends ``\\n\\n``, then a markdown
+    fence — :func:`_strip_markdown_fence` lifts the inner JSON out
+    so the regex below treats both styles uniformly.
+
+    Recovery cases:
 
     1. **Clean JSON line** — ``{"decision":"BLOCK","reason":"..."}``. Parsed
        directly, confidence 0.7 (LM is committing).
-    2. **Unterminated JSON** — ``{"decision":"BLOCK","reason":"..."`` (the
-       ``stop=["\\n"]`` cut before the model emitted ``}``). We close the
-       brace and retry.
-    3. **No JSON / freeform** — model emitted prose. Falls back to substring
-       match for the three decision keywords. Confidence 0.5 (LM is guessing).
+    2. **Markdown-fenced JSON** — ``\\n\\n\\`\\`\\`json\\n{...}\\n\\`\\`\\``` (Phi-3.5).
+       Stripped before regex, then parsed directly.
+    3. **Unterminated JSON** — ``{"decision":"BLOCK","reason":"..."``. We
+       close the brace and retry.
+    4. **No JSON / freeform** — model emitted prose. Falls back to substring
+       match for the three decision keywords. Confidence 0.5.
     """
     import json
     import re
 
-    # Case 1 + 2: try to find a JSON object, completing it if needed.
+    # Strip markdown fences before regex extraction. No-op when the
+    # output is raw JSON (Llama-1B style).
+    text = _strip_markdown_fence(text)
+
+    # Case 1 + 3: try to find a JSON object, completing it if needed.
     match = re.search(r"\{[^{}]*\}?", text)
     if match:
         candidate = match.group(0)

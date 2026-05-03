@@ -239,7 +239,17 @@ HOME="$HOME_REAL"
 printf "\n%s[9] Real local-sLLM verdict%s\n" "$C_BOLD" "$C_RESET"
 LLAMA_CHECK="$("$PYTHON" -c 'import importlib;importlib.import_module("llama_cpp");print("ok")' 2>/dev/null || echo missing)"
 # Find a *judge* GGUF (skip embedding GGUFs whose names start with "bge-").
-MODEL_FILE="$(ls "$REPO_ROOT"/models/*.gguf 2>/dev/null | grep -v -i 'bge-' | head -1)"
+# Prefer the env-configured one if set; otherwise pick whichever judge
+# GGUF is in models/. Phi-3.5-mini wins over Llama-1B when both are
+# present (it's the upgrade path users opt into for accuracy).
+if [[ -n "${AEGIS_JUDGE_MODEL_PATH:-}" && -f "$AEGIS_JUDGE_MODEL_PATH" ]]; then
+  MODEL_FILE="$AEGIS_JUDGE_MODEL_PATH"
+else
+  MODEL_FILE="$(ls "$REPO_ROOT"/models/Phi-3.5-mini*.gguf 2>/dev/null | head -1)"
+  if [[ -z "$MODEL_FILE" ]]; then
+    MODEL_FILE="$(ls "$REPO_ROOT"/models/*.gguf 2>/dev/null | grep -v -i 'bge-' | head -1)"
+  fi
+fi
 if [[ "$LLAMA_CHECK" != "ok" ]]; then
   note "skipped — llama-cpp-python not installed.  uv sync --extra local-llm"
 elif [[ -z "$MODEL_FILE" ]]; then
@@ -283,8 +293,22 @@ PY
     LATENCY="$(echo "$REAL_OUT" | grep -E "^LATENCY_MS=" | cut -d= -f2)"
     HASH_OK="$(echo "$REAL_OUT" | grep -E "^MODEL_HASH_MATCH=" | cut -d= -f2)"
     DEC="$(echo "$REAL_OUT" | grep -E "^DECISION=" | cut -d= -f2)"
+    MODEL_NAME="$(basename "$MODEL_FILE" .gguf)"
     if [[ "$HASH_OK" == "yes" ]]; then
-      ok "real Llama verdict: $DEC  ($LATENCY ms, model_hash matches file SHA3)"
+      ok "real verdict: $DEC  ($MODEL_NAME, ${LATENCY} ms, model_hash matches file SHA3)"
+      # Cold-subprocess timeout warning. Each PreToolUse fires a fresh
+      # python3, so the LLM is loaded from scratch every time the
+      # hybrid cascade escalates past M13. Phi-3.5-mini at ~6.5 s
+      # cold-loads exceed Claude Code's 5 s hook timeout when the LLM
+      # *is* invoked (that's the gray-zone ~10 % of calls).
+      LATENCY_INT="${LATENCY%.*}"
+      if [[ "${LATENCY_INT:-0}" -gt 4500 ]]; then
+        printf "  %s!%s cold-load %s ms approaches the 5 s Claude Code hook timeout.\n" \
+          "$C_WARN" "$C_RESET" "$LATENCY"
+        printf "  %s   consider llama-3.2-1b for a fast judge, or use %s as a quality-first opt-in.\n" \
+          "$C_DIM" "$MODEL_NAME"
+        printf "%s\n" "$C_RESET"
+      fi
     else
       fail "model_hash mismatch — verdict ran but hash != file SHA3"
     fi
