@@ -28,16 +28,34 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
+
+ModelKind = Literal["judge", "embedding"]
 
 
 @dataclass(frozen=True)
 class ModelSpec:
-    """A downloadable GGUF model entry."""
+    """A downloadable GGUF model entry.
+
+    The ``kind`` discriminator splits the registry into two families:
+
+    * ``judge`` — instruction-following LLMs that emit ALLOW/BLOCK/
+      REQUIRE_APPROVAL JSON. Fed via ``AEGIS_JUDGE_MODEL_PATH`` to
+      :class:`aegis.judge.local_phi.LocalPhiJudge`.
+    * ``embedding`` — sentence encoders (BGE, E5, etc.). Fed via
+      ``AEGIS_EMBEDDING_MODEL_PATH`` to
+      :class:`aegis.atv.embeddings.BGELocalEmbedding`. The
+      ``embedding_dim`` field records the model's native output
+      dimension; the embedding adapter projects/truncates to whatever
+      ATV slot length the encoder requests.
+    """
 
     name: str                # short slug (also CLI arg value)
     description: str         # human-readable
     url: str                 # direct GGUF URL (HF resolve link)
     size_mb: int             # approximate, for progress UX
+    kind: ModelKind = "judge"
+    embedding_dim: int = 0   # native output dim for kind="embedding"; 0 otherwise
     sha256: str | None = None  # optional integrity check (None = skip)
     license: str = "see model card"
     filename: str = ""       # local filename (defaults to URL basename)
@@ -89,9 +107,43 @@ _REGISTRY: list[ModelSpec] = [
         size_mb=2200,
         license="MIT",
     ),
+    # ── Embedding models (Solo Free default for ATV agent_state_embedding) ─
+    ModelSpec(
+        name="bge-base-en",
+        description=(
+            "BGE-base-en-v1.5 Q4_K_M — Solo Free embedding default. "
+            "100 MB, 768-D native (matches ATV agent_state_embedding slot). "
+            "MTEB 63.55 — competitive with OpenAI ada-002. ~5-10 ms/text on M1."
+        ),
+        url=(
+            "https://huggingface.co/CompendiumLabs/bge-base-en-v1.5-gguf/"
+            "resolve/main/bge-base-en-v1.5-q4_k_m.gguf"
+        ),
+        size_mb=100,
+        kind="embedding",
+        embedding_dim=768,
+        license="MIT",
+    ),
+    ModelSpec(
+        name="bge-small-en",
+        description=(
+            "BGE-small-en-v1.5 Q4_K_M — smaller embedder. "
+            "33 MB, 384-D native (ATV adapter projects/pads to 768). "
+            "MTEB 62.17 — slightly below base-en but 3× smaller."
+        ),
+        url=(
+            "https://huggingface.co/CompendiumLabs/bge-small-en-v1.5-gguf/"
+            "resolve/main/bge-small-en-v1.5-q4_k_m.gguf"
+        ),
+        size_mb=33,
+        kind="embedding",
+        embedding_dim=384,
+        license="MIT",
+    ),
 ]
 
 DEFAULT_MODEL_NAME = "llama-3.2-1b"
+DEFAULT_EMBEDDING_NAME = "bge-base-en"
 
 
 def list_models() -> list[ModelSpec]:
@@ -110,7 +162,13 @@ def get_model(name: str) -> ModelSpec:
 
 
 def default_model() -> ModelSpec:
+    """Default *judge* GGUF (back-compat alias)."""
     return get_model(DEFAULT_MODEL_NAME)
+
+
+def default_embedding_model() -> ModelSpec:
+    """Default *embedding* GGUF for Solo Free (BGE-base-en)."""
+    return get_model(DEFAULT_EMBEDDING_NAME)
 
 
 def model_target_path(spec: ModelSpec, models_dir: Path) -> Path:
@@ -118,11 +176,20 @@ def model_target_path(spec: ModelSpec, models_dir: Path) -> Path:
     return models_dir / spec.local_filename()
 
 
+def list_models_by_kind(kind: ModelKind) -> list[ModelSpec]:
+    """All registered models of one kind, in registry order."""
+    return [m for m in _REGISTRY if m.kind == kind]
+
+
 __all__ = [
+    "DEFAULT_EMBEDDING_NAME",
     "DEFAULT_MODEL_NAME",
+    "ModelKind",
     "ModelSpec",
+    "default_embedding_model",
     "default_model",
     "get_model",
     "list_models",
+    "list_models_by_kind",
     "model_target_path",
 ]

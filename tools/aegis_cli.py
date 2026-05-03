@@ -285,6 +285,7 @@ def _validate_plugin_manifest() -> tuple[bool, str]:
 
 
 VALID_LOCAL_JUDGES = ("dummy", "hybrid", "local-phi")
+VALID_LOCAL_EMBEDDINGS = ("dummy", "bge-local")
 
 
 def _hook_python_executable() -> str:
@@ -311,47 +312,53 @@ def _hook_python_executable() -> str:
     return "python3"
 
 
-def _build_pretool_command(mode: str, *, judge: str = "dummy") -> str:
+def _build_pretool_command(
+    mode: str, *, judge: str = "dummy", embedding: str = "dummy",
+) -> str:
     """Compose the shell command embedded into the PreToolUse hook.
 
     Sidecar mode uses the existing ``tools/aegis_hook.py`` (POST /evaluate);
     local mode uses ``tools/aegis_local_hook.py`` (in-process firewall) and
     pre-pends:
 
-    * ``AEGIS_EMBEDDING_PROVIDER=dummy``  — Solo Free runs without an
-      OpenAI key by default; users who explicitly want real embeddings
-      can edit settings.json by hand.
-    * ``AEGIS_JUDGE_PROVIDER`` — ``dummy`` (default, keyword-only) or
-      ``hybrid`` (heuristic + keyword + M13 attribution head, still
-      offline). Required for AWS-secret + loop scenarios to BLOCK.
-    * ``AEGIS_POLICY_DIR``                — absolute path to policies/
-      so step310 can find sensitive_paths.json from any cwd.
-    * ``PYTHONPATH``                      — absolute path to src/ so the
-      spawned subprocess resolves the ``aegis`` package without the
-      user having to ``uv sync`` first.
+    * ``AEGIS_EMBEDDING_PROVIDER`` — ``dummy`` (SHA3 noise, no LLM, the
+      Solo Free default until ``aegis pull-model --model bge-base-en``
+      is run) or ``bge-local`` (real BGE encoder via llama-cpp).
+    * ``AEGIS_EMBEDDING_MODEL_PATH`` — set when ``embedding=bge-local``;
+      points at ``./models/bge-base-en-v1.5-q4_k_m.gguf``.
+    * ``AEGIS_JUDGE_PROVIDER`` — ``dummy`` (keyword-only), ``local-phi``
+      (real local LLM), or ``hybrid`` (M13 cascade with local-phi as
+      Tier 2). Required for AWS-secret + loop scenarios to BLOCK.
+    * ``AEGIS_JUDGE_MODEL_PATH`` — set when ``judge`` ∈ {local-phi,
+      hybrid}; points at ``./models/Llama-3.2-1B-Instruct-Q4_K_M.gguf``.
+    * ``AEGIS_POLICY_DIR``  — absolute path to ``policies/`` so step310
+      can find ``sensitive_paths.json`` from any cwd.
+    * ``PYTHONPATH``  — absolute path to ``src/`` so the spawned
+      subprocess resolves the ``aegis`` package without ``uv sync``.
     """
     if mode == "local":
         if judge not in VALID_LOCAL_JUDGES:
             raise ValueError(
                 f"--judge must be one of {VALID_LOCAL_JUDGES}, got {judge!r}"
             )
+        if embedding not in VALID_LOCAL_EMBEDDINGS:
+            raise ValueError(
+                f"--embedding must be one of {VALID_LOCAL_EMBEDDINGS}, "
+                f"got {embedding!r}"
+            )
         py = _hook_python_executable()
-        # Install command-line maps the user-facing "local-phi" flag to
-        # the AEGIS_JUDGE_PROVIDER setting key, which uses the same name.
-        provider_env = judge
         prefix = (
-            f"AEGIS_EMBEDDING_PROVIDER=dummy "
-            f"AEGIS_JUDGE_PROVIDER={provider_env} "
+            f"AEGIS_EMBEDDING_PROVIDER={embedding} "
+            f"AEGIS_JUDGE_PROVIDER={judge} "
             f"AEGIS_POLICY_DIR={POLICIES_DIR} "
             f"PYTHONPATH={SRC_DIR}"
         )
-        # When local-phi is requested, point the hook at the default
-        # downloaded GGUF (./models/<file>.gguf) so the judge enters
-        # "real" mode without the user editing .env. If the file is
-        # absent, LocalPhiJudge falls back to stub mode and emits a
-        # clear "model file does not exist" reason — _gguf_status_for_install
-        # surfaces this at install time so the user catches it before
-        # restarting Claude Code.
+        # When local-phi/hybrid is requested, embed AEGIS_JUDGE_MODEL_PATH
+        # so the judge enters real mode without manual .env editing. If
+        # the file is absent, LocalPhiJudge falls back to stub mode and
+        # emits a clear "model file does not exist" reason; the install
+        # pre-flight check (_gguf_status_for_install) surfaces this so
+        # the user catches it before restarting Claude Code.
         if judge in ("local-phi", "hybrid"):
             from aegis.judge.model_registry import (
                 default_model,
@@ -359,6 +366,15 @@ def _build_pretool_command(mode: str, *, judge: str = "dummy") -> str:
             )
             target = model_target_path(default_model(), MODELS_DIR)
             prefix = f"{prefix} AEGIS_JUDGE_MODEL_PATH={target}"
+        # Same idea for the embedding side: bge-local needs the GGUF
+        # path. Falls back to dummy at runtime if the file is missing.
+        if embedding == "bge-local":
+            from aegis.judge.model_registry import (
+                default_embedding_model,
+                model_target_path,
+            )
+            etarget = model_target_path(default_embedding_model(), MODELS_DIR)
+            prefix = f"{prefix} AEGIS_EMBEDDING_MODEL_PATH={etarget}"
         return f"{prefix} {py} {LOCAL_HOOK_SCRIPT}"
     return f"{_hook_python_executable()} {HOOK_SCRIPT}"
 
@@ -386,6 +402,36 @@ def _gguf_status_for_install(judge: str) -> tuple[bool, str]:
     if not llama_ok:
         return False, llama_msg
     return True, f"local-sLLM ready: {target} (real LLM verdicts active)"
+
+
+def _bge_status_for_install(embedding: str) -> tuple[bool, str]:
+    """Pre-flight check for ``--embedding bge-local`` — GGUF + llama-cpp.
+
+    Same contract as ``_gguf_status_for_install``: install never blocks,
+    a missing model just degrades to dummy embedding at runtime.
+    """
+    from aegis.judge.model_registry import (
+        default_embedding_model,
+        model_target_path,
+    )
+
+    target = model_target_path(default_embedding_model(), MODELS_DIR)
+    if not target.exists():
+        return False, (
+            f"Embedding GGUF not found at {target}. ATV "
+            f"agent_state_embedding will fall back to deterministic "
+            f"SHA3 noise (semantic similarity disabled). Run "
+            f"`uv run aegis pull-model --model bge-base-en` to download "
+            f"the {default_embedding_model().name} encoder "
+            f"(~{default_embedding_model().size_mb} MB)."
+        )
+    llama_ok, llama_msg = _check_llama_cpp_installed()
+    if not llama_ok:
+        return False, llama_msg
+    return True, (
+        f"local embedding ready: {target.name} "
+        f"({default_embedding_model().embedding_dim}-D real BGE encoder)"
+    )
 
 
 def _build_posttool_command(mode: str) -> str:
@@ -765,9 +811,19 @@ def cmd_install(args: argparse.Namespace) -> int:
     """
     mode = args.mode
     judge = getattr(args, "judge", "dummy")
+    embedding = getattr(args, "embedding", "dummy")
     if mode == "local" and judge not in VALID_LOCAL_JUDGES:
         print(
             _red(f"--judge must be one of {VALID_LOCAL_JUDGES}, got {judge!r}"),
+            file=sys.stderr,
+        )
+        return 2
+    if mode == "local" and embedding not in VALID_LOCAL_EMBEDDINGS:
+        print(
+            _red(
+                f"--embedding must be one of {VALID_LOCAL_EMBEDDINGS}, "
+                f"got {embedding!r}"
+            ),
             file=sys.stderr,
         )
         return 2
@@ -776,8 +832,10 @@ def cmd_install(args: argparse.Namespace) -> int:
     if not ok:
         print(_red(info), file=sys.stderr)
         return 1
-    judge_str = f", judge={judge}" if mode == "local" else ""
-    print(f"[install] plugin v{info}, mode={mode}{judge_str}")
+    suffix = (
+        f", judge={judge}, embedding={embedding}" if mode == "local" else ""
+    )
+    print(f"[install] plugin v{info}, mode={mode}{suffix}")
 
     # When the judge needs a local GGUF, pre-flight the model file +
     # llama-cpp-python so the user knows immediately if the install
@@ -788,6 +846,12 @@ def cmd_install(args: argparse.Namespace) -> int:
             print(_green(f"  {gguf_msg}"))
         else:
             print(_yellow(f"  warning: {gguf_msg}"))
+    if mode == "local" and embedding == "bge-local":
+        bge_ok, bge_msg = _bge_status_for_install(embedding)
+        if bge_ok:
+            print(_green(f"  {bge_msg}"))
+        else:
+            print(_yellow(f"  warning: {bge_msg}"))
 
     pretool_script = LOCAL_HOOK_SCRIPT if mode == "local" else HOOK_SCRIPT
     if not pretool_script.exists():
@@ -821,7 +885,9 @@ def cmd_install(args: argparse.Namespace) -> int:
         existing = {}
         print(f"creating new {SETTINGS_PATH}")
 
-    pretool_cmd = _build_pretool_command(mode, judge=judge)
+    pretool_cmd = _build_pretool_command(
+        mode, judge=judge, embedding=embedding,
+    )
     pretool_marker = _pretool_hook_marker(mode)
     pretool_entry = {
         "matcher": "*",
@@ -958,6 +1024,7 @@ def cmd_pull_model(args: argparse.Namespace) -> int:
     ``llama-cpp-python`` from the optional extra.
     """
     from aegis.judge.model_registry import (
+        DEFAULT_EMBEDDING_NAME,
         DEFAULT_MODEL_NAME,
         get_model,
         list_models,
@@ -965,11 +1032,15 @@ def cmd_pull_model(args: argparse.Namespace) -> int:
     )
 
     if args.list:
-        print(f"{'name':<16} {'size':>8}  description")
-        print("─" * 80)
+        defaults = {DEFAULT_MODEL_NAME, DEFAULT_EMBEDDING_NAME}
+        print(f"{'name':<16} {'kind':<10} {'size':>8}  description")
+        print("─" * 92)
         for m in list_models():
-            marker = " (default)" if m.name == DEFAULT_MODEL_NAME else ""
-            print(f"{m.name:<16} {m.size_mb:>5} MB  {m.description}{marker}")
+            marker = " (default)" if m.name in defaults else ""
+            print(
+                f"{m.name:<16} {m.kind:<10} {m.size_mb:>5} MB  "
+                f"{m.description}{marker}"
+            )
         return 0
 
     try:
@@ -987,7 +1058,7 @@ def cmd_pull_model(args: argparse.Namespace) -> int:
             f"✓ already present: {target}  ({actual_mb:.0f} MB)"
         ))
         print("  (re-download with --force)")
-        _print_pull_next_steps(target)
+        _print_pull_next_steps(target, spec)
         return 0
 
     print(f"[pull-model] {spec.name} — {spec.description}")
@@ -1055,23 +1126,45 @@ def cmd_pull_model(args: argparse.Namespace) -> int:
             return 1
         print(_green("✓ sha256 verified"))
 
-    _print_pull_next_steps(target)
+    _print_pull_next_steps(target, spec)
     return 0
 
 
-def _print_pull_next_steps(target: Path) -> None:
+def _print_pull_next_steps(target: Path, spec: object | None = None) -> None:
+    """Print user-facing next-step instructions for the model just pulled.
+
+    Branches on the model's ``kind`` so judge GGUFs get judge-specific
+    guidance (env var ``AEGIS_JUDGE_MODEL_PATH`` + ``--judge local-phi``)
+    and embedding GGUFs get embedding-specific guidance
+    (``AEGIS_EMBEDDING_MODEL_PATH`` + ``--embedding bge-local``).
+    """
+    kind = getattr(spec, "kind", "judge")
     print()
     print("Next steps:")
-    print("  1. Add to .env:")
-    print(f"       AEGIS_JUDGE_MODEL_PATH={target}")
-    print("  2. Install the optional llama-cpp-python:")
-    print("       uv sync --extra local-llm")
-    print("     (Apple Silicon Metal: prefix with")
-    print("       CMAKE_ARGS=\"-DGGML_METAL=on\"  for GPU acceleration)")
-    print("  3. Wire the hook:")
-    print("       uv run aegis install --mode local --judge local-phi --force")
-    print("  4. Verify:")
-    print("       ./scripts/dogfood_check.sh --judge local-phi")
+    if kind == "embedding":
+        print("  1. Add to .env:")
+        print(f"       AEGIS_EMBEDDING_MODEL_PATH={target}")
+        print("       AEGIS_EMBEDDING_PROVIDER=bge-local")
+        print("  2. Install the optional llama-cpp-python (if not already):")
+        print("       uv sync --extra local-llm")
+        print("     (Apple Silicon Metal: prefix with")
+        print("       CMAKE_ARGS=\"-DGGML_METAL=on\"  for GPU acceleration)")
+        print("  3. Wire the hook (any judge mode works):")
+        print("       uv run aegis install --mode local --judge hybrid "
+              "--embedding bge-local --force")
+        print("  4. Verify:")
+        print("       ./scripts/dogfood_check.sh --hybrid")
+    else:
+        print("  1. Add to .env:")
+        print(f"       AEGIS_JUDGE_MODEL_PATH={target}")
+        print("  2. Install the optional llama-cpp-python:")
+        print("       uv sync --extra local-llm")
+        print("     (Apple Silicon Metal: prefix with")
+        print("       CMAKE_ARGS=\"-DGGML_METAL=on\"  for GPU acceleration)")
+        print("  3. Wire the hook:")
+        print("       uv run aegis install --mode local --judge local-phi --force")
+        print("  4. Verify:")
+        print("       ./scripts/dogfood_check.sh --judge local-phi")
 
 
 def cmd_burnin(args: argparse.Namespace) -> int:
@@ -1319,6 +1412,19 @@ def build_parser() -> argparse.ArgumentParser:
             "(fastest, may miss AWS-secret + loop scenarios). hybrid: "
             "heuristic + keyword + M13 attribution head (recommended for "
             "real coding-AI traffic, still offline). default: dummy"
+        ),
+    )
+    inst.add_argument(
+        "--embedding",
+        choices=list(VALID_LOCAL_EMBEDDINGS),
+        default="dummy",
+        help=(
+            "(--mode local only) embedding provider for ATV agent_state "
+            "and action_history slots. dummy: deterministic SHA3 noise "
+            "(no semantic similarity, no install). bge-local: real "
+            "BGE-base-en-v1.5 GGUF via llama-cpp (~100 MB; requires "
+            "`aegis pull-model --model bge-base-en` + `--extra "
+            "local-llm`). default: dummy"
         ),
     )
     inst.set_defaults(fn=cmd_install)
