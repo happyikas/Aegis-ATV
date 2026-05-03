@@ -120,6 +120,16 @@ def handle_pretool(stdin: Any, stdout: Any) -> int:
         }
     )
 
+    # Burn-in Shadow recording (opt-in via AEGIS_BURNIN_SHADOW=1).
+    # Records the (ATVInput, verdict) pair for later M13 v2 retraining.
+    # The shadow module is a no-op when the env flag is unset, so this
+    # adds zero cost to the default Solo Free hot path.
+    try:
+        from aegis.burnin.shadow import record as _shadow_record
+        _shadow_record(inp, verdict)
+    except Exception:  # noqa: BLE001 — shadow must never block the tool
+        pass
+
     if decision == "ALLOW":
         if VERBOSE:
             _emit(

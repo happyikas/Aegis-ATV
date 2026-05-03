@@ -57,6 +57,14 @@ src = ["src", "tests", "demo"]
 select = ["E", "F", "W", "I", "B", "UP", "N", "SIM"]
 ignore = ["E501"]
 
+[tool.ruff.lint.per-file-ignores]
+# Math/ML code uses standard capital-letter conventions for matrices
+# (X, X_tr, XtWX) — N803/N806 disagree with the convention. Restrict
+# the relaxation to the modules that need it so the rest of the
+# codebase keeps the snake_case discipline.
+"src/aegis/burnin/m13_train.py" = ["N803", "N806"]
+"tests/unit/test_burnin_m13.py" = ["N803", "N806"]
+
 [tool.mypy]
 python_version = "3.11"
 strict = true
