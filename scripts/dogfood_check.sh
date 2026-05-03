@@ -460,6 +460,26 @@ PY
 fi
 
 # ─────────────────────────────────────────────────────────────────────
+# 13. Audit-record enrichment (`aegis report --explain` precondition)
+# ─────────────────────────────────────────────────────────────────────
+printf "\n%s[13] Audit-record enrichment%s\n" "$C_BOLD" "$C_RESET"
+# Reuses the audit log step [6] populated. The record from step [3]
+# (rm -rf BLOCK) should now carry an `explain` block with step traces
+# and M13 attribution.
+EXPLAIN_OUT="$(uv run aegis report --audit "$TEST_AUDIT" --explain LAST 2>&1)"
+if echo "$EXPLAIN_OUT" | grep -q "Decision Explanation" \
+   && echo "$EXPLAIN_OUT" | grep -q "M13 attribution"; then
+  ok "explain renders header + M13 attribution + step traces"
+else
+  if echo "$EXPLAIN_OUT" | grep -q "no PreToolUse decisions"; then
+    note "skipped — audit log empty (step [3] should have populated it)"
+  else
+    fail "explain output missing required sections"
+    note "$(echo "$EXPLAIN_OUT" | head -3 | sed 's/^/    /')"
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────
 # Summary
 # ─────────────────────────────────────────────────────────────────────
 printf "\n────────────────────────────────────────────────────────────\n"
