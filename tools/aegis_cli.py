@@ -662,7 +662,9 @@ def _extract_audit_fields(rec: dict[str, object]) -> dict[str, object]:
     }
 
 
-def _cmd_report_explain(audit_path: Path, target: str) -> int:
+def _cmd_report_explain(
+    audit_path: Path, target: str, *, as_json: bool = False,
+) -> int:
     """Render a single decision's full explanation block.
 
     ``target`` is a trace_id prefix (any unique starting substring is
@@ -683,6 +685,13 @@ def _cmd_report_explain(audit_path: Path, target: str) -> int:
     Records written before this enrichment landed have no ``explain``
     block; we degrade gracefully to "Decision header only" with a
     yellow note.
+
+    ``as_json=True`` skips the human-readable rendering and writes a
+    machine-readable JSON object to stdout (one line, the audit
+    record itself plus its embedded ``explain`` block). This is the
+    surface CI / jq pipelines / `aegis report --explain LAST --json`
+    consume — schema is just the audit record, stable across
+    versions, easy to diff.
     """
     target_lc = target.strip().lower()
     want_last = target_lc in ("last", "*")
@@ -712,7 +721,14 @@ def _cmd_report_explain(audit_path: Path, target: str) -> int:
     if want_last:
         found = last_record
     if found is None:
-        if want_last:
+        if as_json:
+            # Machine-readable error envelope so CI doesn't choke on prose.
+            print(json.dumps({
+                "error": "not_found",
+                "target": target,
+                "audit_path": str(audit_path),
+            }))
+        elif want_last:
             print(_red(f"[report] no PreToolUse decisions in {audit_path}"))
         else:
             print(_red(
@@ -722,6 +738,15 @@ def _cmd_report_explain(audit_path: Path, target: str) -> int:
         return 1
 
     rec = found
+
+    # JSON mode: dump the record (including its embedded explain block)
+    # to stdout and bail. The schema is intentionally just "the audit
+    # record" — no synthetic re-shaping — so users / CI can write
+    # stable jq expressions.
+    if as_json:
+        print(json.dumps(rec, ensure_ascii=False, sort_keys=True))
+        return 0
+
     decision = str(rec.get("decision", "?"))
     badge = {"ALLOW": "✅", "BLOCK": "⛔", "REQUIRE_APPROVAL": "⚠️"}.get(
         decision, "?"
@@ -852,7 +877,10 @@ def cmd_report(args: argparse.Namespace) -> int:
 
     # ── explain mode short-circuits the aggregate report ─────────────
     if getattr(args, "explain", None):
-        return _cmd_report_explain(audit_path, args.explain)
+        return _cmd_report_explain(
+            audit_path, args.explain,
+            as_json=bool(getattr(args, "json", False)),
+        )
 
     cutoff_ns = int(time.time() - since_secs) * 1_000_000_000 if since_secs else 0
 
@@ -1132,6 +1160,101 @@ def cmd_install(args: argparse.Namespace) -> int:
             )
         )
 
+    return 0
+
+
+def cmd_uninstall(args: argparse.Namespace) -> int:
+    """Remove Aegis-owned hooks from ``~/.claude/settings.json``.
+
+    Uses the same fingerprint set ``--force`` install relies on
+    (``aegis_local_hook.py``, ``aegis_hook.py``, ``post_tool.py``,
+    ``session_end.py``) so this is the precise inverse of install:
+    every entry the install command would have added gets removed,
+    nothing else is touched.
+
+    Behaviour:
+
+    * Unknown / non-Aegis hooks (prettier, gitleaks, third-party
+      extensions) are **preserved** verbatim.
+    * Empty hook stages (``PreToolUse: []``, ``Stop: []`` after the
+      removal) are also preserved — Claude Code tolerates them and
+      we don't want to disturb a settings.json the user may have
+      hand-edited.
+    * settings.json is backed up to ``settings.json.bak.<ts>`` before
+      writing — same convention ``aegis install`` follows. Use
+      ``--no-backup`` to skip.
+    * If no Aegis-owned hooks are found, the command prints a green
+      "nothing to remove" notice and exits 0 — idempotent.
+    * ``--dry-run`` prints which entries WOULD be removed without
+      modifying the file. Useful for double-checking before running.
+
+    The user must restart Claude Code for the change to take
+    effect (Claude Code reads ``settings.json`` once at session
+    start). The exit message reminds them.
+    """
+    if not SETTINGS_PATH.exists():
+        print(_yellow(f"no settings.json at {SETTINGS_PATH} — nothing to do"))
+        return 0
+
+    try:
+        existing = json.loads(SETTINGS_PATH.read_text())
+    except json.JSONDecodeError as e:
+        print(
+            _red(f"existing settings.json is not valid JSON ({e}); refusing to touch it."),
+            file=sys.stderr,
+        )
+        return 1
+
+    hooks_section = existing.get("hooks", {})
+    if not isinstance(hooks_section, dict):
+        print(_yellow("settings.json has no `hooks` section — nothing to do"))
+        return 0
+
+    # Walk the rotation set so dry-run can show exactly what would
+    # be removed (using the same predicate as the live drop).
+    to_remove: list[tuple[str, str]] = []
+    for stage in ("PreToolUse", "PostToolUse", "Stop"):
+        for entry in hooks_section.get(stage, []):
+            for h in entry.get("hooks", []):
+                cmd = h.get("command", "")
+                if _is_aegis_owned(cmd):
+                    to_remove.append((stage, cmd))
+
+    if not to_remove:
+        print(_green(f"✓ no Aegis-owned hooks in {SETTINGS_PATH} — nothing to remove"))
+        return 0
+
+    print(f"[uninstall] settings.json: {SETTINGS_PATH}")
+    print(f"[uninstall] would remove {len(to_remove)} Aegis-owned hook entry(ies):")
+    for stage, cmd in to_remove:
+        print(f"    {_yellow(stage):<24}  {cmd[:90]}")
+
+    if args.dry_run:
+        print()
+        print(_green("dry-run — settings.json NOT modified"))
+        return 0
+
+    if not args.no_backup:
+        backup = SETTINGS_PATH.with_name(f"settings.json.bak.{int(time.time())}")
+        try:
+            shutil.copy2(SETTINGS_PATH, backup)
+            print(_yellow(f"backed up existing settings → {backup.name}"))
+        except OSError as e:
+            print(_red(f"backup failed: {e}"), file=sys.stderr)
+            return 1
+
+    n_dropped = _drop_aegis_entries(hooks_section)
+    SETTINGS_PATH.write_text(json.dumps(existing, indent=2) + "\n")
+    print(_green(f"✓ removed {n_dropped} Aegis hook entry(ies) from {SETTINGS_PATH}"))
+    print()
+    print(_yellow("Restart Claude Code for the change to take effect."))
+    print(
+        _yellow(
+            "  Per-session state at ~/.aegis/audit.jsonl, ~/.aegis/sessions/, "
+            "~/.aegis/shadow.jsonl is preserved — delete manually if you want\n"
+            "  a fully clean slate (or keep them for `aegis verify-audit`)."
+        ),
+    )
     return 0
 
 
@@ -2206,6 +2329,16 @@ def build_parser() -> argparse.ArgumentParser:
             "or 'LAST' / 'last' for the most-recent decision."
         ),
     )
+    rep.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "(--explain only) emit the audit record + explain block as a "
+            "single line of JSON to stdout, instead of the human-readable "
+            "rendering. Schema = the audit record itself, stable for "
+            "jq / CI integration."
+        ),
+    )
     rep.set_defaults(fn=cmd_report)
 
     inst = sub.add_parser("install", help="Install hooks into ~/.claude/settings.json")
@@ -2247,6 +2380,20 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     inst.set_defaults(fn=cmd_install)
+
+    un = sub.add_parser(
+        "uninstall",
+        help="Remove Aegis-owned hooks from ~/.claude/settings.json",
+    )
+    un.add_argument(
+        "--dry-run", action="store_true",
+        help="show which hook entries would be removed without writing settings.json",
+    )
+    un.add_argument(
+        "--no-backup", action="store_true",
+        help="skip the settings.json.bak.<ts> safety copy (default: backup before write)",
+    )
+    un.set_defaults(fn=cmd_uninstall)
 
     return ap
 
