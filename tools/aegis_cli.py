@@ -41,6 +41,7 @@ from typing import Any
 DB = Path(".aegis/wal.db")
 HERE = Path(__file__).resolve().parent
 PROJECT_ROOT = HERE.parent
+MODELS_DIR = PROJECT_ROOT / "models"
 HOOK_SCRIPT = HERE / "aegis_hook.py"               # sidecar mode (POST /evaluate)
 LOCAL_HOOK_SCRIPT = HERE / "aegis_local_hook.py"   # local mode (in-process)
 POST_HOOK_SCRIPT = HERE / "hooks" / "post_tool.py"
@@ -283,7 +284,7 @@ def _validate_plugin_manifest() -> tuple[bool, str]:
     return True, str(version)
 
 
-VALID_LOCAL_JUDGES = ("dummy", "hybrid")
+VALID_LOCAL_JUDGES = ("dummy", "hybrid", "local-phi")
 
 
 def _hook_python_executable() -> str:
@@ -335,14 +336,56 @@ def _build_pretool_command(mode: str, *, judge: str = "dummy") -> str:
                 f"--judge must be one of {VALID_LOCAL_JUDGES}, got {judge!r}"
             )
         py = _hook_python_executable()
-        return (
+        # Install command-line maps the user-facing "local-phi" flag to
+        # the AEGIS_JUDGE_PROVIDER setting key, which uses the same name.
+        provider_env = judge
+        prefix = (
             f"AEGIS_EMBEDDING_PROVIDER=dummy "
-            f"AEGIS_JUDGE_PROVIDER={judge} "
+            f"AEGIS_JUDGE_PROVIDER={provider_env} "
             f"AEGIS_POLICY_DIR={POLICIES_DIR} "
-            f"PYTHONPATH={SRC_DIR} "
-            f"{py} {LOCAL_HOOK_SCRIPT}"
+            f"PYTHONPATH={SRC_DIR}"
         )
+        # When local-phi is requested, point the hook at the default
+        # downloaded GGUF (./models/<file>.gguf) so the judge enters
+        # "real" mode without the user editing .env. If the file is
+        # absent, LocalPhiJudge falls back to stub mode and emits a
+        # clear "model file does not exist" reason — _gguf_status_for_install
+        # surfaces this at install time so the user catches it before
+        # restarting Claude Code.
+        if judge in ("local-phi", "hybrid"):
+            from aegis.judge.model_registry import (
+                default_model,
+                model_target_path,
+            )
+            target = model_target_path(default_model(), MODELS_DIR)
+            prefix = f"{prefix} AEGIS_JUDGE_MODEL_PATH={target}"
+        return f"{prefix} {py} {LOCAL_HOOK_SCRIPT}"
     return f"{_hook_python_executable()} {HOOK_SCRIPT}"
+
+
+def _gguf_status_for_install(judge: str) -> tuple[bool, str]:
+    """Pre-flight check called by ``cmd_install`` when judge needs a GGUF.
+
+    Returns ``(ok, message)``. ``ok=False`` means the install will
+    succeed but the hook will fall back to stub mode at runtime — we
+    print the message as a yellow warning, not a hard error, so the
+    user still gets a working install (just with degraded judging).
+    """
+    from aegis.judge.model_registry import default_model, model_target_path
+
+    target = model_target_path(default_model(), MODELS_DIR)
+    if not target.exists():
+        return False, (
+            f"GGUF not found at {target}. The hook will fall back to "
+            f"stub mode (M13 attribution head only — no real LLM). "
+            f"Run `uv run aegis pull-model` to download "
+            f"{default_model().name} (~{default_model().size_mb} MB) "
+            f"and `uv sync --extra local-llm` for llama-cpp-python."
+        )
+    llama_ok, llama_msg = _check_llama_cpp_installed()
+    if not llama_ok:
+        return False, llama_msg
+    return True, f"local-sLLM ready: {target} (real LLM verdicts active)"
 
 
 def _build_posttool_command(mode: str) -> str:
@@ -736,6 +779,16 @@ def cmd_install(args: argparse.Namespace) -> int:
     judge_str = f", judge={judge}" if mode == "local" else ""
     print(f"[install] plugin v{info}, mode={mode}{judge_str}")
 
+    # When the judge needs a local GGUF, pre-flight the model file +
+    # llama-cpp-python so the user knows immediately if the install
+    # will degrade to stub mode at runtime.
+    if mode == "local" and judge in ("local-phi", "hybrid"):
+        gguf_ok, gguf_msg = _gguf_status_for_install(judge)
+        if gguf_ok:
+            print(_green(f"  {gguf_msg}"))
+        else:
+            print(_yellow(f"  warning: {gguf_msg}"))
+
     pretool_script = LOCAL_HOOK_SCRIPT if mode == "local" else HOOK_SCRIPT
     if not pretool_script.exists():
         print(_red(f"hook script not found: {pretool_script}"), file=sys.stderr)
@@ -855,6 +908,170 @@ def cmd_install(args: argparse.Namespace) -> int:
         )
 
     return 0
+
+
+def _human_size(n_bytes: int) -> str:
+    """`9_876_543` → `'9.4 MB'`. For pull-model progress UX."""
+    for unit in ("B", "KB", "MB", "GB"):
+        if n_bytes < 1024 or unit == "GB":
+            return f"{n_bytes:.1f} {unit}" if unit != "B" else f"{n_bytes} B"
+        n_bytes /= 1024  # type: ignore[assignment]
+    return f"{n_bytes:.1f} GB"
+
+
+def _check_llama_cpp_installed() -> tuple[bool, str]:
+    """Return ``(ok, message)`` describing whether llama-cpp-python is usable."""
+    try:
+        import importlib
+
+        importlib.import_module("llama_cpp")
+        return True, "llama-cpp-python: installed"
+    except ImportError:
+        return False, (
+            "llama-cpp-python is not installed. Solo Free real-sLLM mode "
+            "needs it. Install with:\n"
+            "  uv sync --extra local-llm\n"
+            "  (Apple Silicon: prefix with CMAKE_ARGS=\"-DGGML_METAL=on\" "
+            "for Metal acceleration)"
+        )
+
+
+def cmd_pull_model(args: argparse.Namespace) -> int:
+    """Download a Solo Free local-sLLM GGUF into ``./models/``.
+
+    Default model: ``llama-3.2-1b`` (770 MB, ~80 ms/verdict on M1
+    CPU-only, Llama 3.2 Community License). See
+    ``aegis.judge.model_registry`` for the full catalogue.
+
+    Idempotent: if the target file already exists with the right size,
+    skips the download and prints the path. ``--force`` re-downloads.
+
+    Side effects:
+    1. Creates ``./models/<filename>.gguf``.
+    2. Prints the line you should add to your ``.env`` so the local-phi
+       judge picks it up:  ``AEGIS_JUDGE_MODEL_PATH=...``.
+    3. Prints next-step command (``aegis install --judge local-phi``).
+
+    No external dependencies — uses ``httpx`` (already in core deps) so
+    you can run this with just ``uv sync`` (no ``--extra local-llm``
+    needed). The actual *use* of the GGUF still requires
+    ``llama-cpp-python`` from the optional extra.
+    """
+    from aegis.judge.model_registry import (
+        DEFAULT_MODEL_NAME,
+        get_model,
+        list_models,
+        model_target_path,
+    )
+
+    if args.list:
+        print(f"{'name':<16} {'size':>8}  description")
+        print("─" * 80)
+        for m in list_models():
+            marker = " (default)" if m.name == DEFAULT_MODEL_NAME else ""
+            print(f"{m.name:<16} {m.size_mb:>5} MB  {m.description}{marker}")
+        return 0
+
+    try:
+        spec = get_model(args.model)
+    except KeyError as e:
+        print(_red(str(e)), file=sys.stderr)
+        return 2
+
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    target = model_target_path(spec, MODELS_DIR)
+
+    if target.exists() and not args.force:
+        actual_mb = target.stat().st_size / 1_000_000
+        print(_green(
+            f"✓ already present: {target}  ({actual_mb:.0f} MB)"
+        ))
+        print("  (re-download with --force)")
+        _print_pull_next_steps(target)
+        return 0
+
+    print(f"[pull-model] {spec.name} — {spec.description}")
+    print(f"[pull-model] license: {spec.license}")
+    print(f"[pull-model] target:  {target}")
+    print(f"[pull-model] source:  {spec.url}")
+    print(f"[pull-model] size:    ~{spec.size_mb} MB")
+    print()
+
+    try:
+        import httpx
+    except ImportError:
+        print(_red("httpx not installed — should be in core deps. Run `uv sync`."),
+              file=sys.stderr)
+        return 1
+
+    tmp = target.with_suffix(target.suffix + ".part")
+    try:
+        with httpx.stream(
+            "GET", spec.url, follow_redirects=True, timeout=httpx.Timeout(60.0),
+        ) as r:
+            if r.status_code != 200:
+                print(_red(f"download failed: HTTP {r.status_code}"),
+                      file=sys.stderr)
+                return 1
+            total = int(r.headers.get("content-length", 0))
+            written = 0
+            last_pct = -1
+            with tmp.open("wb") as f:
+                for chunk in r.iter_bytes(chunk_size=1024 * 1024):
+                    f.write(chunk)
+                    written += len(chunk)
+                    if total > 0:
+                        pct = int(written * 100 / total)
+                        if pct != last_pct and pct % 5 == 0:
+                            print(
+                                f"  {pct:3d}%  "
+                                f"{_human_size(written)} / {_human_size(total)}",
+                                end="\r", flush=True,
+                            )
+                            last_pct = pct
+        print()  # newline after progress
+    except (httpx.HTTPError, OSError) as e:
+        if tmp.exists():
+            tmp.unlink()
+        print(_red(f"download failed: {e}"), file=sys.stderr)
+        return 1
+
+    tmp.rename(target)
+    actual_mb = target.stat().st_size / 1_000_000
+    print(_green(f"✓ downloaded: {target}  ({actual_mb:.0f} MB)"))
+
+    if spec.sha256:
+        import hashlib
+        h = hashlib.sha256()
+        with target.open("rb") as f:
+            for chunk in iter(lambda: f.read(64 * 1024), b""):
+                h.update(chunk)
+        if h.hexdigest() != spec.sha256:
+            print(_red(
+                f"sha256 mismatch! expected {spec.sha256}, got {h.hexdigest()}\n"
+                f"removing corrupted file: {target}"
+            ), file=sys.stderr)
+            target.unlink()
+            return 1
+        print(_green("✓ sha256 verified"))
+
+    _print_pull_next_steps(target)
+    return 0
+
+
+def _print_pull_next_steps(target: Path) -> None:
+    print()
+    print("Next steps:")
+    print("  1. Add to .env:")
+    print(f"       AEGIS_JUDGE_MODEL_PATH={target}")
+    print("  2. Install the optional llama-cpp-python:")
+    print("       uv sync --extra local-llm")
+    print("     (Apple Silicon Metal: prefix with")
+    print("       CMAKE_ARGS=\"-DGGML_METAL=on\"  for GPU acceleration)")
+    print("  3. Wire the hook:")
+    print("       uv run aegis install --mode local --judge local-phi --force")
+    print("  4. Verify:")
+    print("       ./scripts/dogfood_check.sh --judge local-phi")
 
 
 def cmd_burnin(args: argparse.Namespace) -> int:
@@ -990,6 +1207,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bn.add_argument("--dry-run", action="store_true")
     bn.set_defaults(fn=cmd_burnin)
+
+    pm = sub.add_parser(
+        "pull-model",
+        help="Download a Solo Free local-sLLM GGUF into ./models/",
+    )
+    from aegis.judge.model_registry import DEFAULT_MODEL_NAME, list_models
+    _model_choices = [m.name for m in list_models()]
+    pm.add_argument(
+        "--model",
+        choices=_model_choices,
+        default=DEFAULT_MODEL_NAME,
+        help=(
+            f"GGUF to fetch (default: {DEFAULT_MODEL_NAME}). "
+            f"Run `aegis pull-model --list` for full table."
+        ),
+    )
+    pm.add_argument("--list", action="store_true", help="show available models + exit")
+    pm.add_argument(
+        "--force", action="store_true",
+        help="re-download even if the file is already present",
+    )
+    pm.set_defaults(fn=cmd_pull_model)
 
     cr = sub.add_parser(
         "cost-record", help="Manually record token usage for an invocation"

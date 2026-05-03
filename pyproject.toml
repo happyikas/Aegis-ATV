@@ -18,6 +18,15 @@ dependencies = [
     "structlog>=24.1",
 ]
 
+[project.optional-dependencies]
+# Solo Free real-sLLM: on-device quantized LLM judge via llama.cpp.
+# Activate with: `uv pip install aegis-mvp[local-llm]` (or
+# equivalently `uv sync --extra local-llm`).
+# Apple Silicon (Metal): set CMAKE_ARGS="-DGGML_METAL=on" before install.
+local-llm = [
+    "llama-cpp-python>=0.2.85",
+]
+
 [project.scripts]
 aegis = "tools.aegis_cli:main"
 
