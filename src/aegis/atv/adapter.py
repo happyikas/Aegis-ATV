@@ -115,6 +115,12 @@ def from_claude_code_payload(
     ``{tool, args, agent_id}`` shape. Optional kwargs let the caller
     inject SW-band context that PreToolUse doesn't carry (role, the
     agent's own goal text, the current plan).
+
+    This is the **v4.4 sparse adapter** — only header + tool fields
+    populated. For richer context including transcript-derived
+    ``agent_state_text``, ``recent_actions``, ``cost_estimate``,
+    ``novelty_score`` etc., use
+    :func:`from_claude_code_payload_enhanced` instead.
     """
     norm = _normalize_payload(req)
 
@@ -138,6 +144,66 @@ def from_claude_code_payload(
         tool_name=str(norm["tool"]) or "unknown",
         tool_args_json=json.dumps(args_payload, sort_keys=True, default=str),
     )
+
+
+def from_claude_code_payload_enhanced(
+    req: dict[str, Any],
+    *,
+    tenant_id: str = "claude-code",
+    role_id: str | None = None,
+    model_for_cost: str = "claude-haiku-4-5",
+) -> ATVInput:
+    """Plug-in checkup v1 — transcript-aware ATV builder.
+
+    Same contract as :func:`from_claude_code_payload` but additionally
+    reads ``transcript_path`` (when present) and populates 6+ more
+    subfields:
+
+    * ``agent_state_text`` ← last assistant message
+    * ``plan_text`` ← extracted plan line
+    * ``recent_actions`` ← last 20 tool calls
+    * ``memory_fingerprint`` ← SHA3-256 of transcript bytes
+    * ``cost_estimate`` ← cumulative tokens / dollars from transcript
+    * ``novelty.composite_novelty`` ← Jaccard distance vs recent calls
+    * ``session_behavior`` ← Bash / Edit / Read call density
+    * ``mcp_context`` ← MCP tool call ratio
+    * ``oversight.operator_presence`` ← TTY / env detection
+
+    Falls back to the v4.4 sparse builder when transcript is missing
+    or unparseable.
+    """
+    base = from_claude_code_payload(
+        req, tenant_id=tenant_id, role_id=role_id,
+    )
+
+    transcript_path = req.get("transcript_path", "")
+    if not transcript_path:
+        return base
+
+    from aegis.atv.transcript_reader import (
+        operator_present_from_env,
+        read_transcript_context,
+    )
+
+    ctx = read_transcript_context(
+        transcript_path,
+        next_tool_args_json=base.tool_args_json,
+        model_for_cost=model_for_cost,
+    )
+    if ctx is None:
+        return base
+
+    return base.model_copy(update={
+        "agent_state_text": ctx.last_assistant_message,
+        "plan_text": ctx.current_plan or base.plan_text,
+        "recent_actions": ctx.recent_tool_calls,
+        "memory_fingerprint": ctx.transcript_sha3,
+        "cost_estimate": ctx.cumulative_cost,
+        "novelty": {"composite_novelty": ctx.novelty_score},
+        "session_behavior": ctx.behavior_metrics,
+        "mcp_context": ctx.mcp_signals,
+        "oversight": {"operator_presence": operator_present_from_env()},
+    })
 
 
 def donor_behavior_features(tool: str, args: dict[str, Any]) -> np.ndarray:
