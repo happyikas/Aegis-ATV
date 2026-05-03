@@ -98,12 +98,22 @@ say "${C_BOLD}Running scenarios (judge=$JUDGE_PROVIDER, scenario=$SCENARIO)${C_R
 say "──────────────────────────────────────────────────────────────────────"
 
 set +e
-AEGIS_EMBEDDING_PROVIDER=dummy \
-AEGIS_JUDGE_PROVIDER="$JUDGE_PROVIDER" \
-  uv run python demo/plugin_scenarios.py \
-    --scenario "$SCENARIO" \
-    --report-dir "$REPORT_DIR" \
-    "${EXTRA_ARGS[@]}"
+# Reference EXTRA_ARGS only if it's non-empty — `set -u` plus an empty
+# array expansion is a hard error on bash 5+ (`unbound variable`).
+if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
+  AEGIS_EMBEDDING_PROVIDER=dummy \
+  AEGIS_JUDGE_PROVIDER="$JUDGE_PROVIDER" \
+    uv run python demo/plugin_scenarios.py \
+      --scenario "$SCENARIO" \
+      --report-dir "$REPORT_DIR" \
+      "${EXTRA_ARGS[@]}"
+else
+  AEGIS_EMBEDDING_PROVIDER=dummy \
+  AEGIS_JUDGE_PROVIDER="$JUDGE_PROVIDER" \
+    uv run python demo/plugin_scenarios.py \
+      --scenario "$SCENARIO" \
+      --report-dir "$REPORT_DIR"
+fi
 RC=$?
 set -e
 

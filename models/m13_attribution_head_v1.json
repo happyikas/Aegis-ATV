@@ -71,8 +71,9 @@
     ]
   },
   "thresholds": {
+    "_comment": "v1.1 (2026-05-03): require_approval raised 0.40 -> 0.55. Empirically the original threshold over-blocked benign Bash (e.g. 'ls -la /tmp' scored 0.46). New separation: benign Bash 0.40-0.50 ALLOW (escalates to local-phi via hybrid), suspicious 0.55-0.70 REQUIRE_APPROVAL, destructive 0.70+ BLOCK. Verified against the 7-scenario regression suite — all 7 still PASS at 0.55.",
     "block":             0.70,
-    "require_approval":  0.40
+    "require_approval":  0.55
   },
   "model_hash_seed": "m13-attribution-head-v1-2026-04-28",
   "_provenance": {

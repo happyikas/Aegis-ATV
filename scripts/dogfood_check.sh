@@ -234,6 +234,64 @@ rm -rf "$SANDBOX_HOME"
 HOME="$HOME_REAL"
 
 # ─────────────────────────────────────────────────────────────────────
+# 9. Real local sLLM invocation (only if model + llama-cpp present)
+# ─────────────────────────────────────────────────────────────────────
+printf "\n%s[9] Real local-sLLM verdict%s\n" "$C_BOLD" "$C_RESET"
+LLAMA_CHECK="$("$PYTHON" -c 'import importlib;importlib.import_module("llama_cpp");print("ok")' 2>/dev/null || echo missing)"
+MODEL_GLOB="$REPO_ROOT/models/*.gguf"
+MODEL_FILE="$(ls $MODEL_GLOB 2>/dev/null | head -1)"
+if [[ "$LLAMA_CHECK" != "ok" ]]; then
+  note "skipped — llama-cpp-python not installed.  uv sync --extra local-llm"
+elif [[ -z "$MODEL_FILE" ]]; then
+  note "skipped — no GGUF in $REPO_ROOT/models/.  uv run aegis pull-model"
+else
+  REAL_OUT="$(AEGIS_JUDGE_MODEL_PATH="$MODEL_FILE" \
+              AEGIS_JUDGE_LOCAL_PHI_STUB=0 \
+              "$PYTHON" - <<'PY' 2>&1
+import os, time
+import numpy as np
+from aegis.judge.local_phi import LocalPhiJudge
+from aegis.atv.builder import build_atv
+from aegis.schema import ATVHeader, ATVInput, CostEfficiencyMetrics
+
+j = LocalPhiJudge()
+mode, info = j._decide_mode()
+print(f"MODE={mode}")
+if mode != "real":
+    raise SystemExit(0)
+inp = ATVInput(
+    header=ATVHeader(trace_id="t", span_id="s", tenant_id="t", aid="a", timestamp_ns=time.time_ns()),
+    agent_state_text="ls", plan_text="ls",
+    tool_name="Bash", tool_args_json='{"command":"ls"}', safety_flags={},
+    memory_fingerprint="sha3:t",
+    cost_estimate=CostEfficiencyMetrics(input_token_count=1, output_token_count=1),
+)
+atv = build_atv(inp)
+v = j.evaluate_full('tool=Bash command="ls"', atv=atv, inp=inp)
+import hashlib
+expected = hashlib.sha3_256(open(os.environ["AEGIS_JUDGE_MODEL_PATH"], "rb").read()).hexdigest()
+print(f"DECISION={v.decision}")
+print(f"MODEL_HASH_MATCH={'yes' if v.model_hash == expected else 'NO'}")
+print(f"LATENCY_MS={v.latency_ms}")
+PY
+  )"
+  REAL_MODE="$(echo "$REAL_OUT" | grep -E "^MODE=" | cut -d= -f2)"
+  if [[ "$REAL_MODE" != "real" ]]; then
+    fail "LocalPhi did not enter 'real' mode (got: $REAL_MODE) — model may be corrupt"
+    note "$(echo "$REAL_OUT" | tail -3 | sed 's/^/    /')"
+  else
+    LATENCY="$(echo "$REAL_OUT" | grep -E "^LATENCY_MS=" | cut -d= -f2)"
+    HASH_OK="$(echo "$REAL_OUT" | grep -E "^MODEL_HASH_MATCH=" | cut -d= -f2)"
+    DEC="$(echo "$REAL_OUT" | grep -E "^DECISION=" | cut -d= -f2)"
+    if [[ "$HASH_OK" == "yes" ]]; then
+      ok "real Llama verdict: $DEC  ($LATENCY ms, model_hash matches file SHA3)"
+    else
+      fail "model_hash mismatch — verdict ran but hash != file SHA3"
+    fi
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────
 # Summary
 # ─────────────────────────────────────────────────────────────────────
 printf "\n────────────────────────────────────────────────────────────\n"
