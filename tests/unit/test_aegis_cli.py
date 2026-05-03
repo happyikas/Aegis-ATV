@@ -1016,3 +1016,134 @@ def test_baseline_subcommand_invalid_action_rejected() -> None:
     parser = aegis_cli.build_parser()
     with pytest.raises(SystemExit):
         parser.parse_args(["baseline", "wat"])
+
+
+# ---- Solo Free real-sLLM: pull-model + --judge local-phi -----------------
+
+
+def test_pull_model_subcommand_argparse_default() -> None:
+    args = aegis_cli.build_parser().parse_args(["pull-model"])
+    assert args.fn is aegis_cli.cmd_pull_model
+    assert args.model == "llama-3.2-1b"
+    assert args.list is False
+    assert args.force is False
+
+
+def test_pull_model_argparse_list() -> None:
+    args = aegis_cli.build_parser().parse_args(["pull-model", "--list"])
+    assert args.list is True
+
+
+def test_pull_model_argparse_unknown_model_rejected() -> None:
+    """Argparse uses ``choices=`` so unknown models are rejected at parse."""
+    with pytest.raises(SystemExit):
+        aegis_cli.build_parser().parse_args(["pull-model", "--model", "gpt-9000"])
+
+
+def test_pull_model_list_returns_zero_and_prints_default(capsys) -> None:  # type: ignore[no-untyped-def]
+    import argparse
+    rc = aegis_cli.cmd_pull_model(argparse.Namespace(
+        list=True, model="llama-3.2-1b", force=False,
+    ))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "llama-3.2-1b" in out
+    assert "(default)" in out
+    # All three registered models must be in the table.
+    assert "qwen-0.5b" in out
+    assert "phi-3.5-mini" in out
+
+
+def test_pull_model_skips_when_already_present(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys,  # type: ignore[no-untyped-def]
+) -> None:
+    """Idempotency: re-running pull-model with the file present is a no-op."""
+    import argparse
+    monkeypatch.setattr(aegis_cli, "MODELS_DIR", tmp_path)
+    from aegis.judge.model_registry import default_model, model_target_path
+    target = model_target_path(default_model(), tmp_path)
+    target.write_bytes(b"\x00" * (1024 * 1024))  # 1MB placeholder
+    rc = aegis_cli.cmd_pull_model(argparse.Namespace(
+        list=False, model="llama-3.2-1b", force=False,
+    ))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "already present" in out
+    assert str(target) in out
+
+
+def test_install_local_phi_judge_accepted() -> None:
+    args = aegis_cli.build_parser().parse_args(
+        ["install", "--mode", "local", "--judge", "local-phi"]
+    )
+    assert args.judge == "local-phi"
+
+
+def test_install_local_phi_writes_model_path_env(
+    isolated_install: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """``--judge local-phi`` must embed AEGIS_JUDGE_MODEL_PATH in the hook."""
+    monkeypatch.setattr(aegis_cli, "MODELS_DIR", tmp_path / "models")
+    aegis_cli.cmd_install(_install_args(mode="local", judge="local-phi"))
+    settings = json.loads(
+        (isolated_install / ".claude" / "settings.json").read_text()
+    )
+    cmd = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert "AEGIS_JUDGE_PROVIDER=local-phi" in cmd
+    assert "AEGIS_JUDGE_MODEL_PATH=" in cmd
+
+
+def test_install_hybrid_judge_also_writes_model_path_env(
+    isolated_install: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Hybrid cascade includes local-phi tier — same env var needed."""
+    monkeypatch.setattr(aegis_cli, "MODELS_DIR", tmp_path / "models")
+    aegis_cli.cmd_install(_install_args(mode="local", judge="hybrid"))
+    settings = json.loads(
+        (isolated_install / ".claude" / "settings.json").read_text()
+    )
+    cmd = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert "AEGIS_JUDGE_MODEL_PATH=" in cmd
+
+
+def test_install_dummy_does_not_write_model_path(
+    isolated_install: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Dummy judge has no LLM — don't pollute settings.json with model path."""
+    monkeypatch.setattr(aegis_cli, "MODELS_DIR", tmp_path / "models")
+    aegis_cli.cmd_install(_install_args(mode="local", judge="dummy"))
+    settings = json.loads(
+        (isolated_install / ".claude" / "settings.json").read_text()
+    )
+    cmd = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert "AEGIS_JUDGE_MODEL_PATH" not in cmd
+
+
+def test_gguf_status_for_install_warns_when_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(aegis_cli, "MODELS_DIR", tmp_path / "empty")
+    ok, msg = aegis_cli._gguf_status_for_install("local-phi")
+    assert ok is False
+    assert "GGUF not found" in msg
+    assert "pull-model" in msg
+
+
+def test_check_llama_cpp_installed_truth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Whether llama-cpp is installed must be reported truthfully."""
+    ok, msg = aegis_cli._check_llama_cpp_installed()
+    # We can't assume llama-cpp is installed in CI, but the function
+    # must not crash and must return a sensible (ok, msg) pair.
+    assert isinstance(ok, bool)
+    if not ok:
+        assert "uv sync --extra local-llm" in msg
+
+
+def test_human_size_formats() -> None:
+    assert aegis_cli._human_size(0) == "0 B"
+    assert aegis_cli._human_size(1023) == "1023 B"
+    assert "KB" in aegis_cli._human_size(2048)
+    assert "MB" in aegis_cli._human_size(5 * 1024 * 1024)
+    assert "GB" in aegis_cli._human_size(2 * 1024**3)

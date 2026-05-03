@@ -39,3 +39,7 @@ _donor/
 
 # Mac Mini user test reports (per-scenario ATV dumps — reproducible, not source)
 reports/
+
+# Solo Free local-sLLM models (downloaded by `aegis pull-model`, not source)
+models/*.gguf
+models/*.gguf.part
