@@ -193,6 +193,21 @@ def from_claude_code_payload_enhanced(
     if ctx is None:
         return base
 
+    # Step340-prep: BGE-derived behavioural-drift signals.
+    # Computes ``topic_drift`` (cosine distance to session anchor) and
+    # ``verbosity_drift`` (z-score of plan_text length) when both:
+    # (1) a session_id is present in the Claude Code payload, and
+    # (2) the embedding provider is bge-local (otherwise the cosine
+    #     is meaningless SHA3 noise).
+    # Returns zeros and stays out of the way otherwise — same shape
+    # as the pre-PR-#25 dict, plus the two new keys.
+    drift_keys = _maybe_compute_session_drift(
+        session_id=str(req.get("session_id") or ""),
+        agent_state_text=ctx.last_assistant_message,
+        plan_text=ctx.current_plan or base.plan_text,
+    )
+    merged_session_behavior = {**ctx.behavior_metrics, **drift_keys}
+
     return base.model_copy(update={
         "agent_state_text": ctx.last_assistant_message,
         "plan_text": ctx.current_plan or base.plan_text,
@@ -200,10 +215,46 @@ def from_claude_code_payload_enhanced(
         "memory_fingerprint": ctx.transcript_sha3,
         "cost_estimate": ctx.cumulative_cost,
         "novelty": {"composite_novelty": ctx.novelty_score},
-        "session_behavior": ctx.behavior_metrics,
+        "session_behavior": merged_session_behavior,
         "mcp_context": ctx.mcp_signals,
         "oversight": {"operator_presence": operator_present_from_env()},
     })
+
+
+def _maybe_compute_session_drift(
+    *, session_id: str, agent_state_text: str, plan_text: str,
+) -> dict[str, float]:
+    """Compute (topic_drift, verbosity_drift) when BGE is configured.
+
+    Wrapped in a try/except so any disk / embedding error degrades to
+    an empty dict — caller merges it with ``ctx.behavior_metrics``,
+    so an empty dict means the slot stays at its pre-PR-#25 zeros.
+    Never raises.
+    """
+    try:
+        from aegis.config import settings
+        if settings.aegis_embedding_provider != "bge-local":
+            return {}
+        if not session_id or not agent_state_text:
+            return {}
+
+        from aegis.atv.embeddings import get_provider
+        from aegis.atv.session_drift import update_and_score
+
+        # Reuse the same provider the encoder uses (BGE-local, real-mode).
+        # Falls back to dummy internally on missing GGUF — in that case
+        # `update_and_score` still runs but the cosine has no semantic
+        # meaning. Detection above (provider != "bge-local") rules that
+        # out so we only get here when bge-local is selected.
+        embedding = get_provider().embed(agent_state_text, 768)
+        signals = update_and_score(
+            session_id=session_id,
+            current_embedding=embedding,
+            current_plan_len=len(plan_text or ""),
+        )
+        return signals.to_session_behavior()
+    except Exception:  # noqa: BLE001 — drift must never break the firewall
+        return {}
 
 
 def donor_behavior_features(tool: str, args: dict[str, Any]) -> np.ndarray:
