@@ -436,6 +436,41 @@ class LocalPhiJudge(Judge):
         self, summary: str, *, atv: Any = None, inp: Any = None
     ) -> JudgeVerdict:
         t0 = time.perf_counter_ns()
+
+        # Daemon fast-path — bypass _decide_mode() entirely when the
+        # sidecar daemon (PR #30) is reachable. _decide_mode() calls
+        # _load_real_phi() to verify the GGUF can load, which is the
+        # exact cold-load cost the daemon is meant to eliminate. If
+        # the daemon is up, we know a real LLM is already loaded and
+        # can serve us — skip the redundant in-process verification.
+        if atv is not None and not _stub_forced():
+            from aegis.judge.llm_daemon import DaemonClient
+
+            client = DaemonClient()
+            if client.is_running():
+                attr_dict: dict[str, float] = {}
+                attr_v = self._attribution().evaluate_full(
+                    summary, atv=atv, inp=inp,
+                )
+                attr_dict = attr_v.subfield_attribution
+                rag_block = _build_rag_block(atv, inp, summary)
+                daemon_resp = client.evaluate(summary, attr_dict, rag_block)
+                if daemon_resp is not None:
+                    reason = daemon_resp.reason
+                    if rag_block:
+                        reason = f"{reason}  [+RAG]"
+                    reason = f"{reason}  [daemon]"
+                    elapsed_ms = (time.perf_counter_ns() - t0) / 1_000_000
+                    return JudgeVerdict(
+                        decision=daemon_resp.decision,  # type: ignore[arg-type]
+                        confidence=daemon_resp.confidence,
+                        reason=reason,
+                        model_hash=daemon_resp.model_hash,
+                        latency_ms=round(elapsed_ms, 3),
+                    )
+                # Daemon advertised but call failed — fall through to
+                # the slower-but-correct in-process path below.
+
         mode, info = self._decide_mode()
 
         decision: Literal["ALLOW", "BLOCK", "REQUIRE_APPROVAL"]
@@ -460,13 +495,37 @@ class LocalPhiJudge(Judge):
             # case memory are configured. Empty string falls back to
             # the no-RAG prompt (i.e., bit-identical to PR #21).
             rag_block = _build_rag_block(atv, inp, summary)
-            llm = _load_real_phi(info)
-            decision, confidence, reason = _real_evaluate(
-                llm, summary, attr_dict, rag_block=rag_block,
-            )
-            if rag_block:
-                reason = f"{reason}  [+RAG]"
-            model_hash = _hash_model_file(info)
+
+            # Try the long-running daemon first — it has the GGUF
+            # already loaded, eliminating the per-subprocess cold
+            # load (2 s for Llama-1B, 6.5 s for Phi-3.5 — the latter
+            # exceeds Claude Code's 5 s hook timeout). When the
+            # daemon isn't running or fails, silently fall back to
+            # in-process loading; behaviour is bit-identical to
+            # pre-PR-#30.
+            from aegis.judge.llm_daemon import DaemonClient
+
+            client = DaemonClient()
+            daemon_resp = client.evaluate(summary, attr_dict, rag_block)
+            if daemon_resp is not None:
+                decision = daemon_resp.decision  # type: ignore[assignment]
+                confidence = daemon_resp.confidence
+                reason = daemon_resp.reason
+                if rag_block:
+                    reason = f"{reason}  [+RAG]"
+                # Attribute the speed-up: daemon-served reasons get a
+                # marker so dogfood + audit can distinguish daemon
+                # vs in-process verdicts.
+                reason = f"{reason}  [daemon]"
+                model_hash = daemon_resp.model_hash
+            else:
+                llm = _load_real_phi(info)
+                decision, confidence, reason = _real_evaluate(
+                    llm, summary, attr_dict, rag_block=rag_block,
+                )
+                if rag_block:
+                    reason = f"{reason}  [+RAG]"
+                model_hash = _hash_model_file(info)
         else:
             decision = "ALLOW"
             confidence = 0.0
