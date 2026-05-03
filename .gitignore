@@ -36,3 +36,6 @@ data/*.bin
 
 # v2.0 integration: donor extraction (transient — assets are copied into MVP/ tree under D-numbered commits)
 _donor/
+
+# Mac Mini user test reports (per-scenario ATV dumps — reproducible, not source)
+reports/
