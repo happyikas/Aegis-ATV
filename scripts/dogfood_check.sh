@@ -352,6 +352,65 @@ PY
 fi
 
 # ─────────────────────────────────────────────────────────────────────
+# 11. Step340 RAG case-memory retrieval (only if memory + BGE present)
+# ─────────────────────────────────────────────────────────────────────
+printf "\n%s[11] Step340 RAG retrieval%s\n" "$C_BOLD" "$C_RESET"
+MEM_FILE="$REPO_ROOT/models/case_memory_v1.npz"
+if [[ "$LLAMA_CHECK" != "ok" ]]; then
+  note "skipped — llama-cpp-python not installed."
+elif [[ -z "$BGE_FILE" ]]; then
+  note "skipped — no BGE GGUF (cosines would be meaningless without it)."
+elif [[ ! -f "$MEM_FILE" ]]; then
+  note "skipped — no case memory at $MEM_FILE.  uv run aegis case-memory build"
+else
+  RAG_OUT="$(AEGIS_EMBEDDING_PROVIDER=bge-local \
+             AEGIS_EMBEDDING_MODEL_PATH="$BGE_FILE" \
+             "$PYTHON" - <<'PY' 2>&1
+import time
+import numpy as np
+from aegis.config import settings as _settings
+_settings.aegis_embedding_provider = "bge-local"
+from aegis.judge.case_memory import (
+    load_default_memory, reset_memory_cache, format_cases_for_prompt,
+)
+from aegis.atv.embeddings import BGELocalEmbedding, reset_bge_cache
+
+reset_memory_cache(); reset_bge_cache()
+mem = load_default_memory()
+print(f"N={mem.n}")
+if mem.is_empty:
+    raise SystemExit(0)
+
+# Query: a destructive Bash. The memory should retrieve other
+# destructive examples with high cosine.
+bge = BGELocalEmbedding()
+q_text = "user wants to clean up disk space  | tool=Bash  args={\"command\":\"rm -rf /var/log\"}"
+q = bge.embed(q_text, 768)
+hits = mem.search(q, k=3)
+print(f"K={len(hits)}")
+if hits:
+    print(f"TOP_COS={hits[0].similarity:.3f}")
+    print(f"TOP_LABEL={hits[0].label}")
+    # Mostly-malicious top-3: success.
+    n_malicious = sum(1 for h in hits if h.label in ("BLOCK", "REQUIRE_APPROVAL"))
+    print(f"N_MALICIOUS={n_malicious}")
+PY
+  )"
+  N="$(echo "$RAG_OUT" | grep '^N=' | cut -d= -f2)"
+  K="$(echo "$RAG_OUT" | grep '^K=' | cut -d= -f2)"
+  TOP_COS="$(echo "$RAG_OUT" | grep '^TOP_COS=' | cut -d= -f2)"
+  TOP_LABEL="$(echo "$RAG_OUT" | grep '^TOP_LABEL=' | cut -d= -f2)"
+  N_MAL="$(echo "$RAG_OUT" | grep '^N_MALICIOUS=' | cut -d= -f2)"
+  if [[ -n "$N" && "$N" -gt "0" && -n "$K" && "$K" -gt "0" \
+        && -n "$TOP_COS" && -n "$N_MAL" && "$N_MAL" -ge "2" ]]; then
+    ok "memory n=$N, retrieved $K (top cos=$TOP_COS, label=$TOP_LABEL, $N_MAL/3 malicious)"
+  else
+    fail "RAG retrieval did not return malicious neighbours for a destructive query"
+    note "$(echo "$RAG_OUT" | tail -5 | sed 's/^/    /')"
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────
 # Summary
 # ─────────────────────────────────────────────────────────────────────
 printf "\n────────────────────────────────────────────────────────────\n"
