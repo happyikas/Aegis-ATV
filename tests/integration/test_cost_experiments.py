@@ -321,6 +321,48 @@ class TestReplayRealClaudeCodeShape:
         # into step335's budget gate (not the 0.00 plugin-mode bug).
         assert s.calls[0].cumulative_dollars > 0.0
 
+    def test_billed_estimate_much_smaller_than_flop_proxy(
+        self, tmp_path: Path
+    ) -> None:
+        """The cache-aware billed estimate (PR #1) for a cache-heavy
+        turn should be ~10× smaller than the FLOP proxy that treats
+        every cache_read at full input rate."""
+        transcript = self._real_shape_transcript(tmp_path / "real.jsonl")
+        s = replay(ReplayConfig(
+            transcript_path=transcript,
+            model_for_cost="claude-sonnet-4-6",
+            budget_dollars=10.0,
+        ))
+        call = s.calls[0]
+        # Both > 0 so we know they were actually computed.
+        assert call.cumulative_dollars > 0
+        assert call.cumulative_billed_dollars > 0
+        # Cache-aware billed is materially smaller than the FLOP
+        # proxy because 5 200 of the 5 350 tokens are cache_*.
+        assert call.cumulative_billed_dollars < call.cumulative_dollars
+        # And it matches the hand-computed Sonnet rate from the
+        # pricing-table tests.
+        # input=100 fresh + output=50 + cache_read=5000 + cache_creation=200
+        # = 100/1M × 3.00 + 50/1M × 15.00 + 5000/1M × 0.30 + 200/1M × 3.75
+        # = 0.000300 + 0.000750 + 0.001500 + 0.000750 ≈ 0.0033
+        assert call.cumulative_billed_dollars == pytest.approx(
+            0.0033, abs=1e-5,
+        )
+
+    def test_summary_final_billed_propagated(self, tmp_path: Path) -> None:
+        transcript = self._real_shape_transcript(tmp_path / "real.jsonl")
+        s = replay(ReplayConfig(
+            transcript_path=transcript,
+            model_for_cost="claude-sonnet-4-6",
+            budget_dollars=10.0,
+        ))
+        assert s.final_cumulative_billed_dollars > 0
+        # Summary final matches the last call's value when we had
+        # exactly one call.
+        assert s.final_cumulative_billed_dollars == pytest.approx(
+            s.calls[-1].cumulative_billed_dollars,
+        )
+
 
 # ─────────────────────────────────────────────────────────────────────
 # Summary tests — pure function over an audit JSONL
