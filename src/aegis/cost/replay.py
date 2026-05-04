@@ -205,12 +205,24 @@ def replay(config: ReplayConfig) -> ReplaySummary:
 
             kind = ev.get("type") or ev.get("role") or ""
 
-            # 1) Accumulate tokens from assistant messages.
+            # 1) Accumulate tokens from assistant messages. Real
+            #    Claude Code transcripts nest message.usage; test
+            #    fixtures may put it at the top level — handle both.
             if kind in ("assistant", "model_response", "claude"):
-                usage = ev.get("usage") or {}
-                cum_in     += float(usage.get("input_tokens", 0) or 0)
-                cum_out    += float(usage.get("output_tokens", 0) or 0)
-                cum_reason += float(usage.get("reasoning_tokens", 0) or 0)
+                msg_obj = ev.get("message")
+                msg_dict = msg_obj if isinstance(msg_obj, dict) else {}
+                usage = msg_dict.get("usage") or ev.get("usage") or {}
+                if isinstance(usage, dict):
+                    cum_in     += float(usage.get("input_tokens", 0) or 0)
+                    cum_out    += float(usage.get("output_tokens", 0) or 0)
+                    cum_reason += float(usage.get("reasoning_tokens", 0) or 0)
+                    # Cache tokens count toward input cost too.
+                    cum_in     += float(
+                        usage.get("cache_read_input_tokens", 0) or 0
+                    )
+                    cum_in     += float(
+                        usage.get("cache_creation_input_tokens", 0) or 0
+                    )
 
             # 2) On every tool_use (assistant tool_use OR top-level
             #    tool_call event), build an ATV at the CURRENT cumulative
@@ -320,7 +332,10 @@ def _extract_tool_uses(
         return out
 
     if kind in ("assistant", "model_response", "claude"):
-        content = ev.get("content")
+        # Real Claude Code: message.content[]. Fixtures: top-level content.
+        msg = ev.get("message")
+        msg_dict = msg if isinstance(msg, dict) else {}
+        content = msg_dict.get("content") or ev.get("content")
         if isinstance(content, list):
             for blk in content:
                 if (
