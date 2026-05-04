@@ -405,7 +405,37 @@ def handle_pretool(stdin: Any, stdout: Any) -> int:
 
     verdict = run_firewall(atv, inp, atv_id=inp.header.span_id)
 
-    # M10 ATMU phase 1.5 — transition based on the firewall verdict.
+    # M12 cost-divergence escalation — Claim 27 — independent of sLLM
+    # judge. Mirrors src/aegis/api/evaluate.py:182. Only fires when the
+    # HW band is populated (AEGIS_HW_PROVIDER=sim or =real). On HW-vs-SW
+    # cost mismatch beyond 3× baseline, override ALLOW → REQUIRE_APPROVAL.
+    # Wrapped in try/except — divergence calc must never block a tool call.
+    if hw_counters is not None and verdict.decision == "ALLOW":
+        try:
+            from aegis.cost.divergence import compute_divergence
+            from aegis.cost.escalation import evaluate_escalation
+
+            divergence = compute_divergence(
+                inp.cost_estimate,
+                model_name=MODEL_FOR_COST,
+                hw_flops_observed=hw_counters.flops_observed,
+                hw_hbm_bytes_observed=hw_counters.hbm_bytes_observed,
+            )
+            esc = evaluate_escalation(divergence)
+            if esc.triggered:
+                verdict.decision = "REQUIRE_APPROVAL"
+                verdict.reason = esc.reason
+                verdict.step_traces["aegis.cost.escalation"] = (
+                    f"M12: {esc.metric}={esc.observed:.3f} > "
+                    f"threshold {esc.threshold:.3f}"
+                )
+                if VERBOSE:
+                    _emit(f"M12 cost-divergence: {esc.metric}={esc.observed:.3f}")
+        except Exception as e:  # noqa: BLE001 — telemetry, never block
+            if VERBOSE:
+                _emit(f"M12 escalation skipped: {e}")
+
+    # M10 ATMU phase 1.5 — transition based on the (possibly M12-updated) verdict.
     _atmu_finalize_intent(intent_record_id, verdict.decision, verdict.reason or "")
 
     elapsed_ms = (time.perf_counter_ns() - t0) / 1_000_000

@@ -320,6 +320,91 @@ def test_transcript_aware_adapter_populates_cost_estimate(
     )
 
 
+def test_m12_cost_divergence_escalates_in_plugin_mode(
+    _isolated_audit: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """PR #2: HW provider sim + cost_underreport attack + non-zero SW
+    cost baseline → M12 fires in the live plugin hook (used to be
+    sidecar-only).
+
+    Regression test for the gap where ``cost_underreport`` HW signals
+    populated the ATV via simulate_from_env (PR #32) but the local
+    hook didn't compute the divergence + escalate — leaving M12 dead
+    code in plugin mode.
+
+    M12 needs a non-zero SW token baseline to compute the ratio, so
+    we feed a tiny synthetic transcript with usage. The HW simulator
+    (cost_underreport) inflates flops_observed >> SW expected →
+    divergence > 3× baseline → ALLOW becomes REQUIRE_APPROVAL.
+    """
+    # Synthesize a transcript with non-zero usage so cost_estimate is
+    # populated (M12 needs SW baseline to compute divergence ratio).
+    transcript = tmp_path / "session.jsonl"
+    lines = [
+        json.dumps({"type": "user", "content": "do it"}),
+        json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "text", "text": "ok"},
+                    {"type": "tool_use", "name": "Bash",
+                     "input": {"command": "ls"}},
+                ],
+                "usage": {"input_tokens": 1000, "output_tokens": 500},
+            },
+        }),
+        json.dumps({"type": "user", "content": "x" * 200}),
+    ]
+    transcript.write_text("\n".join(lines) + "\n")
+
+    monkeypatch.setenv("AEGIS_HW_PROVIDER", "sim")
+    monkeypatch.setenv("AEGIS_HW_INJECT_ATTACK", "cost_underreport")
+    rc, _, _ = _run(
+        {
+            "hook_event_name": "PreToolUse",
+            "session_id": "sess-m12",
+            "invocation_id": "inv-m12-1",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+            "transcript_path": str(transcript),
+        }
+    )
+    # APPROVE_AS_BLOCK=1 default → exit 2 because M12 raised
+    # ALLOW → REQUIRE_APPROVAL.
+    assert rc == 2
+    rec = json.loads(_isolated_audit.read_text().strip().splitlines()[-1])
+    assert rec["decision"] == "REQUIRE_APPROVAL"
+    assert "cost-divergence escalation" in rec["reason"]
+    # The escalation step trace must be present so `aegis report
+    # --explain` can render the right reason chain.
+    traces = rec["explain"]["step_traces"]
+    assert "aegis.cost.escalation" in traces
+    assert traces["aegis.cost.escalation"].startswith("M12:")
+
+
+def test_m12_no_escalation_when_hw_disabled(
+    _isolated_audit: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without AEGIS_HW_PROVIDER, M12 stays dormant (HW band zero-filled)."""
+    monkeypatch.delenv("AEGIS_HW_PROVIDER", raising=False)
+    rc, _, _ = _run(
+        {
+            "hook_event_name": "PreToolUse",
+            "session_id": "sess-no-hw",
+            "invocation_id": "inv-no-hw-2",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+        }
+    )
+    assert rc == 0
+    rec = json.loads(_isolated_audit.read_text().strip().splitlines()[-1])
+    traces = rec["explain"]["step_traces"]
+    # No M12 trace because HW band stays zero → divergence = 0 → no escalation.
+    assert "aegis.cost.escalation" not in traces
+
+
 def test_missing_transcript_falls_back_to_sparse(
     _isolated_audit: Path, tmp_path: Path
 ) -> None:
