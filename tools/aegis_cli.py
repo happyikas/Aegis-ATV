@@ -556,6 +556,154 @@ def _cmd_cost_multi_agent(args: argparse.Namespace) -> int:
     return 0 if summary.aborted_at_call is None else 3
 
 
+def cmd_fleet_monitor(args: argparse.Namespace) -> int:
+    """Live multi-session cost monitor — start/stop/status."""
+    import os as _os
+    import subprocess as _subprocess
+
+    from aegis.cost.fleet_monitor import (
+        DEFAULT_AUDIT_PATH,
+        DEFAULT_PID_PATH,
+        DEFAULT_STATE_PATH,
+        FleetThreshold,
+        is_running,
+    )
+
+    audit_path = Path(args.audit) if args.audit else DEFAULT_AUDIT_PATH
+
+    if args.action == "status":
+        running = is_running(DEFAULT_PID_PATH)
+        if running:
+            try:
+                pid_info = json.loads(DEFAULT_PID_PATH.read_text())
+                pid = pid_info.get("pid")
+            except (json.JSONDecodeError, OSError):
+                pid = "?"
+            print(_green(f"fleet-monitor running   pid={pid}"))
+        else:
+            print(_yellow("fleet-monitor stopped"))
+        if DEFAULT_STATE_PATH.is_file():
+            try:
+                state = json.loads(DEFAULT_STATE_PATH.read_text())
+                print(f"  records seen:   {state.get('n_records_seen', 0)}")
+                print(f"  fleet $:        ${state.get('fleet_dollars', 0):.4f}")
+                print(f"  fired:          {state.get('fired_thresholds', [])}")
+                print(f"  last_offset:    {state.get('last_offset', 0)}")
+            except (json.JSONDecodeError, OSError):
+                pass
+        return 0 if running else 1
+
+    if args.action == "stop":
+        if not is_running(DEFAULT_PID_PATH):
+            print(_yellow("fleet-monitor not running"))
+            return 1
+        try:
+            pid_info = json.loads(DEFAULT_PID_PATH.read_text())
+            pid = int(pid_info["pid"])
+            _os.kill(pid, signal.SIGTERM)
+            # Wait briefly for the daemon to clean up its PID file.
+            for _ in range(30):
+                if not is_running(DEFAULT_PID_PATH):
+                    print(_green("fleet-monitor stopped"))
+                    return 0
+                time.sleep(0.1)
+            print(_yellow("fleet-monitor SIGTERM sent but PID still alive"))
+            return 1
+        except (json.JSONDecodeError, OSError, KeyError, ValueError) as e:
+            print(_red(f"stop failed: {e}"), file=sys.stderr)
+            return 2
+
+    # start
+    if is_running(DEFAULT_PID_PATH):
+        print(_yellow("fleet-monitor already running — `aegis fleet-monitor stop` first"))
+        return 1
+    thresholds: list[FleetThreshold] = []
+    if args.threshold is not None:
+        thresholds.append(FleetThreshold(
+            dollars=float(args.threshold), label="warn",
+            interactive=bool(args.interactive),
+        ))
+    if args.hard_stop is not None:
+        thresholds.append(FleetThreshold(
+            dollars=float(args.hard_stop), label="hard_stop",
+            interactive=bool(args.interactive),
+        ))
+    if not thresholds:
+        thresholds = [
+            FleetThreshold(dollars=5.0, label="warn"),
+            FleetThreshold(dollars=20.0, label="hard_stop"),
+        ]
+
+    slack_url = None
+    if args.slack_url_env:
+        slack_url = _os.environ.get(args.slack_url_env)
+        if not slack_url:
+            print(_yellow(
+                f"  warning: {args.slack_url_env} not set; "
+                "falling back to stderr-only notifier"
+            ), file=sys.stderr)
+
+    # Daemonise via subprocess so the parent CLI returns immediately.
+    # The child re-execs into a `python -c` that calls serve_forever
+    # with the same arguments.
+    bootstrap = (
+        "import json,sys;"
+        "sys.path.insert(0,'src');"
+        "from pathlib import Path;"
+        "from aegis.cost.fleet_monitor import (FleetThreshold, "
+        "make_default_notifier, serve_forever, "
+        "DEFAULT_AUDIT_PATH, DEFAULT_STATE_PATH, "
+        "DEFAULT_PID_PATH, DEFAULT_STOP_FLAG);"
+        "args=json.loads(sys.argv[1]);"
+        "thresholds=[FleetThreshold(**t) for t in args['thresholds']];"
+        "n=make_default_notifier(slack_webhook_url=args.get('slack_url'),"
+        "interactive=args.get('interactive', False));"
+        "sys.exit(serve_forever("
+        "audit_path=Path(args['audit_path']),"
+        "state_path=DEFAULT_STATE_PATH,"
+        "pid_path=DEFAULT_PID_PATH,"
+        "stop_flag=DEFAULT_STOP_FLAG,"
+        "thresholds=thresholds,"
+        "notifier=n,"
+        "poll_interval_s=args.get('poll_interval', 1.0)))"
+    )
+    payload = json.dumps({
+        "audit_path": str(audit_path),
+        "thresholds": [
+            {"dollars": t.dollars, "label": t.label, "interactive": t.interactive}
+            for t in thresholds
+        ],
+        "slack_url": slack_url,
+        "interactive": bool(args.interactive),
+        "poll_interval": float(args.poll_interval),
+    })
+    py = _hook_python_executable()
+    proc = _subprocess.Popen(
+        [py, "-c", bootstrap, payload],
+        cwd=str(PROJECT_ROOT),
+        stdout=_subprocess.DEVNULL,
+        stderr=_subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    # Wait for PID file to appear.
+    for _ in range(50):
+        if is_running(DEFAULT_PID_PATH):
+            break
+        if proc.poll() is not None:
+            print(_red(f"daemon exited with rc={proc.returncode}"), file=sys.stderr)
+            return 2
+        time.sleep(0.1)
+    if not is_running(DEFAULT_PID_PATH):
+        print(_red("daemon failed to start"), file=sys.stderr)
+        return 2
+    print(_green(f"✓ fleet-monitor started  pid={proc.pid}"))
+    print(f"  audit:        {audit_path}")
+    print(f"  thresholds:   {[(t.label, t.dollars) for t in thresholds]}")
+    if slack_url:
+        print("  slack:        configured (URL hidden)")
+    return 0
+
+
 def cmd_health(_: argparse.Namespace) -> int:
     """Runtime malfunction signal — deferred (D7).
 
@@ -2745,6 +2893,31 @@ def build_parser() -> argparse.ArgumentParser:
     co_mult.set_defaults(fn=cmd_cost)
 
     co.set_defaults(fn=cmd_cost, action=None)
+
+    fm = sub.add_parser(
+        "fleet-monitor",
+        help="Live multi-session cost monitor (PR #3 of 5). "
+        "Tails ~/.aegis/audit.jsonl, fires notifier on threshold "
+        "crossings.",
+    )
+    fm.add_argument(
+        "action",
+        choices=["start", "stop", "status"],
+        help="Daemon lifecycle.",
+    )
+    fm.add_argument("--threshold", type=float, default=None,
+                    help="Fleet $ for WARN notifications.")
+    fm.add_argument("--hard-stop", type=float, default=None,
+                    help="Fleet $ that writes a stop-flag for hook polling.")
+    fm.add_argument("--slack-url-env", default=None,
+                    help="ENV var name holding the Slack webhook URL.")
+    fm.add_argument("--interactive", action="store_true",
+                    help="Stderr notifier reads y/N from stdin.")
+    fm.add_argument("--audit", default=None,
+                    help="Audit JSONL path (default: ~/.aegis/audit.jsonl).")
+    fm.add_argument("--poll-interval", type=float, default=1.0,
+                    help="Seconds between polls (default: 1.0).")
+    fm.set_defaults(fn=cmd_fleet_monitor)
 
     sub.add_parser("health").set_defaults(fn=cmd_health)
 
