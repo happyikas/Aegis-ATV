@@ -265,6 +265,63 @@ class TestReplayMissingTranscript:
         assert s.calls == []
 
 
+class TestReplayRealClaudeCodeShape:
+    """Claude Code's actual transcript JSONL nests usage + content under
+    a ``message`` key (and tool_use blocks live inside ``message.content[]``,
+    not as top-level events). Regression test: the replay harness must
+    handle both the fixture-flat shape and Claude's real nested shape."""
+
+    def _real_shape_transcript(self, path: Path) -> Path:
+        """Synthesize one nested-shape assistant turn carrying a
+        tool_use block inside message.content, with usage stored under
+        message.usage including cache_* fields."""
+        rec_user = {"type": "user", "content": "do it"}
+        rec_assistant = {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [
+                    {"type": "thinking", "thinking": "let me think"},
+                    {"type": "text", "text": "I'll run a command."},
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_xyz",
+                        "name": "Bash",
+                        "input": {"command": "ls -la"},
+                    },
+                ],
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "cache_read_input_tokens": 5_000,
+                    "cache_creation_input_tokens": 200,
+                },
+            },
+        }
+        path.write_text(
+            _line(rec_user) + _line(rec_assistant), encoding="utf-8"
+        )
+        return path
+
+    def test_nested_message_shape_extracts_tool_use_and_tokens(
+        self, tmp_path: Path
+    ) -> None:
+        transcript = self._real_shape_transcript(tmp_path / "real.jsonl")
+        s = replay(ReplayConfig(
+            transcript_path=transcript, budget_dollars=10.0,
+        ))
+        # The single tool_use inside message.content[] must be picked up.
+        assert s.n_tool_calls == 1
+        assert s.calls[0].tool_name == "Bash"
+        # Cumulative tokens MUST include cache_* (5_000 + 200 + 100 + 50)
+        # so cost_estimate is honest about what the model actually ran.
+        assert s.calls[0].cumulative_tokens == pytest.approx(5_350.0)
+        # cumulative_dollars > 0 proves the tokens flowed all the way
+        # into step335's budget gate (not the 0.00 plugin-mode bug).
+        assert s.calls[0].cumulative_dollars > 0.0
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Summary tests — pure function over an audit JSONL
 # ─────────────────────────────────────────────────────────────────────

@@ -106,7 +106,18 @@ def read_transcript_context(
         kind = ev.get("type") or ev.get("role") or ""
         if kind in ("assistant", "model_response", "claude"):
             assistant_messages += 1
-            content = ev.get("content") or ev.get("message") or ev.get("text") or ""
+            # Claude Code's real schema nests message.{content,usage}.
+            # Tests + legacy callers may pass content/usage at the top
+            # level, so we look in both places.
+            msg = ev.get("message")
+            if not isinstance(msg, dict):
+                msg = {}
+            content = (
+                msg.get("content")
+                or ev.get("content")
+                or ev.get("text")
+                or ""
+            )
             if isinstance(content, list):
                 # Claude content blocks: list of {type, text|tool_use|...}
                 text_parts = [
@@ -115,6 +126,26 @@ def read_transcript_context(
                     if isinstance(blk, dict) and blk.get("type") == "text"
                 ]
                 content = " ".join(text_parts)
+                # tool_use blocks live inside the same content array
+                # in Claude Code's real shape — extract them here.
+                for blk in (msg.get("content") or ev.get("content") or []):
+                    if (
+                        isinstance(blk, dict)
+                        and blk.get("type") in ("tool_use", "tool_call")
+                    ):
+                        name = str(
+                            blk.get("name") or blk.get("tool_name") or ""
+                        )
+                        tinput = blk.get("input") or blk.get("tool_input") or {}
+                        tool_calls.append({"name": name, "input": tinput})
+                        if name.lower().startswith(("mcp__", "mcp:")):
+                            mcp_call_count += 1
+                        elif name in ("Bash", "shell", "execute_shell"):
+                            bash_count += 1
+                        elif name in ("Edit", "Write", "MultiEdit"):
+                            edit_count += 1
+                        elif name in ("Read", "read_file"):
+                            read_count += 1
             if isinstance(content, str) and content:
                 last_assistant = content
                 # First markdown line that looks like a plan ("plan:", "## Plan")
@@ -123,11 +154,27 @@ def read_transcript_context(
                     if low.startswith(("plan:", "# plan", "## plan", "### plan")):
                         plan = ln.strip()
                         break
-            # Token usage — Claude transcript stores these per assistant turn
-            usage = ev.get("usage") or {}
-            in_tokens_total += float(usage.get("input_tokens", 0))
-            out_tokens_total += float(usage.get("output_tokens", 0))
-            reasoning_tokens_total += float(usage.get("reasoning_tokens", 0))
+            # Token usage — real Claude Code stores it under message.usage.
+            usage = msg.get("usage") or ev.get("usage") or {}
+            if isinstance(usage, dict):
+                in_tokens_total += float(usage.get("input_tokens", 0) or 0)
+                out_tokens_total += float(usage.get("output_tokens", 0) or 0)
+                # reasoning_tokens (extended thinking) is a synonym used
+                # in fixtures; the real shape doesn't carry it as a
+                # separate counter (it's bundled into output).
+                reasoning_tokens_total += float(
+                    usage.get("reasoning_tokens", 0) or 0
+                )
+                # Cache tokens count toward input cost too — they're
+                # 90 %-discounted (cache_read) or 25 %-premium
+                # (cache_creation) but for the FLOPS-table → $ proxy
+                # we treat them as input tokens.
+                in_tokens_total += float(
+                    usage.get("cache_read_input_tokens", 0) or 0
+                )
+                in_tokens_total += float(
+                    usage.get("cache_creation_input_tokens", 0) or 0
+                )
         elif kind in ("user", "human"):
             user_messages += 1
         elif kind in ("tool_use", "tool_call"):
