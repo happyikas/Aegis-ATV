@@ -67,9 +67,23 @@ def test_replay_default_n_is_20() -> None:
     assert args.n == 20
 
 
-def test_cost_default_days_is_7() -> None:
-    args = aegis_cli.build_parser().parse_args(["cost"])
-    assert args.days == 7
+def test_cost_subcommands_resolve() -> None:
+    """`aegis cost` was restructured into `summary` / `replay` actions
+    in v2.5.x. Verify both resolve to the dispatcher and carry the
+    expected default flags."""
+    parser = aegis_cli.build_parser()
+
+    summary_args = parser.parse_args(["cost", "summary"])
+    assert summary_args.fn.__name__ == "cmd_cost"
+    assert summary_args.action == "summary"
+    assert summary_args.spike_threshold == 0.10
+
+    replay_args = parser.parse_args(["cost", "replay", "/tmp/x.jsonl"])
+    assert replay_args.fn.__name__ == "cmd_cost"
+    assert replay_args.action == "replay"
+    assert replay_args.budget == 1.0
+    assert replay_args.hw_provider == "none"
+    assert replay_args.multiplier == 3.0
 
 
 def test_install_default_force_is_false() -> None:
