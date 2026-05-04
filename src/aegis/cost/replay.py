@@ -66,12 +66,17 @@ class ReplayConfig:
 @dataclass(frozen=True)
 class ReplayCall:
     """One tool_use observed in the transcript, with the firewall's
-    decision at that point in time."""
+    decision at that point in time.
+
+    ``cumulative_dollars`` is the FLOP-table proxy (M12-compatible).
+    ``cumulative_billed_dollars`` is the cache-aware Anthropic
+    billing proxy from PR #1 — closer to the actual invoice."""
 
     turn_idx: int
     tool_name: str
     cumulative_tokens: float
-    cumulative_dollars: float
+    cumulative_dollars: float                   # FLOP-proxy
+    cumulative_billed_dollars: float            # cache-aware billed estimate (PR #1)
     decision: str                              # ALLOW | BLOCK | REQUIRE_APPROVAL
     reason: str
     step335_trace: str
@@ -90,7 +95,8 @@ class ReplaySummary:
     n_turns_total: int = 0
     n_tool_calls: int = 0
     final_cumulative_tokens: float = 0.0
-    final_cumulative_dollars: float = 0.0
+    final_cumulative_dollars: float = 0.0          # FLOP-proxy
+    final_cumulative_billed_dollars: float = 0.0   # cache-aware (PR #1)
     n_allow: int = 0
     n_block: int = 0
     n_approval: int = 0
@@ -189,6 +195,10 @@ def replay(config: ReplayConfig) -> ReplaySummary:
     }
     try:
         cum_in = cum_out = cum_reason = 0.0
+        # Track cache_read / cache_creation independently for the
+        # cache-aware billed estimate (PR #1). Both also flow into
+        # cum_in so the FLOP proxy stays consistent.
+        cum_cache_read = cum_cache_creation = 0.0
         turn_idx = 0
         for line in config.transcript_path.read_text(
             encoding="utf-8"
@@ -216,13 +226,17 @@ def replay(config: ReplayConfig) -> ReplaySummary:
                     cum_in     += float(usage.get("input_tokens", 0) or 0)
                     cum_out    += float(usage.get("output_tokens", 0) or 0)
                     cum_reason += float(usage.get("reasoning_tokens", 0) or 0)
-                    # Cache tokens count toward input cost too.
-                    cum_in     += float(
-                        usage.get("cache_read_input_tokens", 0) or 0
-                    )
-                    cum_in     += float(
+                    # Cache tokens — fold into cum_in for the FLOP
+                    # proxy AND track separately so the cache-aware
+                    # billed estimate (PR #1) gets accurate per-class
+                    # rates.
+                    cr = float(usage.get("cache_read_input_tokens", 0) or 0)
+                    cc = float(
                         usage.get("cache_creation_input_tokens", 0) or 0
                     )
+                    cum_in += cr + cc
+                    cum_cache_read += cr
+                    cum_cache_creation += cc
 
             # 2) On every tool_use (assistant tool_use OR top-level
             #    tool_call event), build an ATV at the CURRENT cumulative
@@ -269,12 +283,28 @@ def replay(config: ReplayConfig) -> ReplaySummary:
 
                 cum_dollars = inp.cost_estimate.cumulative_dollars
                 cum_tokens = inp.cost_estimate.cumulative_tokens
+                # PR #1 — cache-aware billing estimate. Subtract cache
+                # tokens out of "real input" before applying the
+                # standard input rate (cache tokens use their own
+                # discounted / premium rates).
+                from aegis.cost.pricing import billed_dollars as _billed
+                real_input = max(
+                    0.0, cum_in - cum_cache_read - cum_cache_creation,
+                )
+                cum_billed = _billed(
+                    model_name=config.model_for_cost,
+                    input_tokens=real_input,
+                    output_tokens=cum_out,
+                    cache_read_tokens=cum_cache_read,
+                    cache_creation_tokens=cum_cache_creation,
+                )
 
                 call = ReplayCall(
                     turn_idx=turn_idx,
                     tool_name=tu["name"],
                     cumulative_tokens=cum_tokens,
                     cumulative_dollars=cum_dollars,
+                    cumulative_billed_dollars=cum_billed,
                     decision=verdict.decision,
                     reason=verdict.reason or "",
                     step335_trace=str(verdict.step_traces.get(_S335_KEY, "")),
@@ -310,6 +340,18 @@ def replay(config: ReplayConfig) -> ReplaySummary:
     summary.final_cumulative_tokens = cum_in + cum_out + cum_reason
     summary.final_cumulative_dollars = _budget_dollars_from_flops(
         cum_in, cum_out, config.model_for_cost,
+    )
+    # PR #1 cache-aware billed total — operator-facing realistic estimate.
+    from aegis.cost.pricing import billed_dollars as _billed_final
+    real_input_final = max(
+        0.0, cum_in - cum_cache_read - cum_cache_creation,
+    )
+    summary.final_cumulative_billed_dollars = _billed_final(
+        model_name=config.model_for_cost,
+        input_tokens=real_input_final,
+        output_tokens=cum_out,
+        cache_read_tokens=cum_cache_read,
+        cache_creation_tokens=cum_cache_creation,
     )
     return summary
 

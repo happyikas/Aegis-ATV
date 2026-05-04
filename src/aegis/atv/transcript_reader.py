@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from aegis.cost.model_flops import DEFAULT_DOLLAR_PER_FLOP, expected_flops
+from aegis.cost.pricing import billed_dollars
 from aegis.schema import CostEfficiencyMetrics
 
 # How many recent tool calls to surface in recent_actions.
@@ -45,13 +46,21 @@ _MIN_TRANSCRIPT_BYTES = 100
 
 @dataclass
 class TranscriptContext:
-    """Extracted context — one snapshot per PreToolUse call."""
+    """Extracted context — one snapshot per PreToolUse call.
+
+    ``cumulative_cost.cumulative_dollars`` is the FLOP-table proxy
+    used by M12 cost-divergence (Claim 27); it intentionally over-
+    estimates because it can't see Anthropic's cache discounts.
+    ``cumulative_billed_dollars`` is the cache-aware estimate that
+    matches what Anthropic actually charges (within a few %).
+    """
 
     last_assistant_message: str = ""
     current_plan: str = ""
     recent_tool_calls: list[dict[str, Any]] = field(default_factory=list)
     transcript_sha3: str | None = None
     cumulative_cost: CostEfficiencyMetrics = field(default_factory=CostEfficiencyMetrics)
+    cumulative_billed_dollars: float = 0.0   # cache-aware (PR #1)
     novelty_score: float = 0.0
     behavior_metrics: dict[str, float] = field(default_factory=dict)
     mcp_signals: dict[str, float] = field(default_factory=dict)
@@ -86,6 +95,11 @@ def read_transcript_context(
     in_tokens_total = 0.0
     out_tokens_total = 0.0
     reasoning_tokens_total = 0.0
+    # Tracked separately so PR #1 can apply Anthropic's cache-aware
+    # pricing (cache_read at 10 %, cache_creation at 125 %) instead of
+    # treating both at full input rate.
+    cache_read_tokens_total = 0.0
+    cache_creation_tokens_total = 0.0
     mcp_call_count = 0
     bash_count = 0
     edit_count = 0
@@ -165,16 +179,17 @@ def read_transcript_context(
                 reasoning_tokens_total += float(
                     usage.get("reasoning_tokens", 0) or 0
                 )
-                # Cache tokens count toward input cost too — they're
-                # 90 %-discounted (cache_read) or 25 %-premium
-                # (cache_creation) but for the FLOPS-table → $ proxy
-                # we treat them as input tokens.
-                in_tokens_total += float(
-                    usage.get("cache_read_input_tokens", 0) or 0
-                )
-                in_tokens_total += float(
-                    usage.get("cache_creation_input_tokens", 0) or 0
-                )
+                # Cache tokens — accumulate twice: into in_tokens_total
+                # for the FLOP-table proxy (M12 needs full token count
+                # to compare against HW FLOPs) AND into the dedicated
+                # cache buckets so PR #1's cache-aware billed_dollars
+                # can apply Anthropic's actual rates (cache_read at
+                # 10 %, cache_creation at 125 %).
+                cr = float(usage.get("cache_read_input_tokens", 0) or 0)
+                cc = float(usage.get("cache_creation_input_tokens", 0) or 0)
+                in_tokens_total += cr + cc
+                cache_read_tokens_total += cr
+                cache_creation_tokens_total += cc
         elif kind in ("user", "human"):
             user_messages += 1
         elif kind in ("tool_use", "tool_call"):
@@ -194,9 +209,27 @@ def read_transcript_context(
     tool_calls = tool_calls[-_MAX_RECENT_ACTIONS:]
 
     # Compute cumulative cost using the model's FLOPS table.
+    # Note: cum_dollars is the FLOP proxy — used by M12 dollar_cost
+    # divergence (compares HW FLOPs × $/FLOP to this on the SW side).
+    # The cache-aware billed_dollars below is what the operator's
+    # Anthropic invoice will actually look like.
     cum_dollars = expected_flops(
         model_for_cost, in_tokens_total, out_tokens_total,
     ) * DEFAULT_DOLLAR_PER_FLOP
+    # input_tokens_total above already includes cache_* tokens; subtract
+    # them out so the standard-input rate isn't applied twice when we
+    # compute the cache-aware billed estimate.
+    real_input_tokens = max(
+        0.0,
+        in_tokens_total - cache_read_tokens_total - cache_creation_tokens_total,
+    )
+    cum_billed = billed_dollars(
+        model_name=model_for_cost,
+        input_tokens=real_input_tokens,
+        output_tokens=out_tokens_total,
+        cache_read_tokens=cache_read_tokens_total,
+        cache_creation_tokens=cache_creation_tokens_total,
+    )
     cost = CostEfficiencyMetrics(
         input_token_count=in_tokens_total,
         output_token_count=out_tokens_total,
@@ -226,6 +259,7 @@ def read_transcript_context(
         recent_tool_calls=tool_calls,
         transcript_sha3=sha3,
         cumulative_cost=cost,
+        cumulative_billed_dollars=cum_billed,
         novelty_score=novelty,
         behavior_metrics=behavior,
         mcp_signals=mcp_signals,
