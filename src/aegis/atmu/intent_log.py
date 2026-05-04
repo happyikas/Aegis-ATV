@@ -102,10 +102,19 @@ class IntentLog:
         checkpoint_id: str | None = None,
         cost_profile: str = "software",
         oversight_state: str | None = None,
+        record_id: str | None = None,
     ) -> dict[str, Any]:
-        """Insert a new tentative record. Returns the full row as a dict."""
+        """Insert a new tentative record. Returns the full row as a dict.
+
+        ``record_id`` defaults to a fresh UUID4. Callers may pass a
+        deterministic value (e.g. derived from a Claude Code
+        ``invocation_id``) so a separate process — like the
+        PostToolUse hook — can later look up and close the same
+        record without an external mapping table.
+        """
         now = time.time_ns()
-        record_id = str(uuid.uuid4())
+        if record_id is None:
+            record_id = str(uuid.uuid4())
         history = [{"state": TxState.TENTATIVE.value, "ts_ns": now, "reason": "intent"}]
         blast_class = _blast_class_from_radius(blast_radius)
         with self._lock:
