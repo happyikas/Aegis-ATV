@@ -2712,18 +2712,63 @@ def cmd_cost_import(args: argparse.Namespace) -> int:
         print(f"[cost-import transcript] {r}")
         return 0 if r.get("status") == "imported" else 1
     if args.source == "admin-api":
-        # cost.usage_api (Anthropic Admin API rollup) is D10 deferred.
-        print(
-            _yellow(
-                "[cost-import admin-api] D10 deferred — Anthropic Admin API "
-                "rollup not yet wired in plugin mode."
+        # PR #4 — Anthropic Admin API integration.
+        from aegis.cost.usage_api import (
+            fetch,
+            per_model_breakdown,
+            total_billed,
+        )
+
+        admin_key = (
+            getattr(args, "admin_key", None)
+            or os.environ.get("ANTHROPIC_ADMIN_KEY")
+        )
+        if not admin_key:
+            print(
+                _red(
+                    "[cost-import admin-api] ANTHROPIC_ADMIN_KEY env var "
+                    "or --admin-key flag required"
+                ),
+                file=sys.stderr,
             )
+            print(
+                "                        Get the admin key at "
+                "https://console.anthropic.com/settings/admin-keys "
+                "(separate from your regular API key).",
+                file=sys.stderr,
+            )
+            return 2
+        result = fetch(
+            admin_key=admin_key,
+            since=args.since,
+            group_by=["model"],
         )
-        print(
-            "                        Use `--source transcript --path <log>` "
-            "(via aegis.cost.transcript) for plugin-mode backfill."
-        )
-        return 1
+        if result.error:
+            print(_red(f"[cost-import admin-api] {result.error}"), file=sys.stderr)
+            return 1
+        print("[cost-import admin-api] fetched from Anthropic")
+        print(f"  window:  {result.requested_starting_at} → "
+              f"{result.requested_ending_at}")
+        print(f"  pages:   {result.pages_fetched}")
+        print(f"  records: {len(result.records)}")
+        print(f"  total billed: ${total_billed(result.records):.4f}")
+        print()
+        breakdown = per_model_breakdown(result.records)
+        if breakdown:
+            print("  per-model breakdown:")
+            for model, m in sorted(
+                breakdown.items(),
+                key=lambda kv: kv[1]["billed_dollars"], reverse=True,
+            ):
+                print(
+                    f"    {model:<28}  "
+                    f"in={int(m['input_tokens']):>10,}  "
+                    f"out={int(m['output_tokens']):>10,}  "
+                    f"cache_r={int(m['cache_read']):>11,}  "
+                    f"cache_w={int(m['cache_creation']):>9,}  "
+                    f"${m['billed_dollars']:>9.4f}"
+                )
+        return 0
     return 2
 
 
@@ -3127,7 +3172,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ci.add_argument("source", choices=["transcript", "admin-api"])
     ci.add_argument("--path", help="transcript .jsonl path")
-    ci.add_argument("--since", default="30d")
+    ci.add_argument("--since", default="30d",
+                    help="time window (e.g. 30d / 24h / ISO-8601 datetime)")
+    ci.add_argument("--admin-key", default=None,
+                    help="Anthropic admin key (or set ANTHROPIC_ADMIN_KEY env)")
     ci.set_defaults(fn=cmd_cost_import)
 
     bg = sub.add_parser("budget", help="Show or set budget limits")
