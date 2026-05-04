@@ -48,6 +48,12 @@ LOCAL_AUDIT_PATH = Path(
         "AEGIS_LOCAL_AUDIT", str(Path.home() / ".aegis" / "audit.jsonl")
     )
 )
+LOCAL_INTENT_LOG_PATH = Path(
+    os.environ.get(
+        "AEGIS_INTENT_LOG_DB", str(Path.home() / ".aegis" / "intent_log.sqlite")
+    )
+)
+ATMU_DISABLED = os.environ.get("AEGIS_ATMU_DISABLE", "0") == "1"
 SIDECAR_URL = os.environ.get("AEGIS_SIDECAR_URL", "")
 TOOL_OUTCOME_TIMEOUT_S = float(os.environ.get("AEGIS_POST_TIMEOUT_S", "1.0"))
 
@@ -63,6 +69,47 @@ def _append_audit(record: dict[str, Any]) -> None:
 
         chain_append(LOCAL_AUDIT_PATH, record)
     except OSError:
+        pass
+
+
+def _atmu_record_id_from_invocation(invocation_id: str) -> str:
+    """Recompute the deterministic record_id PreToolUse used.
+
+    Mirrors :func:`aegis.atv.adapter._trace_ids_from` — span_id is the
+    second 16 hex chars of ``sha3_256(invocation_id)``. The PreToolUse
+    hook passes that span_id to ``IntentLog.append_tentative`` as the
+    record_id, so PostToolUse can find the same row without needing
+    a mapping table.
+    """
+    h = hashlib.sha3_256(invocation_id.encode("utf-8")).hexdigest()
+    return h[32:48]
+
+
+def _atmu_close_intent(
+    invocation_id: str, status: str, result_hash: str
+) -> None:
+    """Phase 2 of 2PC — attach the tool outcome to the intent record.
+
+    Best-effort: never raises. ATMU disabled, missing DB, or unknown
+    record (e.g. PreToolUse was bypassed) all result in a silent
+    no-op so PostToolUse never blocks Claude Code.
+    """
+    if ATMU_DISABLED or not invocation_id:
+        return
+    try:
+        from aegis.atmu import IntentLog
+
+        record_id = _atmu_record_id_from_invocation(invocation_id)
+        if not LOCAL_INTENT_LOG_PATH.exists():
+            return
+        log = IntentLog(str(LOCAL_INTENT_LOG_PATH))
+        try:
+            log.append_tool_outcome(
+                record_id, status=status, result_hash=result_hash
+            )
+        finally:
+            log.close()
+    except Exception:  # noqa: BLE001 — forensic-only, must not crash
         pass
 
 
@@ -160,6 +207,11 @@ def handle_posttool(stdin: Any, stdout: Any) -> int:
         "mode": "local",
     }
     _append_audit(record)
+
+    # M10 ATMU phase 2 — attach the tool_outcome to the intent record
+    # opened by PreToolUse (2PC commit/abort half). Local-only; sidecar
+    # mode handles this via the ``/tool-outcome`` POST below.
+    _atmu_close_intent(invocation_id, status, rh)
 
     # Best-effort sidecar /tool-outcome POST so perf EWMA updates.
     _post_tool_outcome({

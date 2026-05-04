@@ -75,33 +75,143 @@ def _red(s: str) -> str:
 
 
 def cmd_status(_: argparse.Namespace) -> int:
-    from cost.tracker import daily_spend_today, total_usd  # type: ignore[import-not-found]
-    from crypto.anchor import list_anchors  # type: ignore[import-not-found]
-    from monitor.malfunction import overall  # type: ignore[import-not-found]
-    from sllm.router import cache_stats  # type: ignore[import-not-found]
+    """Plugin-mode status: audit chain + ATMU intent log + LLM daemon.
 
-    c = _conn()
-    n_intents = c.execute("SELECT COUNT(*) FROM intents").fetchone()[0]
-    n_blocks = c.execute(
-        "SELECT COUNT(*) FROM intents WHERE verdict LIKE '%block%'"
-    ).fetchone()[0]
-    n_outcomes = c.execute("SELECT COUNT(*) FROM outcomes").fetchone()[0]
-    anchors = list_anchors(limit=5)
-    cache = cache_stats()
-    h = overall()
-    print("AegisData status")
-    print("================")
-    print(f"  intents:    {n_intents:>8,}  ({n_blocks} blocked)")
-    print(f"  outcomes:   {n_outcomes:>8,}")
-    print(f"  cache:      {cache['size']}/{cache['max']}")
-    print(f"  spend today:${daily_spend_today():>7.2f}  total ${total_usd():.2f}")
-    print(
-        f"  health:     {h['signal']:>8}  "
-        f"(err={h['error_rate']:.2f}  loop={h['atv_loop']:.2f}  "
-        f"drift={h['schema_drift']:.2f})"
+    Reads only modules that actually exist in the local-mode build —
+    audit JSONL (PreToolUse + PostToolUse records), ``IntentLog``
+    (M10 ATMU 2PC state), and the LLM keep-alive daemon (PR #30).
+    Cost / malfunction-classifier / blockchain-anchor sections are
+    deferred (D7/D10 + post-launch) and surface as a single line so
+    operators see what's missing rather than guessing from a crash.
+    """
+
+    audit_path = Path(
+        os.environ.get(
+            "AEGIS_LOCAL_AUDIT", str(Path.home() / ".aegis" / "audit.jsonl")
+        )
     )
-    last_anchor = anchors[-1]["root"][:16] if anchors else "-"
-    print(f"  anchors:    {len(anchors)}  (last: {last_anchor}…)")
+    decisions: dict[str, int] = {"ALLOW": 0, "BLOCK": 0, "REQUIRE_APPROVAL": 0}
+    outcomes: dict[str, int] = {
+        "success": 0, "failure": 0, "timeout": 0, "partial": 0,
+    }
+    n_pre = n_post = 0
+
+    if audit_path.exists():
+        with audit_path.open("r", encoding="utf-8") as fh:
+            for raw_line in fh:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get("hook") == "PostToolUse":
+                    n_post += 1
+                    s = str(rec.get("status", ""))
+                    if s in outcomes:
+                        outcomes[s] += 1
+                elif "decision" in rec:
+                    n_pre += 1
+                    d = str(rec["decision"])
+                    if d in decisions:
+                        decisions[d] += 1
+
+    chain_ok, broken_at, chain_total = True, -1, 0
+    if audit_path.exists():
+        try:
+            from aegis.audit.local_chain import verify_chain
+
+            chain_ok, broken_at, chain_total = verify_chain(audit_path)
+        except Exception:  # noqa: BLE001
+            pass
+
+    intent_db = Path(
+        os.environ.get(
+            "AEGIS_INTENT_LOG_DB",
+            str(Path.home() / ".aegis" / "intent_log.sqlite"),
+        )
+    )
+    atmu_counts: dict[str, int] = {}
+    if intent_db.exists():
+        try:
+            from aegis.atmu import IntentLog, TxState
+
+            log = IntentLog(str(intent_db))
+            try:
+                for s in TxState:
+                    atmu_counts[s.value] = log.count_state(s)
+            finally:
+                log.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    daemon_status = "stopped"
+    daemon_model: str | None = None
+    try:
+        from aegis.judge.llm_daemon import DaemonClient
+
+        client = DaemonClient()
+        if client.is_running():
+            daemon_status = "running"
+            ping = client.ping(timeout_s=1.0)
+            if ping:
+                daemon_model = (
+                    ping.get("model_name") or ping.get("model_path") or None
+                )
+    except Exception:  # noqa: BLE001
+        pass
+
+    print("AegisData status (plugin mode)")
+    print("==============================")
+    chain_label = (
+        _green("OK") if chain_ok else _red(f"BROKEN @ idx {broken_at}")
+    )
+    print(f"  audit chain:  {chain_total:>6,} records   {chain_label}")
+    print(f"                {audit_path}")
+    print()
+    print(
+        f"  PreToolUse:   {n_pre:>6,}   "
+        f"ALLOW {decisions['ALLOW']:,}  "
+        f"BLOCK {decisions['BLOCK']:,}  "
+        f"ASK {decisions['REQUIRE_APPROVAL']:,}"
+    )
+    print(
+        f"  PostToolUse:  {n_post:>6,}   "
+        f"ok {outcomes['success']:,}  "
+        f"fail {outcomes['failure']:,}  "
+        f"timeout {outcomes['timeout']:,}  "
+        f"partial {outcomes['partial']:,}"
+    )
+    print()
+    if atmu_counts:
+        total = sum(atmu_counts.values())
+        committed = atmu_counts.get("committed", 0)
+        aborted = atmu_counts.get("aborted", 0)
+        prepared = atmu_counts.get("prepared", 0)
+        tentative = atmu_counts.get("tentative", 0)
+        print(
+            f"  ATMU intents: {total:>6,}   "
+            f"committed {committed:,}  aborted {aborted:,}  "
+            f"prepared {prepared:,}  tentative {tentative:,}"
+        )
+    else:
+        print(
+            f"  ATMU intents: {_yellow('no DB yet — runs after first PreToolUse')}"
+        )
+    print(f"                {intent_db}")
+    print()
+    if daemon_model:
+        print(f"  sLLM daemon:  {_green(daemon_status)}   ({daemon_model})")
+    else:
+        print(
+            f"  sLLM daemon:  "
+            f"{_green(daemon_status) if daemon_status == 'running' else _yellow(daemon_status)}"
+        )
+    print()
+    print(
+        f"  cost / health: {_yellow('(D7 / D10 deferred — not tracked in plugin mode)')}"
+    )
     return 0
 
 
@@ -180,30 +290,44 @@ def cmd_policy_replay(args: argparse.Namespace) -> int:
 
 
 def cmd_cost(args: argparse.Namespace) -> int:
-    from cost.tracker import daily_breakdown, per_agent, total_usd  # type: ignore[import-not-found]
+    """Daily / per-agent cost breakdown — deferred (D10).
 
-    print(f"[cost] total = ${total_usd():.2f}")
-    print()
-    print("  Daily breakdown (last", args.days, "days):")
-    for day, usd, n in daily_breakdown(days=args.days):
-        print(f"    {day}  ${usd:>9.2f}  ({n:>5} calls)")
-    print()
-    print("  Top agents by spend:")
-    for aid, usd, n in per_agent()[:10]:
-        print(f"    {aid:<24}  ${usd:>9.2f}  ({n:>5} calls)")
+    The cost-tracker module (``aegis.cost.tracker``) and per-agent
+    aggregation pipeline are scheduled for the v2.5 D10 milestone.
+    Until then, plugin-mode users can backfill from a Claude Code
+    transcript via ``aegis cost-import transcript --path …`` —
+    that path uses :mod:`aegis.cost.transcript` which IS shipped.
+    """
+    print(
+        _yellow(
+            "[cost] cost rollup is D10 deferred — not yet wired in plugin mode."
+        )
+    )
+    print(
+        "       Use `aegis cost-import transcript --path <Claude Code log>` "
+        "for one-shot backfill."
+    )
+    print(f"       (requested window: --days {args.days})")
     return 0
 
 
 def cmd_health(_: argparse.Namespace) -> int:
-    from monitor.malfunction import overall  # type: ignore[import-not-found]
+    """Runtime malfunction signal — deferred (D7).
 
-    h = overall()
-    print(f"[health] signal = {h['signal'].upper()}  (overall={h['score']})")
-    print(f"  error_rate:  {h['error_rate']:.3f}")
-    print(f"  atv_loop:    {h['atv_loop']:.3f}")
-    print(f"  schema_drift:{h['schema_drift']:.3f}")
-    print(f"  window:      last {h['window']} events")
-    return 0 if h["signal"] != "critical" else 1
+    The runtime malfunction classifier (``aegis.monitor.malfunction``)
+    is scheduled for v2.5 D7. Until then we only surface the
+    ATMU-derived counters which `aegis status` already shows.
+    """
+    print(
+        _yellow(
+            "[health] runtime malfunction classifier is D7 deferred."
+        )
+    )
+    print(
+        "         Use `aegis status` for ATMU-derived "
+        "(committed / aborted / prepared) counts."
+    )
+    return 0
 
 
 def cmd_rollback(args: argparse.Namespace) -> int:
@@ -2164,25 +2288,27 @@ def cmd_audit(args: argparse.Namespace) -> int:
 
 
 def cmd_cost_record(args: argparse.Namespace) -> int:
-    from cost.catalog import estimate_usd  # type: ignore[import-not-found]
-    from wal.writer import _connect  # type: ignore[import-not-found]
+    """Manually record token usage — deferred (D10).
 
-    c = _connect()
-    usd = args.cost or estimate_usd(args.model, args.tokens_in, args.tokens_out)
-    c.execute(
-        """
-        INSERT OR REPLACE INTO outcomes
-          (ts_ns, invocation_id, status, result_hash,
-           tokens_in, tokens_out, model, cost_usd, snapshot_ref)
-        VALUES (strftime('%s','now')*1000000000, ?, 'manual', '', ?, ?, ?, ?, '')
-        """,
-        (args.invocation_id, args.tokens_in, args.tokens_out, args.model, usd),
+    Sidecar mode persists cost via the M12 Cost Attestation Ledger
+    (Ed25519-signed, separate keypair). The plugin-mode equivalent —
+    cost.catalog + wal.writer — is part of the D10 milestone and
+    not yet shipped.
+    """
+    print(
+        _yellow(
+            "[cost-record] manual cost recording is D10 deferred."
+        )
     )
     print(
-        f"[cost record] inv={args.invocation_id}  ${usd:.4f}  "
-        f"({args.tokens_in}+{args.tokens_out} tokens, {args.model})"
+        f"              (requested: inv={args.invocation_id} "
+        f"model={args.model} tokens={args.tokens_in}+{args.tokens_out})"
     )
-    return 0
+    print(
+        "              Sidecar mode persists this via the M12 ledger; "
+        "see `aegis cost-import transcript` for plugin-mode backfill."
+    )
+    return 1
 
 
 def cmd_cost_import(args: argparse.Namespace) -> int:
@@ -2193,32 +2319,34 @@ def cmd_cost_import(args: argparse.Namespace) -> int:
         print(f"[cost-import transcript] {r}")
         return 0 if r.get("status") == "imported" else 1
     if args.source == "admin-api":
-        from cost.usage_api import (  # type: ignore[import-not-found]
-            fetch,
-            import_into_wal,
+        # cost.usage_api (Anthropic Admin API rollup) is D10 deferred.
+        print(
+            _yellow(
+                "[cost-import admin-api] D10 deferred — Anthropic Admin API "
+                "rollup not yet wired in plugin mode."
+            )
         )
-
-        rows = fetch(since=args.since)
-        r = import_into_wal(rows)
-        print(f"[cost-import admin-api] {r}")
-        return 0 if r.get("status") == "imported" else 1
+        print(
+            "                        Use `--source transcript --path <log>` "
+            "(via aegis.cost.transcript) for plugin-mode backfill."
+        )
+        return 1
     return 2
 
 
 def cmd_budget(args: argparse.Namespace) -> int:
-    from cost.budget import load, set_daily, set_per_call  # type: ignore[import-not-found]
-
-    if args.action == "show":
-        print(f"[budget] {load()}")
-        return 0
+    """Daily / per-call budget limits — deferred (D10)."""
+    print(
+        _yellow(
+            "[budget] budget enforcement is D10 deferred — not yet wired "
+            "in plugin mode."
+        )
+    )
     if args.action == "set":
-        if args.daily is not None:
-            set_daily(args.daily)
-        if args.per_call is not None:
-            set_per_call(args.per_call)
-        print(f"[budget set] {load()}")
-        return 0
-    return 2
+        print(
+            f"         (requested: daily={args.daily}  per_call={args.per_call})"
+        )
+    return 1
 
 
 def build_parser() -> argparse.ArgumentParser:
