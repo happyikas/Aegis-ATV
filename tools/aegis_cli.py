@@ -290,24 +290,149 @@ def cmd_policy_replay(args: argparse.Namespace) -> int:
 
 
 def cmd_cost(args: argparse.Namespace) -> int:
-    """Daily / per-agent cost breakdown — deferred (D10).
+    """Cost dispatcher — routes to ``summary`` or ``replay``.
 
-    The cost-tracker module (``aegis.cost.tracker``) and per-agent
-    aggregation pipeline are scheduled for the v2.5 D10 milestone.
-    Until then, plugin-mode users can backfill from a Claude Code
-    transcript via ``aegis cost-import transcript --path …`` —
-    that path uses :mod:`aegis.cost.transcript` which IS shipped.
+    * ``aegis cost summary`` — reads ``~/.aegis/audit.jsonl`` and
+      aggregates step335 traces / escalations / per-tool / per-session
+      into a real-money rollup. No D10 dependency.
+    * ``aegis cost replay <transcript> [--budget X] [--model M]
+      [--hw-provider sim] [--hw-attack ATTACK]`` — replays a Claude
+      Code transcript through the firewall offline so you can
+      experiment with different ceilings, models, and HW attack
+      injection without burning real tokens.
     """
-    print(
-        _yellow(
-            "[cost] cost rollup is D10 deferred — not yet wired in plugin mode."
+    action = getattr(args, "action", None)
+    if action == "summary":
+        return _cmd_cost_summary(args)
+    if action == "replay":
+        return _cmd_cost_replay(args)
+    # Old `--days N` shape kept for backwards compatibility — print a
+    # short hint and exit 0 so users don't get confused by argparse.
+    print(_yellow(
+        "[cost] usage: aegis cost {summary,replay} ...  see --help"
+    ))
+    return 2
+
+
+def _cmd_cost_summary(args: argparse.Namespace) -> int:
+    from aegis.cost.summary import summarize
+
+    audit_path = Path(args.audit) if args.audit else (
+        Path.home() / ".aegis" / "audit.jsonl"
+    )
+    s = summarize(audit_path, spike_threshold=float(args.spike_threshold))
+
+    if args.json:
+        from dataclasses import asdict
+
+        # asdict expands the nested PerTool/PerSession dataclasses too.
+        payload = asdict(s)
+        payload["audit_path"] = str(s.audit_path)
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    if s.n_records_total == 0:
+        print(_yellow(f"[cost summary] no records at {audit_path}"))
+        print("              (the local hook writes to this file on every "
+              "tool call; restart Claude Code or run `aegis status` first)")
+        return 0
+
+    print(f"AegisData cost summary  ({audit_path})")
+    print("=" * 60)
+    print(f"  records:           {s.n_records_total:>8,}  "
+          f"(Pre={s.n_pretool}, Post={s.n_posttool})")
+    print(f"  decisions:         "
+          f"ALLOW {s.n_allow:,}  BLOCK {s.n_block:,}  "
+          f"ASK {s.n_approval:,}")
+    print(f"  max cumulative $:  ${s.max_cumulative_dollars:>10.4f}")
+    print(f"  step335 escalations:    {s.n_step335_escalations:>5,}  "
+          "(budget overrun)")
+    print(f"  M12 cost-divergence:    {s.n_m12_escalations:>5,}  "
+          "(Claim 27)")
+    print(f"  spike events (Δ≥${args.spike_threshold:.2f}): "
+          f"{len(s.spike_events):>5,}")
+    if s.per_tool:
+        print()
+        print("  Top tools by max cumulative $:")
+        for t in s.per_tool[:10]:
+            print(f"    {t.tool:<24} calls={t.n_calls:>5}  "
+                  f"max=${t.max_cumulative_dollars:>9.4f}  "
+                  f"BLOCK={t.n_block}  ASK={t.n_approval}")
+    if s.per_session:
+        print()
+        print("  Top sessions by max cumulative $:")
+        for ss in s.per_session[:10]:
+            print(f"    {ss.aid[:24]:<24} calls={ss.n_calls:>5}  "
+                  f"max=${ss.max_cumulative_dollars:>9.4f}  "
+                  f"escalations={ss.n_escalations}")
+    if s.spike_events:
+        print()
+        print(f"  Recent spikes (Δ≥${args.spike_threshold:.2f}):")
+        for ev in s.spike_events[-5:]:
+            print(f"    aid={ev['aid'][:20]:<20}  tool={ev['tool']:<12}  "
+                  f"${ev['from_dollars']:.4f} → ${ev['to_dollars']:.4f}  "
+                  f"(+${ev['delta']:.4f})")
+    return 0
+
+
+def _cmd_cost_replay(args: argparse.Namespace) -> int:
+    from aegis.cost.replay import ReplayConfig, replay
+
+    config = ReplayConfig(
+        transcript_path=Path(args.transcript),
+        budget_dollars=float(args.budget),
+        model_for_cost=str(args.model),
+        hw_provider=str(args.hw_provider),
+        hw_attack=str(args.hw_attack or ""),
+        multiplier=float(args.multiplier),
+    )
+    if not config.transcript_path.is_file():
+        print(_red(f"[cost replay] transcript not found: {config.transcript_path}"))
+        return 2
+
+    summary = replay(config)
+
+    if args.json:
+        from dataclasses import asdict
+
+        payload = asdict(summary)
+        payload["config"]["transcript_path"] = str(
+            summary.config.transcript_path
         )
-    )
-    print(
-        "       Use `aegis cost-import transcript --path <Claude Code log>` "
-        "for one-shot backfill."
-    )
-    print(f"       (requested window: --days {args.days})")
+        print(json.dumps(payload, indent=2, default=str))
+        return 0
+
+    print(f"AegisData cost replay  ({config.transcript_path})")
+    print("=" * 70)
+    print(f"  budget:    ${config.budget_dollars}")
+    print(f"  model:     {config.model_for_cost}")
+    print(f"  HW:        provider={config.hw_provider} attack={config.hw_attack or '(none)'}")
+    print(f"  multiplier: {config.multiplier}× M12 escalation baseline")
+    print("-" * 70)
+    print(f"  turns:           {summary.n_turns_total:>4}")
+    print(f"  tool calls:      {summary.n_tool_calls:>4}")
+    print(f"  final cum $:     ${summary.final_cumulative_dollars:.4f}")
+    print(f"  decisions:       ALLOW {summary.n_allow}  BLOCK {summary.n_block}  ASK {summary.n_approval}")
+    print(f"  step335 hits:    {summary.n_step335_escalations}")
+    print(f"  M12 hits:        {summary.n_m12_escalations}")
+    if summary.first_escalation_turn is not None:
+        print(f"  first non-ALLOW: turn {summary.first_escalation_turn}")
+    if not summary.calls:
+        return 0
+    print()
+    print(f"  {'turn':>4}  {'tool':<14}  {'cum_$':>9}  {'decision':<18}  reason")
+    for c in summary.calls:
+        decided = c.decision
+        colored = (
+            _green(decided) if decided == "ALLOW"
+            else _yellow(decided) if decided == "REQUIRE_APPROVAL"
+            else _red(decided)
+        )
+        # Pad with raw decision so columns align (color escapes are zero-width).
+        pad = " " * max(0, 18 - len(decided))
+        reason = (c.reason[:90] + "…") if len(c.reason) > 90 else c.reason
+        print(f"  {c.turn_idx:>4}  {c.tool_name[:14]:<14}  "
+              f"${c.cumulative_dollars:>8.4f}  {colored}{pad}  {reason}")
     return 0
 
 
@@ -2374,9 +2499,72 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--limit", type=int, default=10000)
     pr.set_defaults(fn=cmd_policy_replay)
 
-    co = sub.add_parser("cost")
-    co.add_argument("--days", type=int, default=7)
-    co.set_defaults(fn=cmd_cost)
+    co = sub.add_parser(
+        "cost",
+        help="Cost rollup (`summary`) and what-if replay (`replay`).",
+    )
+    co_sub = co.add_subparsers(dest="action")
+    co_sum = co_sub.add_parser(
+        "summary",
+        help="Aggregate ~/.aegis/audit.jsonl: max cumulative $, escalations, "
+        "per-tool, per-session, spikes.",
+    )
+    co_sum.add_argument(
+        "--audit",
+        default=None,
+        help="Audit JSONL path (default: ~/.aegis/audit.jsonl).",
+    )
+    co_sum.add_argument(
+        "--spike-threshold",
+        type=float,
+        default=0.10,
+        help="Min $ jump within a session that counts as a spike event "
+        "(default: 0.10).",
+    )
+    co_sum.add_argument("--json", action="store_true", help="Emit JSON instead of a table.")
+    co_sum.set_defaults(fn=cmd_cost)
+    co_rep = co_sub.add_parser(
+        "replay",
+        help="Replay a Claude Code transcript through the firewall offline. "
+        "Useful for what-if budget / model / attack experiments.",
+    )
+    co_rep.add_argument(
+        "transcript",
+        help="Path to a Claude Code transcript .jsonl",
+    )
+    co_rep.add_argument(
+        "--budget",
+        type=float,
+        default=1.0,
+        help="Budget ceiling in dollars (default: 1.0 — same as DEFAULT_BUDGET).",
+    )
+    co_rep.add_argument(
+        "--model",
+        default="claude-haiku-4-5",
+        help="Model name for the FLOPS table → cumulative_dollars conversion.",
+    )
+    co_rep.add_argument(
+        "--hw-provider",
+        choices=["none", "sim"],
+        default="none",
+        help="HW band source. Use `sim` to enable step337 + M12 cost-divergence.",
+    )
+    co_rep.add_argument(
+        "--hw-attack",
+        default="",
+        help="Comma-separated subset of "
+        "{token_flops_mismatch,hbm_exfil,cost_underreport,thermal_spike,"
+        "network_exfil,iommu_violation} (only meaningful with --hw-provider sim).",
+    )
+    co_rep.add_argument(
+        "--multiplier",
+        type=float,
+        default=3.0,
+        help="M12 escalation multiplier × baseline (default: 3.0 — Claim 27).",
+    )
+    co_rep.add_argument("--json", action="store_true", help="Emit JSON instead of a table.")
+    co_rep.set_defaults(fn=cmd_cost)
+    co.set_defaults(fn=cmd_cost, action=None)
 
     sub.add_parser("health").set_defaults(fn=cmd_health)
 
