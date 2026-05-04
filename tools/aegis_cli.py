@@ -306,10 +306,12 @@ def cmd_cost(args: argparse.Namespace) -> int:
         return _cmd_cost_summary(args)
     if action == "replay":
         return _cmd_cost_replay(args)
+    if action == "multi-agent":
+        return _cmd_cost_multi_agent(args)
     # Old `--days N` shape kept for backwards compatibility — print a
     # short hint and exit 0 so users don't get confused by argparse.
     print(_yellow(
-        "[cost] usage: aegis cost {summary,replay} ...  see --help"
+        "[cost] usage: aegis cost {summary,replay,multi-agent} ...  see --help"
     ))
     return 2
 
@@ -434,6 +436,123 @@ def _cmd_cost_replay(args: argparse.Namespace) -> int:
         print(f"  {c.turn_idx:>4}  {c.tool_name[:14]:<14}  "
               f"${c.cumulative_dollars:>8.4f}  {colored}{pad}  {reason}")
     return 0
+
+
+def _cmd_cost_multi_agent(args: argparse.Namespace) -> int:
+    """Multi-agent (fleet) cost replay — interleaves N transcripts,
+    accumulates fleet $, fires notifier on threshold crossings."""
+    from aegis.cost.multi_agent import (
+        AgentReplayInput,
+        FleetThreshold,
+        StderrNotifier,
+        multi_agent_replay,
+    )
+    from aegis.cost.replay import ReplayConfig
+
+    raw_paths = [p.strip() for p in str(args.transcripts).split(",")]
+    paths = [Path(p) for p in raw_paths if p]
+    if not paths:
+        print(
+            _red("[cost multi-agent] need --transcripts a.jsonl,b.jsonl,..."),
+            file=sys.stderr,
+        )
+        return 2
+    missing = [p for p in paths if not p.is_file()]
+    if missing:
+        for p in missing:
+            print(
+                _red(f"[cost multi-agent] transcript not found: {p}"),
+                file=sys.stderr,
+            )
+        return 2
+
+    agents = [
+        AgentReplayInput(transcript_path=p, aid=f"agent-{i + 1}")
+        for i, p in enumerate(paths)
+    ]
+    template = ReplayConfig(
+        transcript_path=paths[0],          # placeholder; overridden per agent
+        budget_dollars=float(args.per_agent_budget),
+        model_for_cost=str(args.model),
+        hw_provider=str(args.hw_provider),
+        hw_attack=str(args.hw_attack or ""),
+        multiplier=float(args.multiplier),
+    )
+    thresholds: list[FleetThreshold] = []
+    if args.threshold is not None:
+        thresholds.append(
+            FleetThreshold(
+                dollars=float(args.threshold),
+                label="warn",
+                interactive=bool(args.interactive),
+            )
+        )
+    if args.hard_stop is not None:
+        thresholds.append(
+            FleetThreshold(
+                dollars=float(args.hard_stop),
+                label="hard_stop",
+                interactive=bool(args.interactive),
+            )
+        )
+    if not thresholds:
+        # Sensible defaults so the command does something useful with
+        # --transcripts alone.
+        thresholds = [
+            FleetThreshold(dollars=5.0, label="warn"),
+            FleetThreshold(dollars=20.0, label="hard_stop"),
+        ]
+
+    notifier = StderrNotifier(interactive=bool(args.interactive))
+    summary = multi_agent_replay(
+        agents,
+        thresholds=thresholds,
+        config_template=template,
+        notifier=notifier,
+    )
+
+    if args.json:
+        from dataclasses import asdict
+
+        payload = asdict(summary)
+        # ReplayConfig path inside per-call may have Path; serialise
+        # deterministically.
+        print(json.dumps(payload, indent=2, default=str))
+        return 0 if summary.aborted_at_call is None else 3
+
+    print("AegisData multi-agent cost replay")
+    print("=" * 70)
+    print(f"  agents:                 {summary.n_agents}")
+    print(f"  fleet calls:            {summary.n_total_calls}")
+    print(f"  final fleet $:          ${summary.final_fleet_dollars:.4f}")
+    print(f"  threshold crossings:    {len(summary.crossings)}")
+    if summary.aborted_at_call is not None:
+        print(_red(f"  ⚠ ABORTED at fleet call #{summary.aborted_at_call}"))
+    print()
+    print("  Per-agent contribution:")
+    for aid, dollars in sorted(
+        summary.per_agent_dollars.items(),
+        key=lambda kv: kv[1], reverse=True,
+    ):
+        print(f"    {aid:<12} ${dollars:>10.4f}")
+    if summary.crossings:
+        print()
+        print("  Threshold crossings:")
+        for c in summary.crossings:
+            label_color = (
+                _red if c.threshold.label == "hard_stop" else _yellow
+            )
+            decision_color = (
+                _green if c.operator_decision == "continue" else _red
+            )
+            print(
+                f"    call#{c.crossed_at_call:<4} "
+                f"{label_color(c.threshold.label):<22} "
+                f"${c.fleet_dollars_before:.4f} → ${c.fleet_dollars_after:.4f}  "
+                f"agent={c.aid_at_crossing}  "
+                f"→ {decision_color(c.operator_decision)}"
+            )
+    return 0 if summary.aborted_at_call is None else 3
 
 
 def cmd_health(_: argparse.Namespace) -> int:
@@ -2564,6 +2683,66 @@ def build_parser() -> argparse.ArgumentParser:
     )
     co_rep.add_argument("--json", action="store_true", help="Emit JSON instead of a table.")
     co_rep.set_defaults(fn=cmd_cost)
+
+    co_mult = co_sub.add_parser(
+        "multi-agent",
+        help="Replay N transcripts as a fleet, fire warn/hard-stop "
+        "thresholds on cumulative fleet cost. Useful for "
+        "what-if multi-agent budget experiments.",
+    )
+    co_mult.add_argument(
+        "--transcripts",
+        required=True,
+        help="Comma-separated list of transcript .jsonl paths (one per agent).",
+    )
+    co_mult.add_argument(
+        "--per-agent-budget",
+        type=float,
+        default=1.0,
+        help="step335 ceiling per agent (default: 1.0).",
+    )
+    co_mult.add_argument(
+        "--threshold",
+        type=float,
+        default=None,
+        help="Fleet $ at which to fire a WARN crossing (default: 5.0).",
+    )
+    co_mult.add_argument(
+        "--hard-stop",
+        type=float,
+        default=None,
+        help="Fleet $ at which to ABORT the replay (default: 20.0).",
+    )
+    co_mult.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Prompt y/N from stdin at each crossing — empty/no → abort.",
+    )
+    co_mult.add_argument(
+        "--model",
+        default="claude-haiku-4-5",
+        help="Model name for the FLOPS table (per-agent).",
+    )
+    co_mult.add_argument(
+        "--hw-provider",
+        choices=["none", "sim"],
+        default="none",
+        help="HW band source (per-agent).",
+    )
+    co_mult.add_argument(
+        "--hw-attack",
+        default="",
+        help="HW attack to inject (only with --hw-provider sim).",
+    )
+    co_mult.add_argument(
+        "--multiplier",
+        type=float,
+        default=3.0,
+        help="M12 escalation multiplier × baseline (default: 3.0).",
+    )
+    co_mult.add_argument("--json", action="store_true", help="Emit JSON instead of a table.")
+    co_mult.set_defaults(fn=cmd_cost)
+
     co.set_defaults(fn=cmd_cost, action=None)
 
     sub.add_parser("health").set_defaults(fn=cmd_health)
