@@ -199,3 +199,51 @@ def test_module_imports_dont_crash() -> None:
     """A second import of the module should be a no-op."""
     importlib.reload(aegis_local_hook)
     assert hasattr(aegis_local_hook, "handle_pretool")
+
+
+def test_hw_provider_sim_populates_band(
+    _isolated_audit: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``AEGIS_HW_PROVIDER=sim`` must feed real signals into step337.
+
+    Regression test for the plugin-mode bug where ``build_atv(inp)`` was
+    called without ``hw=``, so the simulator was effectively unreachable
+    from the local hook and step337 always reported "HW band zero (T2
+    default)" — leaving the HW anomaly gate dead code in plugin mode.
+    """
+    monkeypatch.setenv("AEGIS_HW_PROVIDER", "sim")
+    rc, _, _ = _run(
+        {
+            "hook_event_name": "PreToolUse",
+            "session_id": "sess-hw",
+            "invocation_id": "inv-hw-1",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls -la"},
+        }
+    )
+    assert rc == 0
+    rec = json.loads(_isolated_audit.read_text().strip().splitlines()[-1])
+    s337 = rec["explain"]["step_traces"]["aegis.firewall.step337_hw_anomaly.run"]
+    assert "T2 default" not in s337, (
+        f"step337 should see populated HW band under sim provider; got {s337!r}"
+    )
+
+
+def test_hw_provider_default_keeps_band_zero(
+    _isolated_audit: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without ``AEGIS_HW_PROVIDER``, the HW band stays zero-filled (T2 default)."""
+    monkeypatch.delenv("AEGIS_HW_PROVIDER", raising=False)
+    rc, _, _ = _run(
+        {
+            "hook_event_name": "PreToolUse",
+            "session_id": "sess-no-hw",
+            "invocation_id": "inv-no-hw-1",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls -la"},
+        }
+    )
+    assert rc == 0
+    rec = json.loads(_isolated_audit.read_text().strip().splitlines()[-1])
+    s337 = rec["explain"]["step_traces"]["aegis.firewall.step337_hw_anomaly.run"]
+    assert "T2 default" in s337 or "zero" in s337.lower()
