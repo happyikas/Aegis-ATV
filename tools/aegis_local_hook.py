@@ -362,7 +362,20 @@ def handle_pretool(stdin: Any, stdout: Any) -> int:
 
     t0 = time.perf_counter_ns()
     inp = from_claude_code_payload(event, tenant_id=TENANT)
-    atv: np.ndarray = build_atv(inp)
+
+    # v2.3 HW telemetry — AEGIS_HW_PROVIDER=sim populates the 200-D HW
+    # band so step337 + M12 cost-divergence can fire on real signals.
+    # Returns None (zero-fill) when the env var is unset/none, matching
+    # the sidecar's behaviour in src/aegis/api/evaluate.py.
+    hw_counters = None
+    try:
+        from aegis.hw_telemetry.simulator import simulate_from_env
+
+        hw_counters = simulate_from_env(inp)
+    except Exception:  # noqa: BLE001 — HW telemetry must never block
+        hw_counters = None
+
+    atv: np.ndarray = build_atv(inp, hw=hw_counters)
 
     # M10 ATMU phase 1 — record TENTATIVE intent BEFORE the firewall.
     # Returns ``None`` if ATMU is disabled / initialisation failed; the
