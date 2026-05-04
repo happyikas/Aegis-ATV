@@ -33,8 +33,24 @@ APPROACHING_FRACTION = 0.8
 
 
 def run(atv: np.ndarray, inp: ATVInput, ctx: FirewallContext) -> StepResult:
-    budget = TENANT_BUDGETS.get(inp.header.tenant_id, DEFAULT_BUDGET)
-    ceiling = float(budget.get("dollars", DEFAULT_BUDGET["dollars"]))
+    # PR #5 — try the persisted BudgetStore first; fall back to the
+    # in-memory TENANT_BUDGETS dict (legacy + cost-replay overrides).
+    ceiling: float
+    legacy = TENANT_BUDGETS.get(inp.header.tenant_id)
+    if legacy is not None:
+        ceiling = float(legacy.get("dollars", DEFAULT_BUDGET["dollars"]))
+    else:
+        try:
+            from aegis.cost.budget_store import get_default_store
+
+            store = get_default_store()
+            if store is not None:
+                budget = store.get_for(inp.header.tenant_id)
+                ceiling = float(budget.daily_dollars)
+            else:
+                ceiling = float(DEFAULT_BUDGET["dollars"])
+        except Exception:  # noqa: BLE001 — never block the firewall on infra
+            ceiling = float(DEFAULT_BUDGET["dollars"])
 
     ce = inp.cost_estimate
     forecast = float(ce.forecasted_cost_to_completion)

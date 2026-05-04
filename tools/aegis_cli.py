@@ -2773,18 +2773,83 @@ def cmd_cost_import(args: argparse.Namespace) -> int:
 
 
 def cmd_budget(args: argparse.Namespace) -> int:
-    """Daily / per-call budget limits — deferred (D10)."""
-    print(
-        _yellow(
-            "[budget] budget enforcement is D10 deferred — not yet wired "
-            "in plugin mode."
-        )
+    """Persistent per-tenant budget config (PR #5).
+
+    * ``aegis budget show`` — list every persisted tenant + the
+      default fallback.
+    * ``aegis budget set --tenant T --daily X [--per-call Y]`` —
+      upsert one tenant's budget. step335 reads from this on
+      every PreToolUse.
+    * ``aegis budget delete --tenant T`` — drop a row.
+    """
+    from aegis.cost.budget_store import (
+        DEFAULT_DAILY_DOLLARS,
+        BudgetStore,
     )
+
+    store = BudgetStore()
+    tenant = (
+        getattr(args, "tenant", None) or "default"
+    )
+
+    if args.action == "show":
+        budgets = store.list_all()
+        if not budgets:
+            print(_yellow(
+                f"[budget show] no persisted budgets — default daily "
+                f"ceiling is ${DEFAULT_DAILY_DOLLARS:.2f}"
+            ))
+            return 0
+        print("[budget show] persisted budgets:")
+        print(f"  {'tenant':<24}  {'daily $':>10}  {'per-call $':>12}  "
+              f"{'updated':>20}")
+        for b in budgets:
+            from datetime import datetime
+            updated = datetime.fromtimestamp(
+                b.updated_at_ns / 1_000_000_000
+            ).isoformat(timespec="seconds")
+            pc = (
+                f"${b.per_call_dollars:.4f}"
+                if b.per_call_dollars is not None
+                else "—"
+            )
+            print(
+                f"  {b.tenant_id:<24}  ${b.daily_dollars:>9.4f}  "
+                f"{pc:>12}  {updated:>20}"
+            )
+        return 0
+
     if args.action == "set":
-        print(
-            f"         (requested: daily={args.daily}  per_call={args.per_call})"
-        )
-    return 1
+        if args.daily is None:
+            print(_red("[budget set] --daily X required"), file=sys.stderr)
+            return 2
+        try:
+            b = store.set(
+                tenant,
+                daily_dollars=float(args.daily),
+                per_call_dollars=(
+                    float(args.per_call)
+                    if args.per_call is not None else None
+                ),
+            )
+        except ValueError as e:
+            print(_red(f"[budget set] {e}"), file=sys.stderr)
+            return 2
+        print(_green(f"✓ budget set for tenant '{b.tenant_id}'"))
+        print(f"  daily:    ${b.daily_dollars:.4f}")
+        if b.per_call_dollars is not None:
+            print(f"  per call: ${b.per_call_dollars:.4f}")
+        return 0
+
+    if args.action == "delete":
+        deleted = store.delete(tenant)
+        if deleted:
+            print(_green(f"✓ deleted budget for tenant '{tenant}'"))
+            return 0
+        print(_yellow(f"[budget delete] no budget for tenant '{tenant}'"))
+        return 1
+
+    return 2
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -3178,10 +3243,18 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Anthropic admin key (or set ANTHROPIC_ADMIN_KEY env)")
     ci.set_defaults(fn=cmd_cost_import)
 
-    bg = sub.add_parser("budget", help="Show or set budget limits")
-    bg.add_argument("action", choices=["show", "set"])
-    bg.add_argument("--daily", type=float)
-    bg.add_argument("--per-call", type=float, dest="per_call")
+    bg = sub.add_parser(
+        "budget",
+        help="Persistent per-tenant budget config (PR #5). step335 "
+        "reads these on every PreToolUse.",
+    )
+    bg.add_argument("action", choices=["show", "set", "delete"])
+    bg.add_argument("--tenant", default="default",
+                    help="Tenant id (default: 'default').")
+    bg.add_argument("--daily", type=float, default=None,
+                    help="Daily ceiling in dollars (required for `set`).")
+    bg.add_argument("--per-call", type=float, dest="per_call", default=None,
+                    help="Optional per-call ceiling.")
     bg.set_defaults(fn=cmd_budget)
 
     bl = sub.add_parser(
