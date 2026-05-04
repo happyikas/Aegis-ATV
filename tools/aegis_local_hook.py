@@ -52,6 +52,15 @@ LOCAL_AUDIT_PATH = Path(
         "AEGIS_LOCAL_AUDIT", str(Path.home() / ".aegis" / "audit.jsonl")
     )
 )
+# ATMU 2PC intent log (M10) — per-process SQLite WAL. Disabled when
+# AEGIS_ATMU_DISABLE=1 so users running on read-only file systems can
+# opt out without touching code. Default path: ~/.aegis/intent_log.sqlite.
+LOCAL_INTENT_LOG_PATH = Path(
+    os.environ.get(
+        "AEGIS_INTENT_LOG_DB", str(Path.home() / ".aegis" / "intent_log.sqlite")
+    )
+)
+ATMU_DISABLED = os.environ.get("AEGIS_ATMU_DISABLE", "0") == "1"
 
 
 def _emit(msg: str) -> None:
@@ -190,6 +199,128 @@ def _build_explain_block(atv: Any, inp: Any, verdict: Any) -> dict[str, Any]:
     return explain
 
 
+_INTENT_LOG_SINGLETON: Any = None
+
+
+def _get_intent_log() -> Any:
+    """Lazy per-process IntentLog singleton.
+
+    Returns ``None`` when ATMU is disabled or initialisation fails so
+    every caller can short-circuit safely. The hook must NEVER block
+    a tool call because of intent-log trouble — its job is forensic
+    bookkeeping, not gating.
+    """
+    global _INTENT_LOG_SINGLETON
+    if ATMU_DISABLED:
+        return None
+    if _INTENT_LOG_SINGLETON is not None:
+        return _INTENT_LOG_SINGLETON
+    try:
+        LOCAL_INTENT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        from aegis.atmu import IntentLog
+
+        _INTENT_LOG_SINGLETON = IntentLog(str(LOCAL_INTENT_LOG_PATH))
+        return _INTENT_LOG_SINGLETON
+    except Exception as e:  # noqa: BLE001 — never block on infra failure
+        if VERBOSE:
+            _emit(f"ATMU disabled (init failed): {e}")
+        return None
+
+
+def _atmu_open_intent(inp: Any, atv: Any) -> str | None:
+    """Phase 1 of 2PC — record TENTATIVE intent before the firewall runs.
+
+    The ``record_id`` is the deterministic ``span_id`` so the
+    PostToolUse hook (a separate process) can recompute and close
+    the same record without a mapping table.
+
+    Returns the record_id on success, ``None`` if ATMU is disabled
+    or the append failed (in which case the caller proceeds without
+    transactional bookkeeping).
+    """
+    log = _get_intent_log()
+    if log is None:
+        return None
+    try:
+        import hashlib
+
+        from aegis.atmu.checkpoint import make_checkpoint
+        from aegis.atmu.compensating import plan_for
+        from aegis.firewall.step320_blast import (
+            TOOL_BLAST_TABLE,
+            UNKNOWN_TOOL_BLAST,
+        )
+
+        args_hash = hashlib.sha3_256(
+            inp.tool_args_json.encode("utf-8")
+        ).hexdigest()
+        atv_commitment = hashlib.sha3_256(atv.tobytes()).hexdigest()
+        blast = TOOL_BLAST_TABLE.get(inp.tool_name, UNKNOWN_TOOL_BLAST)
+        checkpoint = make_checkpoint(inp, blast)
+        rec = log.append_tentative(
+            aid=inp.header.aid,
+            tenant_id=inp.header.tenant_id,
+            trace_id=inp.header.trace_id,
+            span_id=inp.header.span_id,
+            parent_span_id=inp.header.parent_span_id,
+            tool_name=inp.tool_name,
+            tool_args_hash=args_hash,
+            blast_radius=blast,
+            atv_commitment=atv_commitment,
+            checkpoint_id=(
+                checkpoint["checkpoint_id"] if checkpoint else None
+            ),
+            cost_profile=inp.header.cost_attestation_profile,
+            record_id=inp.header.span_id,
+        )
+        comp = plan_for(inp.tool_name)
+        if comp is not None:
+            log.set_compensation_plan(rec["record_id"], comp)
+        return str(rec["record_id"])
+    except Exception as e:  # noqa: BLE001
+        if VERBOSE:
+            _emit(f"ATMU open_intent failed: {e}")
+        return None
+
+
+def _atmu_finalize_intent(record_id: str | None, decision: str, reason: str) -> None:
+    """Phase 1.5 of 2PC — drive the intent record to its post-firewall state.
+
+    * ``ALLOW``           — TENTATIVE → PREPARED → COMMITTED
+    * ``REQUIRE_APPROVAL`` — TENTATIVE → PREPARED (committed at /approve time)
+    * ``BLOCK``            — TENTATIVE → ABORTED
+    """
+    if record_id is None:
+        return
+    log = _get_intent_log()
+    if log is None:
+        return
+    try:
+        from aegis.atmu import TxState
+
+        if decision == "BLOCK":
+            log.transition(
+                record_id,
+                new_state=TxState.ABORTED,
+                reason=f"firewall block: {reason}"[:200],
+            )
+        else:
+            log.transition(
+                record_id,
+                new_state=TxState.PREPARED,
+                reason=f"firewall {decision.lower()}",
+            )
+            if decision == "ALLOW":
+                log.transition(
+                    record_id,
+                    new_state=TxState.COMMITTED,
+                    reason="audit signed, host may execute",
+                )
+    except Exception as e:  # noqa: BLE001
+        if VERBOSE:
+            _emit(f"ATMU finalize_intent failed: {e}")
+
+
 def _append_audit(record: dict[str, Any]) -> None:
     """Append a chained audit record (v2.1.5 local-mode integrity).
 
@@ -232,7 +363,17 @@ def handle_pretool(stdin: Any, stdout: Any) -> int:
     t0 = time.perf_counter_ns()
     inp = from_claude_code_payload(event, tenant_id=TENANT)
     atv: np.ndarray = build_atv(inp)
+
+    # M10 ATMU phase 1 — record TENTATIVE intent BEFORE the firewall.
+    # Returns ``None`` if ATMU is disabled / initialisation failed; the
+    # rest of the path runs unchanged in that case.
+    intent_record_id = _atmu_open_intent(inp, atv)
+
     verdict = run_firewall(atv, inp, atv_id=inp.header.span_id)
+
+    # M10 ATMU phase 1.5 — transition based on the firewall verdict.
+    _atmu_finalize_intent(intent_record_id, verdict.decision, verdict.reason or "")
+
     elapsed_ms = (time.perf_counter_ns() - t0) / 1_000_000
 
     tool_name = event.get("tool_name", "") or inp.tool_name
@@ -247,6 +388,8 @@ def handle_pretool(stdin: Any, stdout: Any) -> int:
     # signal is a pure function of (atv, inp, verdict), so adding them
     # here doesn't change firewall behaviour.
     explain_block = _build_explain_block(atv, inp, verdict)
+    if intent_record_id is not None:
+        explain_block["intent_record_id"] = intent_record_id
     _append_audit(
         {
             "ts_ns": time.time_ns(),
