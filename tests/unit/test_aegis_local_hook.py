@@ -247,3 +247,95 @@ def test_hw_provider_default_keeps_band_zero(
     rec = json.loads(_isolated_audit.read_text().strip().splitlines()[-1])
     s337 = rec["explain"]["step_traces"]["aegis.firewall.step337_hw_anomaly.run"]
     assert "T2 default" in s337 or "zero" in s337.lower()
+
+
+def _write_transcript(
+    path: Path, *, in_tokens: int, out_tokens: int, n_assistant_turns: int = 1
+) -> None:
+    """Synthesize a minimal Claude Code transcript JSONL.
+
+    Three line types are enough to drive ``transcript_reader``:
+    one user message, then ``n_assistant_turns`` assistant messages
+    each carrying a ``usage`` block.
+    """
+    lines: list[str] = [json.dumps({"type": "user", "content": "hi"})]
+    for _ in range(n_assistant_turns):
+        lines.append(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "content": "ok",
+                    "usage": {
+                        "input_tokens": in_tokens,
+                        "output_tokens": out_tokens,
+                    },
+                }
+            )
+        )
+    # transcript_reader requires ≥ _MIN_TRANSCRIPT_BYTES; pad with a
+    # comment-style line that the parser ignores.
+    lines.append('{"type":"user","content":"' + ("x" * 200) + '"}')
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_transcript_aware_adapter_populates_cost_estimate(
+    _isolated_audit: Path, tmp_path: Path
+) -> None:
+    """When ``transcript_path`` is present, cost slots flow into the ATV.
+
+    Regression test for the plugin-mode gap where ``cost_estimate`` was
+    always zero (sparse adapter), making step335's budget gate
+    effectively a no-op. After the v2.4.x wiring the local hook calls
+    ``from_claude_code_payload_enhanced`` so cumulative tokens / dollars
+    are pulled from the transcript on every PreToolUse.
+    """
+    transcript = tmp_path / "session.jsonl"
+    _write_transcript(transcript, in_tokens=10_000, out_tokens=2_000)
+
+    rc, _, _ = _run(
+        {
+            "hook_event_name": "PreToolUse",
+            "session_id": "sess-cost",
+            "invocation_id": "inv-cost-1",
+            "tool_name": "Read",
+            "tool_input": {"file_path": "/tmp/x"},
+            "transcript_path": str(transcript),
+        }
+    )
+    assert rc == 0
+
+    rec = json.loads(_isolated_audit.read_text().strip().splitlines()[-1])
+    s335 = rec["explain"]["step_traces"]["aegis.firewall.step335_cost.run"]
+    # The synthesized 12 000-token transcript at ~$1.5e-15 / FLOP × Haiku
+    # 4-5's FLOPs/token table is well under the $1.0 ceiling, so the
+    # gate stays "ok" — but ``cum=`` MUST now be a non-zero number,
+    # proving cost_estimate was lifted from the transcript.
+    import re
+    cum_match = re.search(r"cum=([\d.]+)", s335)
+    assert cum_match is not None, f"step335 trace shape unexpected: {s335!r}"
+    cum = float(cum_match.group(1))
+    assert cum > 0.0, (
+        "transcript-aware adapter should produce non-zero "
+        f"cumulative_dollars; got step335={s335!r}"
+    )
+
+
+def test_missing_transcript_falls_back_to_sparse(
+    _isolated_audit: Path, tmp_path: Path
+) -> None:
+    """transcript_path pointing at a non-existent file → graceful fallback."""
+    rc, _, _ = _run(
+        {
+            "hook_event_name": "PreToolUse",
+            "session_id": "sess-no-transcript",
+            "invocation_id": "inv-no-t-1",
+            "tool_name": "Read",
+            "tool_input": {"file_path": "/tmp/y"},
+            "transcript_path": str(tmp_path / "does-not-exist.jsonl"),
+        }
+    )
+    assert rc == 0
+    rec = json.loads(_isolated_audit.read_text().strip().splitlines()[-1])
+    s335 = rec["explain"]["step_traces"]["aegis.firewall.step335_cost.run"]
+    # Sparse fallback → cumulative_dollars stays at 0.0
+    assert "cum=0.0000" in s335

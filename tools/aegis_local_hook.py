@@ -47,6 +47,10 @@ from typing import Any
 TENANT = os.environ.get("AEGIS_TENANT_ID", "claude-code-local")
 APPROVE_AS_BLOCK = os.environ.get("AEGIS_APPROVE_AS_BLOCK", "1") == "1"
 VERBOSE = os.environ.get("AEGIS_HOOK_VERBOSE", "0") == "1"
+# Model the host is actually serving — feeds the cost FLOPS table so
+# CostEfficiencyMetrics.cumulative_dollars and step335 budget gate
+# evaluate against the right $/token. Override per-deployment.
+MODEL_FOR_COST = os.environ.get("AEGIS_MODEL_FOR_COST", "claude-haiku-4-5")
 LOCAL_AUDIT_PATH = Path(
     os.environ.get(
         "AEGIS_LOCAL_AUDIT", str(Path.home() / ".aegis" / "audit.jsonl")
@@ -356,12 +360,29 @@ def handle_pretool(stdin: Any, stdout: Any) -> int:
     # Lazy imports keep startup small for the no-stdin / malformed case.
     import numpy as np
 
-    from aegis.atv.adapter import from_claude_code_payload
+    from aegis.atv.adapter import (
+        from_claude_code_payload,
+        from_claude_code_payload_enhanced,
+    )
     from aegis.atv.builder import build_atv
     from aegis.firewall.core import run_firewall
 
     t0 = time.perf_counter_ns()
-    inp = from_claude_code_payload(event, tenant_id=TENANT)
+    # Transcript-aware ATV builder when Claude Code passed transcript_path
+    # (PreToolUse always does in v1.0+). Populates agent_state_text /
+    # plan_text / recent_actions / memory_fingerprint / cost_estimate /
+    # session_behavior — making step335 budget gate, novelty, and
+    # session-drift signals real instead of zero. Falls back to the
+    # sparse builder on missing / unparseable transcript so the hook
+    # NEVER blocks a tool call because of transcript I/O.
+    try:
+        inp = from_claude_code_payload_enhanced(
+            event, tenant_id=TENANT, model_for_cost=MODEL_FOR_COST,
+        )
+    except Exception as e:  # noqa: BLE001 — fall back, never block
+        if VERBOSE:
+            _emit(f"enhanced adapter failed ({e}) — falling back to sparse")
+        inp = from_claude_code_payload(event, tenant_id=TENANT)
 
     # v2.3 HW telemetry — AEGIS_HW_PROVIDER=sim populates the 200-D HW
     # band so step337 + M12 cost-divergence can fire on real signals.
