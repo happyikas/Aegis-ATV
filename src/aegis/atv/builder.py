@@ -206,20 +206,58 @@ def encode_resource_access_pattern(inp: ATVInput) -> np.ndarray:
 
 
 def encode_prompt_structure(inp: ATVInput) -> np.ndarray:
-    """16-D structured features of the prompt text."""
-    txt = inp.plan_text
-    if not txt:
-        return np.zeros(16, dtype=np.float32)
+    """16-D structured features of the prompt text.
+
+    Slot map
+    --------
+    [0]  length-norm           (len / 4000)
+    [1]  line density          (\\n count / 50)
+    [2]  uppercase ratio
+    [3]  punctuation density   ((!? + similar) × 50 / len)
+    [4]  prompt-injection keyword presence (ignore / disregard / override)
+    [5]  system-prompt keyword presence
+    [6]  code-block presence (\\`\\`\\`)
+    [7]  URL count proxy       (http occurrences / 10)
+    [8]  ALL-CAPS tokens       (count(\\b[A-Z]{4+}) / 10)
+    [9]  attention_summary.entropy_normalized      (v4.3)
+    [10] attention_summary.top_k_concentration     (v4.3)
+    [11] attention_summary.sink_presence           (v4.3)
+    [12] attention_summary.recency_bias            (v4.3)
+    [13] attention_summary.effective_rank          (v4.3)
+    [14] reserved
+    [15] reserved
+    """
     arr = np.zeros(16, dtype=np.float32)
-    arr[0] = min(1.0, len(txt) / 4000.0)                                              # length-norm
-    arr[1] = min(1.0, txt.count("\n") / 50.0)                                          # line density
-    arr[2] = min(1.0, sum(c.isupper() for c in txt) / max(len(txt), 1))                # uppercase ratio
-    arr[3] = min(1.0, sum(c in "!?" for c in txt) / max(len(txt), 1) * 50)             # punctuation density
-    arr[4] = float(any(kw in txt.lower() for kw in ("ignore", "disregard", "override")))
-    arr[5] = float(any(kw in txt.lower() for kw in ("system", "prompt", "instruction")))
-    arr[6] = float("```" in txt)                                                       # code-block presence
-    arr[7] = min(1.0, txt.count("http") / 10.0)                                        # URL count proxy
-    arr[8] = min(1.0, len(re.findall(r"\b[A-Z]{4,}\b", txt)) / 10.0)                   # ALL-CAPS tokens
+    txt = inp.plan_text
+    if txt:
+        arr[0] = min(1.0, len(txt) / 4000.0)
+        arr[1] = min(1.0, txt.count("\n") / 50.0)
+        arr[2] = min(1.0, sum(c.isupper() for c in txt) / max(len(txt), 1))
+        arr[3] = min(
+            1.0, sum(c in "!?" for c in txt) / max(len(txt), 1) * 50
+        )
+        arr[4] = float(any(
+            kw in txt.lower()
+            for kw in ("ignore", "disregard", "override")
+        ))
+        arr[5] = float(any(
+            kw in txt.lower()
+            for kw in ("system", "prompt", "instruction")
+        ))
+        arr[6] = float("```" in txt)
+        arr[7] = min(1.0, txt.count("http") / 10.0)
+        arr[8] = min(
+            1.0, len(re.findall(r"\b[A-Z]{4,}\b", txt)) / 10.0
+        )
+    summary = inp.attention_summary
+    if summary is not None:
+        # Clip into [0, 1]; the runtime is responsible for normalised
+        # values but we don't trust hostile input.
+        arr[9] = float(min(1.0, max(0.0, summary.entropy_normalized)))
+        arr[10] = float(min(1.0, max(0.0, summary.top_k_concentration)))
+        arr[11] = float(min(1.0, max(0.0, summary.sink_presence)))
+        arr[12] = float(min(1.0, max(0.0, summary.recency_bias)))
+        arr[13] = float(min(1.0, max(0.0, summary.effective_rank)))
     return arr
 
 
