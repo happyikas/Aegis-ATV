@@ -43,3 +43,5 @@ reports/
 # Solo Free local-sLLM models (downloaded by `aegis pull-model`, not source)
 models/*.gguf
 models/*.gguf.part
+models/**/*.gguf
+models/**/*.gguf.part
