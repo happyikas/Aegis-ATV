@@ -25,6 +25,7 @@ dependencies = [
 # Apple Silicon (Metal): set CMAKE_ARGS="-DGGML_METAL=on" before install.
 local-llm = [
     "llama-cpp-python>=0.2.85",
+    "huggingface-hub>=0.20",   # for `Llama.from_pretrained` / model download in demos
 ]
 
 [project.scripts]
