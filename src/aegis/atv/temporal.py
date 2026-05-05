@@ -511,6 +511,7 @@ def serialize_temporal(
     *,
     baseline: Any = None,
     session_retrospective: dict[str, Any] | None = None,
+    catalog: Any = None,
 ) -> str:
     """Render a TemporalContext as a human-readable TEMPORAL
     TRAJECTORY narrative ready to feed into an sLLM.
@@ -603,6 +604,14 @@ def serialize_temporal(
             session_retrospective=session_retrospective,
         )
         rendered = render_anomalies(tags)
+        if rendered:
+            lines.append("")
+            lines.append(rendered)
+
+    # PR-ι — nearest burn-in cluster, when a catalog is supplied.
+    if catalog is not None:
+        from aegis.burnin.trajectory_catalog import render_nearest_clusters
+        rendered = render_nearest_clusters(ctx, catalog)
         if rendered:
             lines.append("")
             lines.append(rendered)
