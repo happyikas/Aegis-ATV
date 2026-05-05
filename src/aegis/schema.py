@@ -216,6 +216,31 @@ class CostEfficiencyMetrics(BaseModel):
 # ─────────────────────────────────────────────────────────────────────
 # ATVInput — what the host posts to /evaluate
 # ─────────────────────────────────────────────────────────────────────
+class AttentionSummary(BaseModel):
+    """Aggregate per-decode attention statistics — supplied by a
+    self-hosted LLM runtime (vLLM, llama-cpp custom build) when
+    available. Consumed by :func:`aegis.performance.eviction_advisor`
+    to recommend per-token KV eviction policies.
+
+    Anthropic's API does NOT expose per-token attention, so for
+    Anthropic-backed sessions all fields stay at their default
+    zero values and the advisor falls back to its policy-only path.
+
+    All fields are floats in [0, 1] except ``n_tokens``. The
+    advisor treats zeros as "no signal" and lowers its confidence
+    accordingly.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    n_tokens: int = 0                              # total tokens this summary covers
+    entropy_normalized: float = 0.0                # Shannon entropy / log(n_tokens)
+    top_k_concentration: float = 0.0               # mass on top-10 % of positions
+    sink_presence: float = 0.0                     # mass on first 4 tokens (StreamingLLM sink)
+    recency_bias: float = 0.0                      # mass on last 32 tokens (recent window)
+    effective_rank: float = 0.0                    # exp(entropy) / n_tokens — how many tokens really matter
+
+
 class ATVInput(BaseModel):
     """Host-posted bundle that Aegis converts into a 2080-D ATV.
 
@@ -263,6 +288,15 @@ class ATVInput(BaseModel):
     # form of an :class:`aegis.identity.IdentityProof`. ``step308_identity``
     # verifies it; downstream steps consume ``ctx.extras["verified_identity"]``.
     agent_identity_proof_token: str | None = None
+
+    # v4.3 — Per-token attention attribution (Option A — sidecar, no
+    # 2080-D dim bump). ``attention_per_token`` carries raw per-position
+    # scores (sums to ~ 1.0); ``attention_summary`` carries aggregate
+    # stats that the builder folds into ``prompt_structure[9..13]``.
+    # Both are optional; absence keeps the advisor on its policy-only
+    # path. See :class:`AttentionSummary`.
+    attention_per_token: list[float] | None = None
+    attention_summary: AttentionSummary | None = None
 
 
 # ─────────────────────────────────────────────────────────────────────
