@@ -24,8 +24,13 @@ def _run(stdin_payload: str | None) -> dict:
 
 
 def test_handle_session_end_skips_when_no_transcript() -> None:
+    """No transcript path → cost-import skipped, retrospective still
+    written (with zero-fill from missing audit + missing transcript)."""
     out = _run(json.dumps({"session_id": "s1", "transcript_path": ""}))
-    assert out == {"_aegis": {"transcript": "skipped"}}
+    env = out["_aegis"]
+    assert env["cost"] == {"transcript": "skipped"}
+    # PR #2 retrospective always runs (graceful degradation).
+    assert env["retrospective"] == "written"
 
 
 def test_handle_session_end_skips_when_transcript_missing(tmp_path: Path) -> None:
@@ -34,7 +39,9 @@ def test_handle_session_end_skips_when_transcript_missing(tmp_path: Path) -> Non
             {"session_id": "s1", "transcript_path": str(tmp_path / "absent.jsonl")}
         )
     )
-    assert out == {"_aegis": {"transcript": "skipped"}}
+    env = out["_aegis"]
+    assert env["cost"] == {"transcript": "skipped"}
+    assert env["retrospective"] == "written"
 
 
 def test_handle_session_end_imports_when_transcript_exists(tmp_path: Path) -> None:
@@ -52,19 +59,26 @@ def test_handle_session_end_imports_when_transcript_exists(tmp_path: Path) -> No
         + "\n"
     )
     out = _run(json.dumps({"session_id": "s2", "transcript_path": str(p)}))
-    payload = out["_aegis"]
-    assert payload["status"] == "imported"
-    assert payload["turns"] == 1
+    env = out["_aegis"]
+    cost = env["cost"]
+    assert cost["status"] == "imported"
+    assert cost["turns"] == 1
+    # Retrospective fires too with zero-fill on the audit side.
+    assert env["retrospective"] == "written"
 
 
 def test_handle_session_end_swallows_invalid_stdin(tmp_path: Path) -> None:
     out = _run("not json at all")
-    assert out == {"_aegis": {"transcript": "skipped"}}
+    env = out["_aegis"]
+    assert env["cost"] == {"transcript": "skipped"}
+    assert env["retrospective"] == "written"
 
 
 def test_handle_session_end_swallows_empty_stdin() -> None:
     out = _run("")
-    assert out == {"_aegis": {"transcript": "skipped"}}
+    env = out["_aegis"]
+    assert env["cost"] == {"transcript": "skipped"}
+    assert env["retrospective"] == "written"
 
 
 def test_handle_session_end_reports_import_error(
@@ -80,6 +94,10 @@ def test_handle_session_end_reports_import_error(
 
     monkeypatch.setattr(tr_mod, "import_into_wal", boom)
     out = _run(json.dumps({"session_id": "s3", "transcript_path": str(p)}))
-    payload = out["_aegis"]
-    assert payload["transcript"] == "error"
-    assert "ledger offline" in payload["error"]
+    env = out["_aegis"]
+    cost = env["cost"]
+    assert cost["transcript"] == "error"
+    assert "ledger offline" in cost["error"]
+    # Retrospective should still succeed even if cost-import path failed —
+    # they're independent.
+    assert env["retrospective"] == "written"
