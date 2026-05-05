@@ -639,9 +639,21 @@ def cmd_fleet_monitor(args: argparse.Namespace) -> int:
         slack_url = _os.environ.get(args.slack_url_env)
         if not slack_url:
             print(_yellow(
-                f"  warning: {args.slack_url_env} not set; "
-                "falling back to stderr-only notifier"
+                f"  warning: {args.slack_url_env} not set"
             ), file=sys.stderr)
+
+    ntfy_topic = None
+    if getattr(args, "ntfy_topic_env", None):
+        ntfy_topic = _os.environ.get(args.ntfy_topic_env)
+        if not ntfy_topic:
+            print(_yellow(
+                f"  warning: {args.ntfy_topic_env} not set"
+            ), file=sys.stderr)
+
+    crossings_log = (
+        str(Path(args.crossings_log).expanduser())
+        if getattr(args, "crossings_log", None) else None
+    )
 
     # Daemonise via subprocess so the parent CLI returns immediately.
     # The child re-execs into a `python -c` that calls serve_forever
@@ -656,7 +668,11 @@ def cmd_fleet_monitor(args: argparse.Namespace) -> int:
         "DEFAULT_PID_PATH, DEFAULT_STOP_FLAG);"
         "args=json.loads(sys.argv[1]);"
         "thresholds=[FleetThreshold(**t) for t in args['thresholds']];"
-        "n=make_default_notifier(slack_webhook_url=args.get('slack_url'),"
+        "n=make_default_notifier("
+        "slack_webhook_url=args.get('slack_url'),"
+        "ntfy_topic=args.get('ntfy_topic'),"
+        "ntfy_base_url=args.get('ntfy_base_url','https://ntfy.sh'),"
+        "crossings_log=args.get('crossings_log'),"
         "interactive=args.get('interactive', False));"
         "sys.exit(serve_forever("
         "audit_path=Path(args['audit_path']),"
@@ -674,6 +690,9 @@ def cmd_fleet_monitor(args: argparse.Namespace) -> int:
             for t in thresholds
         ],
         "slack_url": slack_url,
+        "ntfy_topic": ntfy_topic,
+        "ntfy_base_url": getattr(args, "ntfy_base_url", "https://ntfy.sh"),
+        "crossings_log": crossings_log,
         "interactive": bool(args.interactive),
         "poll_interval": float(args.poll_interval),
     })
@@ -701,6 +720,11 @@ def cmd_fleet_monitor(args: argparse.Namespace) -> int:
     print(f"  thresholds:   {[(t.label, t.dollars) for t in thresholds]}")
     if slack_url:
         print("  slack:        configured (URL hidden)")
+    if ntfy_topic:
+        ntfy_url = f"{args.ntfy_base_url.rstrip('/')}/{ntfy_topic}"
+        print(f"  ntfy:         {ntfy_url}")
+    if crossings_log:
+        print(f"  crossings:    {crossings_log}")
     return 0
 
 
@@ -3021,6 +3045,16 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Fleet $ that writes a stop-flag for hook polling.")
     fm.add_argument("--slack-url-env", default=None,
                     help="ENV var name holding the Slack webhook URL.")
+    fm.add_argument("--ntfy-topic-env", default=None,
+                    help="ENV var name holding the ntfy.sh topic "
+                    "(free phone push, no signup).")
+    fm.add_argument("--ntfy-base-url", default="https://ntfy.sh",
+                    help="ntfy server (default: https://ntfy.sh; "
+                    "override for self-hosted).")
+    fm.add_argument("--crossings-log", default=None,
+                    help="Append every crossing to this JSONL file. "
+                    "Use ~/.aegis/crossings.jsonl for the canonical "
+                    "audit location.")
     fm.add_argument("--interactive", action="store_true",
                     help="Stderr notifier reads y/N from stdin.")
     fm.add_argument("--audit", default=None,
