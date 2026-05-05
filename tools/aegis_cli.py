@@ -1516,6 +1516,132 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_cache_lint(args: argparse.Namespace) -> int:
+    """`aegis cache-lint` — diagnose Anthropic prompt-cache breakage.
+
+    Two modes (combine freely):
+
+    * ``--transcript <path>`` — observe per-turn cache efficiency in
+      a Claude Code transcript ``.jsonl`` and flag the turns where
+      the cache broke (efficiency dropped ≥ ``--break-threshold`` pp
+      vs the prior turn). Each break is attributed to a likely cause.
+
+    * ``--system-prompt <path>`` — static lint of a system-prompt /
+      tool-catalog string for the classic "broken cache"
+      anti-patterns: dates, UUIDs, time-of-day strings, dynamic
+      preludes ("Today is …", "Generated at …", etc.).
+
+    ``--json`` emits the full :class:`CacheLintReport` as a single
+    JSON document on stdout.
+    """
+    from aegis.performance.cache_lint import (
+        DEFAULT_BREAK_THRESHOLD_PP,
+        analyze_system_prompt,
+        analyze_transcript,
+        report_to_dict,
+    )
+
+    transcript = getattr(args, "transcript", None)
+    sys_prompt_path = getattr(args, "system_prompt", None)
+    threshold = float(
+        getattr(args, "break_threshold", DEFAULT_BREAK_THRESHOLD_PP)
+    )
+    as_json = bool(getattr(args, "json", False))
+
+    sys_prompt_text: str | None = None
+    if sys_prompt_path:
+        p = Path(sys_prompt_path)
+        if not p.is_file():
+            print(f"[cache-lint] system-prompt file not found: {p}")
+            return 2
+        sys_prompt_text = p.read_text(encoding="utf-8")
+
+    if transcript:
+        report = analyze_transcript(
+            Path(transcript),
+            break_threshold_pp=threshold,
+            system_prompt=sys_prompt_text,
+        )
+    elif sys_prompt_text is not None:
+        # Static-only run: no transcript, just findings on the prompt.
+        from aegis.performance.cache_lint import CacheLintReport
+
+        report = CacheLintReport(
+            transcript_path=None, n_turns=0,
+            static_findings=analyze_system_prompt(sys_prompt_text),
+        )
+    else:
+        print(
+            "[cache-lint] usage: aegis cache-lint --transcript <path>"
+            " [--system-prompt <path>]"
+        )
+        return 2
+
+    if as_json:
+        print(json.dumps(report_to_dict(report), indent=2))
+        return 0
+
+    # Human-readable rendering.
+    print("AegisData Prompt Cache Lint Report")
+    print("==================================")
+    if report.transcript_path:
+        print(f"  transcript:  {report.transcript_path}")
+        print(f"  n_turns:     {report.n_turns}")
+    if report.n_turns > 0:
+        print()
+        print(
+            f"  observed cache_hit_rate:    "
+            f"{report.observed_cache_hit_rate * 100:5.1f}%"
+        )
+        print(
+            f"  theoretical max (no breaks):"
+            f"{report.theoretical_max_cache_hit_rate * 100:5.1f}%"
+        )
+        print(
+            f"  potential token savings:    "
+            f"{report.potential_token_savings:,} tokens"
+        )
+
+    if report.breaks:
+        print()
+        print(f"Cache breaks detected: {len(report.breaks)}")
+        print("─" * 50)
+        for b in report.breaks:
+            print(
+                f"  ⚠ turn {b.turn_idx}  "
+                f"{b.before_efficiency * 100:.0f}% → "
+                f"{b.after_efficiency * 100:.0f}%  "
+                f"(−{b.drop_pp:.1f} pp, "
+                f"~{b.tokens_lost_estimate:,} tokens lost)"
+            )
+            print(f"    cause:      {b.attribution}")
+            print(f"    suggestion: {b.suggestion}")
+
+    if report.static_findings:
+        print()
+        print(
+            f"Static lint findings: {len(report.static_findings)}"
+        )
+        print("─" * 50)
+        for f in report.static_findings:
+            sev_marker = (
+                "✗" if f.severity == "error"
+                else ("⚠" if f.severity == "warning" else "·")
+            )
+            print(
+                f"  {sev_marker} char {f.position:>5}  "
+                f"[{f.pattern_name}]  "
+                f"matched: {f.matched_excerpt!r}"
+            )
+            print(f"    → {f.suggestion}")
+
+    if not report.breaks and not report.static_findings:
+        print()
+        print("  ✓ no cache-breaking patterns detected")
+
+    return 0
+
+
 def cmd_install(args: argparse.Namespace) -> int:
     """Idempotently install Aegis hooks into ``~/.claude/settings.json``.
 
@@ -3395,6 +3521,42 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     rep.set_defaults(fn=cmd_report)
+
+    cl = sub.add_parser(
+        "cache-lint",
+        help=(
+            "Diagnose Anthropic prompt-cache breakage in a Claude Code "
+            "transcript and/or a system-prompt template"
+        ),
+    )
+    cl.add_argument(
+        "--transcript",
+        help="Claude Code transcript .jsonl to scan for cache breaks",
+    )
+    cl.add_argument(
+        "--system-prompt",
+        dest="system_prompt",
+        help=(
+            "Path to a system-prompt / tool-catalog file to static-lint "
+            "for cache-breaking anti-patterns (dates, UUIDs, etc.)"
+        ),
+    )
+    cl.add_argument(
+        "--break-threshold",
+        dest="break_threshold",
+        type=float,
+        default=30.0,
+        help=(
+            "Percentage-point drop required to flag a cache break "
+            "(default: 30.0)"
+        ),
+    )
+    cl.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the full CacheLintReport as JSON to stdout",
+    )
+    cl.set_defaults(fn=cmd_cache_lint)
 
     inst = sub.add_parser("install", help="Install hooks into ~/.claude/settings.json")
     inst.add_argument(
