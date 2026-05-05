@@ -47,6 +47,13 @@ from typing import Any
 TENANT = os.environ.get("AEGIS_TENANT_ID", "claude-code-local")
 APPROVE_AS_BLOCK = os.environ.get("AEGIS_APPROVE_AS_BLOCK", "1") == "1"
 VERBOSE = os.environ.get("AEGIS_HOOK_VERBOSE", "0") == "1"
+# v2.5 PR-ζ-head — Phase C advisor surface. Opt-in to keep the default
+# Solo Free hot path zero-impact. When enabled, the hook composes an
+# ActionAdvice from the 4-layer narrative (PR-θ / PR-ε / PR-ι / PR-η /
+# PR-κ) and stamps it into ``explain.action_advice``. Set to ``haiku``
+# (with ANTHROPIC_API_KEY) or leave default for the deterministic
+# heuristic advisor.
+ADVISOR_ENABLED = os.environ.get("AEGIS_ADVISOR_ENABLED", "0") == "1"
 # Model the host is actually serving — feeds the cost FLOPS table so
 # CostEfficiencyMetrics.cumulative_dollars and step335 budget gate
 # evaluate against the right $/token. Override per-deployment.
@@ -325,6 +332,73 @@ def _atmu_finalize_intent(record_id: str | None, decision: str, reason: str) -> 
             _emit(f"ATMU finalize_intent failed: {e}")
 
 
+def _compute_action_advice(
+    *,
+    inp: Any,
+    verdict: Any,
+    tool_name: str,
+    transcript_path: Path | None,
+) -> dict[str, Any] | None:
+    """Build the v2.5 ActionAdvice and return its dict form for the audit
+    record. Returns ``None`` when the advisor is disabled or any sub-step
+    fails — never raises so the firewall path is unaffected.
+
+    Pulls the 4-layer narrative inputs (TemporalContext + burn-in baseline
+    + trajectory catalog + intent classifier + action-embedding table) and
+    routes them through :func:`compose_advice_sllm`. Provider selection
+    follows ``AEGIS_ADVISOR_PROVIDER`` (default ``dummy`` → heuristic).
+    """
+    if not ADVISOR_ENABLED:
+        return None
+    try:
+        from aegis.atv.temporal import load_recent_history
+        from aegis.burnin.action_embeddings import load_table_or_default
+        from aegis.burnin.anomaly import (
+            compute_anomalies,
+            load_baseline_or_default,
+        )
+        from aegis.burnin.intent_classifier import (
+            load_classifier_or_default,
+        )
+        from aegis.burnin.trajectory_catalog import load_catalog_or_default
+        from aegis.judge.advisor import compose_advice_sllm
+
+        ctx = load_recent_history(
+            transcript_path=transcript_path,
+            audit_path=LOCAL_AUDIT_PATH if LOCAL_AUDIT_PATH.is_file() else None,
+            session_id=inp.header.aid,
+        )
+        baseline = load_baseline_or_default()
+        catalog = load_catalog_or_default()
+        classifier = load_classifier_or_default()
+        action_table = load_table_or_default()
+
+        anomalies = (
+            compute_anomalies(temporal_ctx=ctx, baseline=baseline)
+            if baseline is not None and baseline.is_usable()
+            else []
+        )
+
+        advice = compose_advice_sllm(
+            temporal_ctx=ctx,
+            anomalies=anomalies,
+            baseline=baseline,
+            catalog=catalog,
+            intent_classifier=classifier,
+            action_table=action_table,
+            base_decision=verdict.decision,
+            base_reason=verdict.reason or "",
+            current_tool=tool_name,
+        )
+        from aegis.judge.action_advice import advice_to_dict
+
+        return advice_to_dict(advice)
+    except Exception as e:  # noqa: BLE001 — advisor must never block
+        if VERBOSE:
+            _emit(f"advisor skipped: {e}")
+        return None
+
+
 def _append_audit(record: dict[str, Any]) -> None:
     """Append a chained audit record (v2.1.5 local-mode integrity).
 
@@ -454,6 +528,24 @@ def handle_pretool(stdin: Any, stdout: Any) -> int:
     explain_block = _build_explain_block(atv, inp, verdict)
     if intent_record_id is not None:
         explain_block["intent_record_id"] = intent_record_id
+
+    # v2.5 PR-ζ-head — opt-in ActionAdvice (heuristic by default; haiku
+    # with AEGIS_ADVISOR_PROVIDER=haiku). Stamped into the audit record
+    # so `aegis report` / replay tooling can surface the advisor's
+    # next-action hint alongside the firewall verdict.
+    transcript_path_raw = event.get("transcript_path") or ""
+    transcript_path = (
+        Path(transcript_path_raw) if transcript_path_raw else None
+    )
+    advice_dict = _compute_action_advice(
+        inp=inp,
+        verdict=verdict,
+        tool_name=event.get("tool_name", "") or inp.tool_name,
+        transcript_path=transcript_path,
+    )
+    if advice_dict is not None:
+        explain_block["action_advice"] = advice_dict
+
     _append_audit(
         {
             "ts_ns": time.time_ns(),
@@ -494,11 +586,19 @@ def handle_pretool(stdin: Any, stdout: Any) -> int:
         )
         return 0
 
-    _emit(
+    msg = (
         f"{decision}  {tool_name}  trace={inp.header.trace_id[:8]}  "
         f"({elapsed_ms:.1f}ms)\n"
         f"           reason: {reason}"
     )
+    if advice_dict is not None:
+        hint = advice_dict.get("next_action_hint")
+        alt = advice_dict.get("alternative_tool")
+        if hint:
+            msg += f"\n           hint:   {hint}"
+        if alt:
+            msg += f"\n           alt:    try `{alt}` instead"
+    _emit(msg)
     return 2
 
 
