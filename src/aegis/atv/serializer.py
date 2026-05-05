@@ -56,6 +56,7 @@ from typing import Literal
 
 import numpy as np
 
+from aegis.atv.temporal import TemporalContext, serialize_temporal
 from aegis.schema import (
     ATV_DIM,
     ATV_VERSION,
@@ -299,6 +300,7 @@ def atv_to_prompt(
     inp: ATVInput | None = None,
     *,
     mode: SerializerMode = "strict",
+    temporal: TemporalContext | None = None,
 ) -> SerializedATV:
     """Serialise a 2080-D ATV into an sLLM-ready prompt.
 
@@ -315,6 +317,15 @@ def atv_to_prompt(
         ``"strict"`` (default) for the (b.pragmatic) diagnostic;
         ``"enriched"`` for production sLLM consumption with raw-text
         fallback for the missing-semantic bands.
+    temporal:
+        Optional :class:`aegis.atv.temporal.TemporalContext`. When
+        supplied, an additional TEMPORAL TRAJECTORY section is
+        injected after the SEMANTIC band, giving the sLLM a
+        multi-turn "video" view of the agent's recent activity
+        instead of the single-frame default. PR-θ — the
+        ``action_history`` hash-only gap surfaced in PR #58 is
+        addressed here in the *narrative* layer, leaving the ATV
+        schema untouched.
     """
     if atv.shape != (ATV_DIM,):
         raise ValueError(
@@ -445,18 +456,30 @@ def atv_to_prompt(
         )
     lines.append("")
 
+    # ── TEMPORAL TRAJECTORY (PR-θ) — the multi-turn "video" view ──
+    if temporal is not None:
+        lines.append(serialize_temporal(temporal))
+        lines.append("")
+        bands["temporal_trajectory"] = (
+            f"present, {len(temporal.history)} of {temporal.window_size} "
+            f"turns; backtracks={temporal.n_backtracks}, "
+            f"redundant={temporal.n_redundant}, errors={temporal.n_errors}"
+        )
+
     # ── ACTION HISTORY (hash-only — a key gap for option b) ──
     lines.append("ACTION HISTORY")
     action_h = atv[SLICE_ACTION_HISTORY]
     line = _summarise_hash_band(action_h, label="action_history")
     lines.append(f"  {line}")
     bands["action_history"] = line
-    if not _is_zero(action_h):
+    if not _is_zero(action_h) and temporal is None:
+        # Only flag the gap when no temporal context was supplied —
+        # the narrative replaces what action_history fails to carry.
         gaps.append(
             "action_history (640-D): hash-expanded fingerprint, NOT "
             "semantic. sLLM can detect 'same as 3 turns ago' but "
-            "cannot read what the action was. The recent_actions "
-            "list lives in ATVInput.recent_actions, outside ATV."
+            "cannot read what the action was. Pass `temporal=` to "
+            "atv_to_prompt to inject a TEMPORAL TRAJECTORY narrative."
         )
     if mode == "enriched" and inp is not None and inp.recent_actions:
         recent_lines: list[str] = []
