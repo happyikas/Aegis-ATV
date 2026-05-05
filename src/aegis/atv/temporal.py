@@ -512,6 +512,7 @@ def serialize_temporal(
     baseline: Any = None,
     session_retrospective: dict[str, Any] | None = None,
     catalog: Any = None,
+    intent_classifier: Any = None,
 ) -> str:
     """Render a TemporalContext as a human-readable TEMPORAL
     TRAJECTORY narrative ready to feed into an sLLM.
@@ -612,6 +613,18 @@ def serialize_temporal(
     if catalog is not None:
         from aegis.burnin.trajectory_catalog import render_nearest_clusters
         rendered = render_nearest_clusters(ctx, catalog)
+        if rendered:
+            lines.append("")
+            lines.append(rendered)
+
+    # PR-η — task intent prediction, when a classifier is supplied.
+    if intent_classifier is not None and len(ctx.history) > 0:
+        from aegis.burnin.intent_classifier import (
+            predict_intent,
+            render_intent,
+        )
+        prediction = predict_intent(ctx, intent_classifier)
+        rendered = render_intent(prediction)
         if rendered:
             lines.append("")
             lines.append(rendered)
