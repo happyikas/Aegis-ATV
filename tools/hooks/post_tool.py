@@ -194,6 +194,36 @@ def handle_posttool(stdin: Any, stdout: Any) -> int:
     status = _classify_status(tool_response, exit_code)
     now_ns = time.time_ns()
 
+    # Run all four PostToolUse analyzers (classification, backtrack,
+    # redundancy, duration). Wrapped in try/except — analysis failure
+    # must never crash the hook (forensic-only contract).
+    post_analysis_block: dict[str, Any] | None = None
+    try:
+        from aegis.cost.post_analysis import (
+            analyse_post_tool_event,
+            to_audit_dict,
+        )
+        record_id = (
+            _atmu_record_id_from_invocation(invocation_id)
+            if invocation_id else None
+        )
+        analysis = analyse_post_tool_event(
+            tool_name=tool_name,
+            tool_input=tool_input if isinstance(tool_input, dict) else {},
+            tool_response=tool_response,
+            exit_code=exit_code,
+            audit_path=LOCAL_AUDIT_PATH,
+            intent_log_path=LOCAL_INTENT_LOG_PATH,
+            record_id=record_id,
+        )
+        post_analysis_block = to_audit_dict(
+            analysis,
+            tool_name=tool_name,
+            tool_input=tool_input if isinstance(tool_input, dict) else {},
+        )
+    except Exception:  # noqa: BLE001 — never crash the hook
+        post_analysis_block = None
+
     record = {
         "ts_ns": now_ns,
         "tool": tool_name,
@@ -206,6 +236,12 @@ def handle_posttool(stdin: Any, stdout: Any) -> int:
         "tool_input_keys": sorted(tool_input.keys()) if isinstance(tool_input, dict) else [],
         "mode": "local",
     }
+    if post_analysis_block is not None:
+        # Live next to step traces in the explain block so `aegis report
+        # --explain` can render it; sits in `explain.post_analysis` so
+        # downstream tools that already walk `explain` see it without
+        # changes.
+        record["explain"] = {"post_analysis": post_analysis_block}
     _append_audit(record)
 
     # M10 ATMU phase 2 — attach the tool_outcome to the intent record
