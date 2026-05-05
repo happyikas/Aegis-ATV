@@ -424,3 +424,99 @@ def test_missing_transcript_falls_back_to_sparse(
     s335 = rec["explain"]["step_traces"]["aegis.firewall.step335_cost.run"]
     # Sparse fallback → cumulative_dollars stays at 0.0
     assert "cum=0.0000" in s335
+
+
+def test_advisor_off_by_default_no_advice_in_audit(
+    _isolated_audit: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Default Solo Free path — without AEGIS_ADVISOR_ENABLED the audit
+    record must NOT carry an action_advice block (zero-impact)."""
+    monkeypatch.setattr(aegis_local_hook, "ADVISOR_ENABLED", False)
+    rc, _, _ = _run(
+        {
+            "hook_event_name": "PreToolUse",
+            "session_id": "sess-noadv",
+            "tool_name": "Read",
+            "tool_input": {"file_path": "/tmp/x"},
+        }
+    )
+    assert rc == 0
+    rec = json.loads(_isolated_audit.read_text().strip().splitlines()[-1])
+    assert "action_advice" not in rec["explain"]
+
+
+def test_advisor_enabled_stamps_heuristic_advice(
+    _isolated_audit: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With AEGIS_ADVISOR_ENABLED=1 (and default dummy provider) the audit
+    record carries an action_advice block stamped ``heuristic``."""
+    monkeypatch.setattr(aegis_local_hook, "ADVISOR_ENABLED", True)
+    monkeypatch.delenv("AEGIS_ADVISOR_PROVIDER", raising=False)
+    rc, _, _ = _run(
+        {
+            "hook_event_name": "PreToolUse",
+            "session_id": "sess-adv",
+            "tool_name": "Read",
+            "tool_input": {"file_path": "/tmp/x"},
+        }
+    )
+    assert rc == 0
+    rec = json.loads(_isolated_audit.read_text().strip().splitlines()[-1])
+    advice = rec["explain"]["action_advice"]
+    assert advice["advisor_kind"] == "heuristic"
+    for field in (
+        "decision", "reason", "confidence",
+        "advisor_hash", "produced_at_ns",
+    ):
+        assert field in advice, f"missing {field}"
+    assert isinstance(advice["advisor_hash"], str)
+
+
+def test_advisor_stderr_message_structure_on_block(
+    _isolated_audit: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """When the firewall blocks and the advisor is enabled, the stderr
+    message format stays well-formed (reason line present; hint/alt
+    lines may or may not appear depending on the heuristic). Claude
+    Code only sees stderr, so the message structure is the contract."""
+    monkeypatch.setattr(aegis_local_hook, "ADVISOR_ENABLED", True)
+    rc, _, _ = _run(
+        {
+            "hook_event_name": "PreToolUse",
+            "session_id": "sess-block",
+            "tool_name": "Bash",
+            "tool_input": {"command": "git push --force origin main"},
+        }
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "BLOCK" in err
+    assert "reason:" in err
+
+
+def test_advisor_failure_does_not_block_tool_call(
+    _isolated_audit: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the advisor pipeline raises, the hook must still return the
+    firewall verdict — advisor is best-effort bookkeeping, not gating."""
+    monkeypatch.setattr(aegis_local_hook, "ADVISOR_ENABLED", True)
+
+    def _boom(**_kwargs: object) -> object:
+        raise RuntimeError("simulated advisor failure")
+
+    monkeypatch.setattr(
+        "aegis.judge.advisor.compose_advice_sllm", _boom,
+    )
+    rc, _, _ = _run(
+        {
+            "hook_event_name": "PreToolUse",
+            "session_id": "sess-advfail",
+            "tool_name": "Read",
+            "tool_input": {"file_path": "/tmp/x"},
+        }
+    )
+    assert rc == 0  # firewall ALLOW survives
+    rec = json.loads(_isolated_audit.read_text().strip().splitlines()[-1])
+    assert "action_advice" not in rec["explain"]
