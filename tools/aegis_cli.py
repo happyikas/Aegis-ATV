@@ -76,7 +76,7 @@ def _red(s: str) -> str:
     return f"\033[31m{s}\033[0m"
 
 
-def cmd_status(_: argparse.Namespace) -> int:
+def cmd_status(args: argparse.Namespace) -> int:
     """Plugin-mode status: audit chain + ATMU intent log + LLM daemon.
 
     Reads only modules that actually exist in the local-mode build —
@@ -85,6 +85,10 @@ def cmd_status(_: argparse.Namespace) -> int:
     Cost / malfunction-classifier / blockchain-anchor sections are
     deferred (D7/D10 + post-launch) and surface as a single line so
     operators see what's missing rather than guessing from a crash.
+
+    With ``--performance``: appends a performance dashboard
+    aggregating Stop-hook session retrospectives (PR #46) and
+    related multi-hook signals (PR #45 / #47).
     """
 
     audit_path = Path(
@@ -214,7 +218,173 @@ def cmd_status(_: argparse.Namespace) -> int:
     print(
         f"  cost / health: {_yellow('(D7 / D10 deferred — not tracked in plugin mode)')}"
     )
+
+    # ── Optional performance dashboard ─────────────────────────────
+    if getattr(args, "performance", False):
+        from aegis.performance.dashboard import (
+            build_performance_summary,
+            summary_to_dict,
+        )
+        summary = build_performance_summary(audit_path)
+
+        if getattr(args, "json", False):
+            print()
+            print(json.dumps(summary_to_dict(summary), indent=2))
+            return 0
+
+        _render_performance_dashboard(summary)
+
     return 0
+
+
+def _render_performance_dashboard(summary: Any) -> None:
+    """Human-readable rendering of a :class:`PerformanceSummary`.
+
+    Lives next to ``cmd_status`` because the dashboard is its
+    optional tail-section; keeping the format inline avoids
+    coupling ``aegis.performance.dashboard`` to terminal colour
+    helpers it doesn't otherwise need.
+    """
+    print()
+    print("Performance Dashboard")
+    print("=====================")
+    if summary.n_records_walked == 0:
+        print(
+            f"  {_yellow('audit chain empty / unreadable — nothing to aggregate')}"
+        )
+        return
+    print(
+        f"  records walked:        {summary.n_records_walked:>10,}"
+    )
+    print(
+        f"  sessions (Stop hook):  {summary.n_sessions:>10,}"
+    )
+    if summary.earliest_session_ts_ns and summary.latest_session_ts_ns:
+        import datetime as _dt
+        earliest = _dt.datetime.fromtimestamp(
+            summary.earliest_session_ts_ns / 1e9
+        ).strftime("%Y-%m-%d")
+        latest = _dt.datetime.fromtimestamp(
+            summary.latest_session_ts_ns / 1e9
+        ).strftime("%Y-%m-%d")
+        span_s = (
+            summary.latest_session_ts_ns - summary.earliest_session_ts_ns
+        ) / 1e9
+        span_days = max(1, int(span_s // 86400))
+        print(f"  window:                {earliest} → {latest}  ({span_days}d)")
+    print()
+
+    if summary.n_sessions == 0:
+        msg = (
+            "no Stop-hook session_retrospective records yet — install "
+            "hooks via `aegis install` to start tracking"
+        )
+        print(f"  {_yellow(msg)}")
+        return
+
+    # Cumulative
+    print("  Cumulative cost & tokens")
+    print(
+        f"    billed dollars:      "
+        f"${summary.cumulative_billed_dollars:,.4f}"
+    )
+    print(
+        f"    input / output:      "
+        f"{int(summary.total_input_tokens):>12,} / "
+        f"{int(summary.total_output_tokens):,}"
+    )
+    print(
+        f"    cache_read / write:  "
+        f"{int(summary.total_cache_read_tokens):>12,} / "
+        f"{int(summary.total_cache_creation_tokens):,}"
+    )
+    print()
+
+    # Cache efficiency
+    print("  Cache efficiency")
+    weighted = summary.weighted_cache_hit_rate * 100
+    avg_session = summary.avg_session_cache_hit_rate * 100
+    weighted_color = (
+        _green if weighted >= 70 else (_yellow if weighted >= 40 else _red)
+    )
+    avg_color = (
+        _green if avg_session >= 70
+        else (_yellow if avg_session >= 40 else _red)
+    )
+    print(
+        f"    weighted hit_rate:   "
+        f"{weighted_color(f'{weighted:5.1f}%')}  "
+        f"(Σ cache_read / Σ total_input)"
+    )
+    print(
+        f"    per-session avg:     "
+        f"{avg_color(f'{avg_session:5.1f}%')}  "
+        f"(arithmetic mean of session hit rates)"
+    )
+    print()
+
+    # Inefficiency totals
+    print("  Inefficiency totals (across all sessions)")
+    print(f"    backtracks (Edit revert):   {summary.n_backtracks:>5}")
+    print(f"    redundant tool calls:       {summary.n_redundant:>5}")
+    print(f"    tool errors:                {summary.n_tool_errors:>5}")
+    print(f"    compactions (PreCompact):   {summary.n_compactions:>5}")
+    print(f"    user retries:               {summary.n_user_retries:>5}")
+    print()
+
+    # Per-session distribution
+    print("  Per-session")
+    print(
+        f"    avg cost:              "
+        f"${summary.avg_session_billed_dollars:.4f}"
+    )
+    if summary.n_sessions > 0:
+        flagged_pct = (
+            summary.sessions_with_inefficiency_signals
+            / summary.n_sessions * 100
+        )
+        flagged_color = (
+            _green if flagged_pct < 10
+            else (_yellow if flagged_pct < 30 else _red)
+        )
+        print(
+            f"    sessions w/ signals:   "
+            f"{summary.sessions_with_inefficiency_signals} / "
+            f"{summary.n_sessions}  "
+            f"{flagged_color(f'({flagged_pct:.1f}%)')}"
+        )
+
+    # Top inefficient tools
+    if summary.top_inefficient_tools:
+        print()
+        print("  Top inefficient tools (post_analysis-derived)")
+        for t in summary.top_inefficient_tools:
+            sig_total = t.n_backtracks + t.n_redundant + t.n_errors
+            print(
+                f"    {t.tool:<14} {sig_total:>3} signals  "
+                f"(backtrack {t.n_backtracks}, "
+                f"redundant {t.n_redundant}, "
+                f"error {t.n_errors})  "
+                f"in {t.n_calls} calls"
+            )
+
+    # Suggested next actions
+    print()
+    print("  Next actions")
+    if summary.cumulative_billed_dollars > 0:
+        print(
+            "    • aegis cache-lint --transcript <session.jsonl>      "
+            "  (find prompt-cache anti-patterns)"
+        )
+    if summary.n_sessions >= 2:
+        print(
+            "    • aegis cache-lint --transcript <after.jsonl> "
+            "--compare-with <before.jsonl>"
+        )
+        print(
+            "      (closed-loop verification: how much projected savings "
+            "actually landed)"
+        )
 
 
 def cmd_verify_audit(args: argparse.Namespace) -> int:
@@ -3147,7 +3317,28 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="aegis")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("status").set_defaults(fn=cmd_status)
+    st = sub.add_parser(
+        "status",
+        help="Plugin-mode operational status + optional performance dashboard",
+    )
+    st.add_argument(
+        "--performance",
+        action="store_true",
+        help=(
+            "Append a performance dashboard: cumulative cache_hit_rate, "
+            "billed dollars, inefficiency totals across all Stop-hook "
+            "session retrospectives in the local audit chain"
+        ),
+    )
+    st.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "(--performance only) emit the PerformanceSummary as JSON "
+            "to stdout, instead of the human-readable rendering"
+        ),
+    )
+    st.set_defaults(fn=cmd_status)
     va = sub.add_parser(
         "verify-audit",
         help="Verify the local audit chain integrity (Solo Free, v2.1.5)",
