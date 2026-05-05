@@ -337,15 +337,31 @@ class ScenarioResult:
 
 
 def ensure_model() -> None:
-    if MODEL_PATH.is_file():
-        return
-    print(f"{_DIM}downloading {MODEL_FILE} from HF Hub (~640 MB)...{_RESET}")
-    from huggingface_hub import hf_hub_download
+    """Download the GGUF if absent, then VERIFY its SHA-256 against
+    the pin in :data:`aegis.attest.KNOWN_MODELS` before letting it
+    near llama-cpp's native parser. Refusal mode = raise."""
+    from aegis.attest import assert_gguf_attestation
 
-    hf_hub_download(
-        repo_id=MODEL_REPO,
-        filename=MODEL_FILE,
-        local_dir=str(MODEL_PATH.parent),
+    if not MODEL_PATH.is_file():
+        print(
+            f"{_DIM}downloading {MODEL_FILE} from HF Hub (~640 MB)...{_RESET}"
+        )
+        from huggingface_hub import hf_hub_download
+
+        hf_hub_download(
+            repo_id=MODEL_REPO,
+            filename=MODEL_FILE,
+            local_dir=str(MODEL_PATH.parent),
+        )
+
+    # Verify-then-load. assert_gguf_attestation raises on mismatch
+    # and returns the AttestationResult on success.
+    print(f"{_DIM}verifying SHA-256 against attestation pin...{_RESET}")
+    result = assert_gguf_attestation(
+        MODEL_PATH, repo_id=MODEL_REPO, filename=MODEL_FILE,
+    )
+    print(
+        f"{_GREEN}✓{_RESET} {_DIM}{result.summary()}{_RESET}"
     )
 
 
