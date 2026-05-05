@@ -40,8 +40,22 @@ def _canonical_json(obj: Any) -> bytes:
     )
 
 
+_HASH_EXCLUDED_FIELDS: frozenset[str] = frozenset({
+    "this_hash",
+    # Signature fields are added AFTER the hash is computed (the
+    # signature is OVER the hash). Including them in the hash payload
+    # would create a circular dependency. Verification re-hashes with
+    # the same exclusion list.
+    "signature",
+    "pubkey_fingerprint",
+})
+
+
 def _hash_record(prev_hash: str, record: dict[str, Any]) -> str:
-    payload = {"prev_hash": prev_hash, **{k: v for k, v in record.items() if k != "this_hash"}}
+    payload = {
+        "prev_hash": prev_hash,
+        **{k: v for k, v in record.items() if k not in _HASH_EXCLUDED_FIELDS},
+    }
     return hashlib.sha3_256(_canonical_json(payload)).hexdigest()
 
 
@@ -109,6 +123,13 @@ def append(path: Path, record: dict[str, Any]) -> dict[str, Any]:
     inherits ``prev_hash`` from the just-rotated file, so the chain
     stays unbroken across the file boundary.
 
+    Optional Ed25519 signing: if a signing key is loadable
+    (``~/.aegis/keys/audit.ed25519`` or ``AEGIS_AUDIT_SIGNING_KEY``),
+    every appended record gets a ``signature`` field (hex over the
+    UTF-8 bytes of ``this_hash``) plus a ``pubkey_fingerprint`` (16-char
+    SHA3 of the public key). Records without a signing key configured
+    proceed unchanged — backwards compatible.
+
     Returns the augmented record (caller can inspect it). Audit
     failures raise ``OSError`` — callers in the hot path should wrap
     this in try/except so a write error never blocks the tool call.
@@ -126,6 +147,20 @@ def append(path: Path, record: dict[str, Any]) -> dict[str, Any]:
     prev_hash = _last_hash(path)
     chained = {**record, "prev_hash": prev_hash}
     chained["this_hash"] = _hash_record(prev_hash, chained)
+
+    # Optional Ed25519 signing — silent when no key is configured.
+    try:
+        from aegis.audit.signing import (
+            load_private_key_or_none,
+            sign_hash,
+        )
+        keypair = load_private_key_or_none()
+        if keypair is not None:
+            chained["signature"] = sign_hash(chained["this_hash"], keypair)
+            chained["pubkey_fingerprint"] = keypair.fingerprint
+    except Exception:  # noqa: BLE001 — signing is best-effort
+        # Never fail an audit append because of signing trouble.
+        pass
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
@@ -210,9 +245,28 @@ def _first_record_prev_hash(path: Path) -> str | None:
 def _verify_file_chain(
     path: Path, expected_prev: str, base_index: int,
 ) -> tuple[bool, int, int]:
-    """Walk one file's chain. Returns (ok, broken_global_index, n_in_file)."""
+    """Walk one file's chain. Returns (ok, broken_global_index, n_in_file).
+
+    Signature handling: if a public key is loadable, every record
+    that carries a ``signature`` field is verified against it. A
+    BAD signature (present but doesn't verify) breaks the chain at
+    that record. A MISSING signature (no field at all) is accepted —
+    backwards-compat for records appended before signing was enabled
+    or on a host without a key.
+    """
     if not path.exists():
         return True, -1, 0
+
+    # Lazy public-key load — only fetch once per file.
+    public_key = None
+    try:
+        from aegis.audit.signing import load_public_key_or_none
+        loaded = load_public_key_or_none()
+        if loaded is not None:
+            public_key, _fp = loaded
+    except Exception:  # noqa: BLE001 — verifier is best-effort
+        public_key = None
+
     n_in_file = 0
     with path.open(encoding="utf-8") as fh:
         for raw in fh:
@@ -228,6 +282,19 @@ def _verify_file_chain(
             recomputed = _hash_record(rec["prev_hash"], rec)
             if recomputed != rec.get("this_hash"):
                 return False, base_index + n_in_file, n_in_file
+
+            # Signature check — only when both a key is configured AND
+            # the record carries a signature. Missing signature is
+            # tolerated; bad signature breaks the chain.
+            sig = rec.get("signature")
+            if public_key is not None and isinstance(sig, str) and sig:
+                from aegis.audit.signing import verify_hash_signature
+
+                if not verify_hash_signature(
+                    rec["this_hash"], sig, public_key,
+                ):
+                    return False, base_index + n_in_file, n_in_file
+
             expected_prev = rec["this_hash"]
             n_in_file += 1
     return True, -1, n_in_file

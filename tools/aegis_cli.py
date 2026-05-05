@@ -413,10 +413,25 @@ def cmd_verify_audit(args: argparse.Namespace) -> int:
         )
         return 1
 
+    from aegis.audit.signing import load_public_key_or_none
+    pubkey_loaded = load_public_key_or_none() is not None
+
     ok, broken_at, total = verify_chain(audit_path)
     if ok:
         print(_green(f"\u2713 verify-audit (local chain) — {total} records intact"))
         print(f"  audit:  {audit_path}")
+        if pubkey_loaded:
+            print(
+                f"  signing pubkey: {_green('loaded')} — signed "
+                "records were also Ed25519-verified"
+            )
+        else:
+            print(
+                f"  signing pubkey: {_yellow('not configured')} — "
+                "chain hash verified, signatures (if any) NOT "
+                "cryptographically verified."
+            )
+            print("                  Run `aegis audit-key init` to enable.")
         return 0
     print(
         _red(
@@ -425,8 +440,69 @@ def cmd_verify_audit(args: argparse.Namespace) -> int:
         )
     )
     print(f"  audit:  {audit_path}")
-    print("  cause:  prev_hash or this_hash mismatch (line was mutated post-write)")
+    print(
+        "  cause:  prev_hash / this_hash / signature mismatch "
+        "(line was mutated post-write)"
+    )
     return 1
+
+
+def cmd_audit_key(args: argparse.Namespace) -> int:
+    """`aegis audit-key {init,show}` — manage the optional Ed25519
+    signing key for the local audit chain (v4.4)."""
+    from aegis.audit.signing import (
+        default_private_key_path,
+        default_public_key_path,
+        init_signing_key,
+        load_keypair,
+    )
+
+    action = getattr(args, "action", None) or "show"
+    private_path = default_private_key_path()
+    public_path = default_public_key_path()
+
+    if action == "init":
+        force = bool(getattr(args, "force", False))
+        if private_path.is_file() and not force:
+            print(_yellow(
+                f"audit signing key already exists at {private_path} — "
+                "refusing to overwrite. Use --force if you really want "
+                "to rotate (you'll lose the ability to extend the "
+                "previous chain with the new key)."
+            ))
+            return 1
+        kp = init_signing_key(force=force)
+        print(_green("✓ audit signing key generated"))
+        print(f"  private:      {private_path}    (mode 0600)")
+        print(f"  public:       {public_path}     (mode 0644)")
+        print(f"  fingerprint:  {kp.fingerprint}")
+        print()
+        print(
+            "  Every subsequent audit append now signs the record. Use "
+            "`aegis verify-audit` to verify."
+        )
+        return 0
+
+    if action == "show":
+        if not private_path.is_file() or not public_path.is_file():
+            print(_yellow(
+                "no audit signing key configured. "
+                "Run `aegis audit-key init` to generate one."
+            ))
+            return 1
+        try:
+            kp = load_keypair()
+        except (FileNotFoundError, ValueError) as e:
+            print(_red(f"failed to load keypair: {e}"))
+            return 1
+        print("audit signing key")
+        print(f"  private:      {private_path}")
+        print(f"  public:       {public_path}")
+        print(f"  fingerprint:  {kp.fingerprint}")
+        return 0
+
+    print(f"[audit-key] unknown action: {action!r}")
+    return 2
 
 
 def cmd_replay(args: argparse.Namespace) -> int:
@@ -3348,6 +3424,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to audit JSONL (default: ~/.aegis/audit.jsonl, the local-mode log)",
     )
     va.set_defaults(fn=cmd_verify_audit)
+
+    ak = sub.add_parser(
+        "audit-key",
+        help="Manage the optional Ed25519 audit-signing key (v4.4)",
+    )
+    ak_sub = ak.add_subparsers(dest="action", required=False)
+    ak_init = ak_sub.add_parser(
+        "init",
+        help=(
+            "Generate a fresh Ed25519 keypair at "
+            "~/.aegis/keys/audit.ed25519{,.pub}. Subsequent audit "
+            "appends will sign records; `aegis verify-audit` will "
+            "verify them."
+        ),
+    )
+    ak_init.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Overwrite an existing key. WARNING: invalidates signatures "
+            "in any prior audit chain — only do this when rotating."
+        ),
+    )
+    ak_init.set_defaults(fn=cmd_audit_key)
+    ak_show = ak_sub.add_parser(
+        "show",
+        help="Print the audit signing key fingerprint + paths",
+    )
+    ak_show.set_defaults(fn=cmd_audit_key)
+    ak.set_defaults(fn=cmd_audit_key)
 
     rp = sub.add_parser("replay")
     rp.add_argument("n", type=int, nargs="?", default=20)
