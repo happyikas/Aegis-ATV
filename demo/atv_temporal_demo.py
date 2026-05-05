@@ -37,6 +37,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from aegis.atv.builder import build_atv
 from aegis.atv.serializer import atv_to_prompt
 from aegis.atv.temporal import load_recent_history
+from aegis.burnin.anomaly import default_baseline
 from aegis.schema import ATVHeader, ATVInput, CostEfficiencyMetrics
 
 _BOLD = "\033[1m"
@@ -160,6 +161,17 @@ def main() -> int:
         print(f"{_BOLD}{_BLUE}── 2. TEMPORAL TRAJECTORY narrative (the sLLM 'video'){_RESET}")
         from aegis.atv.temporal import serialize_temporal
         print(f"{_DIM}{serialize_temporal(ctx)}{_RESET}")
+
+        # ── 2b. With burn-in baseline (PR-ε) ──
+        print()
+        print(
+            f"{_BOLD}{_BLUE}── 2b. With burn-in baseline (PR-ε): "
+            f"ANOMALIES section appended{_RESET}"
+        )
+        baseline = default_baseline()
+        print(
+            f"{_DIM}{serialize_temporal(ctx, baseline=baseline)}{_RESET}"
+        )
 
         # ── 3. Combined with atv_to_prompt ──
         print()

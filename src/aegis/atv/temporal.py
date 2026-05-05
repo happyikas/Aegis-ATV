@@ -506,9 +506,21 @@ def _format_outcome(s: ATVSnapshot) -> str:
     return f"{s.outcome}{sigil}"
 
 
-def serialize_temporal(ctx: TemporalContext) -> str:
+def serialize_temporal(
+    ctx: TemporalContext,
+    *,
+    baseline: Any = None,
+    session_retrospective: dict[str, Any] | None = None,
+) -> str:
     """Render a TemporalContext as a human-readable TEMPORAL
-    TRAJECTORY narrative ready to feed into an sLLM."""
+    TRAJECTORY narrative ready to feed into an sLLM.
+
+    When ``baseline`` (a :class:`aegis.burnin.anomaly.BurnInBaseline`)
+    is supplied, an additional ANOMALIES vs BURN-IN section is
+    appended with z-score-based tags. ``session_retrospective``
+    is the optional Stop-hook ``explain.session_retrospective``
+    dict for session-level checks. Both are forwarded to
+    :func:`aegis.burnin.anomaly.compute_anomalies`."""
     if not ctx.history:
         return (
             "TEMPORAL TRAJECTORY\n"
@@ -578,6 +590,22 @@ def serialize_temporal(ctx: TemporalContext) -> str:
         lines.append(
             f"  distinct_tools: {', '.join(ctx.distinct_tools_in_window)}"
         )
+
+    # PR-ε — burn-in baseline anomaly tags, when supplied.
+    if baseline is not None:
+        from aegis.burnin.anomaly import (
+            compute_anomalies,
+            render_anomalies,
+        )
+        tags = compute_anomalies(
+            temporal_ctx=ctx,
+            baseline=baseline,
+            session_retrospective=session_retrospective,
+        )
+        rendered = render_anomalies(tags)
+        if rendered:
+            lines.append("")
+            lines.append(rendered)
 
     return "\n".join(lines)
 
