@@ -1519,7 +1519,7 @@ def cmd_report(args: argparse.Namespace) -> int:
 def cmd_cache_lint(args: argparse.Namespace) -> int:
     """`aegis cache-lint` — diagnose Anthropic prompt-cache breakage.
 
-    Two modes (combine freely):
+    Three modes (combine freely):
 
     * ``--transcript <path>`` — observe per-turn cache efficiency in
       a Claude Code transcript ``.jsonl`` and flag the turns where
@@ -1531,7 +1531,13 @@ def cmd_cache_lint(args: argparse.Namespace) -> int:
       anti-patterns: dates, UUIDs, time-of-day strings, dynamic
       preludes ("Today is …", "Generated at …", etc.).
 
-    ``--json`` emits the full :class:`CacheLintReport` as a single
+    * ``--compare-with <path>`` — closed-loop verification mode.
+      Treats ``--transcript`` as the AFTER (post-fix) session and
+      ``--compare-with`` as the BEFORE baseline. Diffs the two
+      cache_lint reports and reports the realisation rate
+      (observed savings ÷ projected savings).
+
+    ``--json`` emits the full report (or comparison) as a single
     JSON document on stdout.
     """
     from aegis.performance.cache_lint import (
@@ -1542,6 +1548,7 @@ def cmd_cache_lint(args: argparse.Namespace) -> int:
     )
 
     transcript = getattr(args, "transcript", None)
+    compare_with = getattr(args, "compare_with", None)
     sys_prompt_path = getattr(args, "system_prompt", None)
     threshold = float(
         getattr(args, "break_threshold", DEFAULT_BREAK_THRESHOLD_PP)
@@ -1555,6 +1562,98 @@ def cmd_cache_lint(args: argparse.Namespace) -> int:
             print(f"[cache-lint] system-prompt file not found: {p}")
             return 2
         sys_prompt_text = p.read_text(encoding="utf-8")
+
+    # Closed-loop comparison short-circuit.
+    if compare_with:
+        if not transcript:
+            print(
+                "[cache-lint] --compare-with requires --transcript "
+                "(the AFTER session)"
+            )
+            return 2
+        from aegis.performance.cache_lint_loop import (
+            compare_transcripts,
+            comparison_to_dict,
+        )
+
+        cmp = compare_transcripts(
+            before_path=Path(compare_with),
+            after_path=Path(transcript),
+            after_system_prompt=sys_prompt_text,
+            break_threshold_pp=threshold,
+        )
+        if as_json:
+            print(json.dumps(comparison_to_dict(cmp), indent=2))
+            return 0
+
+        # Human-readable diff rendering.
+        print("AegisData Prompt Cache Lint — Closed-Loop Comparison")
+        print("=====================================================")
+        print(f"  before:  {compare_with}")
+        print(f"  after:   {transcript}")
+        print()
+        print(
+            f"  before  hit_rate = "
+            f"{cmp.before.observed_cache_hit_rate * 100:5.1f}%  "
+            f"({len(cmp.before.breaks)} break(s), "
+            f"{len(cmp.before.static_findings)} static finding(s))"
+        )
+        print(
+            f"  after   hit_rate = "
+            f"{cmp.after.observed_cache_hit_rate * 100:5.1f}%  "
+            f"({len(cmp.after.breaks)} break(s), "
+            f"{len(cmp.after.static_findings)} static finding(s))"
+        )
+        print()
+        sign = "+" if cmp.cache_hit_rate_delta >= 0 else ""
+        print(
+            f"  Δ hit_rate:           {sign}"
+            f"{cmp.cache_hit_rate_delta * 100:.1f} pp"
+        )
+        print(
+            f"  tokens recovered:     "
+            f"{cmp.token_savings_realised:+,} tokens / session"
+        )
+        print(
+            f"  realisation rate:     "
+            f"{cmp.realisation_rate * 100:.0f}%   "
+            f"(realised ÷ projected)"
+        )
+        print()
+        if cmp.breaks_resolved:
+            print(f"✓ Resolved {len(cmp.breaks_resolved)} break(s):")
+            for b in cmp.breaks_resolved:
+                print(
+                    f"    turn {b.turn_idx}  −{b.drop_pp:.0f} pp  "
+                    f"({b.attribution[:60]})"
+                )
+        if cmp.breaks_persisting:
+            print(
+                f"~ Persisting {len(cmp.breaks_persisting)} break(s) "
+                "(recommendation not applied):"
+            )
+            for b in cmp.breaks_persisting:
+                print(f"    turn {b.turn_idx}  ({b.attribution[:60]})")
+        if cmp.new_breaks:
+            print(f"⚠ NEW {len(cmp.new_breaks)} break(s) (regression):")
+            for b in cmp.new_breaks:
+                print(f"    turn {b.turn_idx}  ({b.attribution[:60]})")
+        if cmp.static_findings_resolved:
+            print(
+                f"✓ Removed {len(cmp.static_findings_resolved)} "
+                "static-lint anti-pattern(s)"
+            )
+        if cmp.static_findings_persisting:
+            print(
+                f"~ {len(cmp.static_findings_persisting)} static "
+                "anti-pattern(s) still present"
+            )
+        if cmp.new_static_findings:
+            print(
+                f"⚠ NEW {len(cmp.new_static_findings)} static "
+                "anti-pattern(s) introduced"
+            )
+        return 0
 
     if transcript:
         report = analyze_transcript(
@@ -3552,9 +3651,20 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     cl.add_argument(
+        "--compare-with",
+        dest="compare_with",
+        help=(
+            "Closed-loop verification: treat --transcript as the AFTER "
+            "(post-fix) session and this path as the BEFORE baseline. "
+            "Diffs the two cache_lint reports + reports the realisation rate."
+        ),
+    )
+    cl.add_argument(
         "--json",
         action="store_true",
-        help="Emit the full CacheLintReport as JSON to stdout",
+        help=(
+            "Emit the full CacheLintReport (or comparison) as JSON to stdout"
+        ),
     )
     cl.set_defaults(fn=cmd_cache_lint)
 
