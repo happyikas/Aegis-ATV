@@ -40,7 +40,22 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-DEFAULT_RETRY_THRESHOLD: float = 0.5
+# Method-aware defaults — BGE-cosine and Jaccard have different
+# similarity-score distributions. Same-but-paraphrased prompts
+# typically hit ~0.85 under BGE (semantic similarity is high even
+# with word-level edits) but only ~0.5 under Jaccard (which is
+# strict word-overlap). A single 0.5 threshold under-triggers on
+# Jaccard borderline cases and over-triggers spectacularly under
+# BGE — so we pick the threshold AFTER the method is known.
+DEFAULT_JACCARD_THRESHOLD: float = 0.5
+DEFAULT_BGE_THRESHOLD: float = 0.85
+
+# Backwards compatibility — preserve the public constant name.
+# Reads as "the Jaccard default" since that's the unconditional
+# fallback. Code that explicitly imports DEFAULT_RETRY_THRESHOLD
+# (e.g., tests) keeps working unchanged.
+DEFAULT_RETRY_THRESHOLD: float = DEFAULT_JACCARD_THRESHOLD
+
 PREVIEW_ENV: str = "AEGIS_USER_PROMPT_CAPTURE_PREVIEW"
 PREVIEW_MAX_CHARS: int = 80
 
@@ -163,11 +178,21 @@ def detect_user_retry(
     *,
     current_prompt: str,
     transcript_path: Path | None,
-    threshold: float = DEFAULT_RETRY_THRESHOLD,
+    threshold: float | None = None,
     use_bge: bool | None = None,
 ) -> RetryEvidence:
     """Compare ``current_prompt`` to the previous user prompt in the
     transcript. Returns RetryEvidence with similarity + flag.
+
+    ``threshold``:
+      - ``None`` (default) — pick the threshold AFTER the method is
+        known: 0.85 for BGE-cosine, 0.5 for Jaccard. This avoids the
+        scale mismatch where a 0.5 threshold over-triggers under
+        BGE (semantic similarity ~0.85 is the norm for unrelated
+        same-domain prompts) and under-triggers under Jaccard
+        (word-overlap can be very low for paraphrased retries).
+      - explicit float — used regardless of method. Use this when
+        you've calibrated a threshold against your specific deployment.
 
     ``use_bge``:
       - ``True``  → force BGE (raises if unconfigured)
@@ -198,6 +223,13 @@ def detect_user_retry(
         else:
             method = "jaccard"
             similarity = _jaccard(current_prompt, prev)
+
+    # Auto-pick threshold by method when caller didn't override.
+    if threshold is None:
+        threshold = (
+            DEFAULT_BGE_THRESHOLD if method == "bge_cosine"
+            else DEFAULT_JACCARD_THRESHOLD
+        )
 
     is_retry = similarity >= threshold
 

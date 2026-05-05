@@ -299,6 +299,72 @@ def _top_inefficient(
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Redaction (for safe sharing)
+# ──────────────────────────────────────────────────────────────────────
+
+
+def redact_summary(s: PerformanceSummary) -> PerformanceSummary:
+    """Return a copy with sensitive fields scrubbed for safe sharing.
+
+    Use case: dropping a dashboard into a support ticket / public log
+    without leaking absolute spend, machine-distinguishable timestamps,
+    or the local audit path. The redacted summary keeps RATIOS and
+    COUNTS — which is what's actually useful for diagnosing
+    inefficiency — and zeros out the absolute dollar amounts.
+
+    Specifically:
+
+    * ``cumulative_billed_dollars`` and ``avg_session_billed_dollars``
+      → 0.0. (Cache hit_rate, token totals, signal counts are kept —
+      they don't on their own reveal spend.)
+    * ``earliest_session_ts_ns`` and ``latest_session_ts_ns`` →
+      day-precision quantized. The exact timestamp can fingerprint a
+      machine/timezone; day precision still lets the reader see the
+      window.
+    * ``audit_path`` → SHA3-256 prefix of the path. Lets the reader
+      distinguish "this is the same audit log across two reports"
+      without exposing the actual filesystem path.
+
+    Counts and ratios that don't on their own identify a user are
+    kept verbatim — token totals, n_sessions, hit rates, signal
+    counts. The intent is "safe to share" not "fully anonymised".
+    """
+    import dataclasses
+    import hashlib
+
+    # Day-precision quantization: floor to start-of-day in UTC.
+    day_ns = 86_400 * 1_000_000_000
+    earliest_q = (
+        (s.earliest_session_ts_ns // day_ns) * day_ns
+        if s.earliest_session_ts_ns else 0
+    )
+    latest_q = (
+        (s.latest_session_ts_ns // day_ns) * day_ns
+        if s.latest_session_ts_ns else 0
+    )
+    if not s.audit_path:
+        audit_h = ""
+    elif s.audit_path.startswith("sha3:"):
+        # Already redacted — keep as-is so the operation is idempotent.
+        audit_h = s.audit_path
+    else:
+        audit_h = (
+            "sha3:" + hashlib.sha3_256(
+                s.audit_path.encode("utf-8"),
+            ).hexdigest()[:16]
+        )
+
+    return dataclasses.replace(
+        s,
+        audit_path=audit_h,
+        cumulative_billed_dollars=0.0,
+        avg_session_billed_dollars=0.0,
+        earliest_session_ts_ns=earliest_q,
+        latest_session_ts_ns=latest_q,
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Serialisation
 # ──────────────────────────────────────────────────────────────────────
 

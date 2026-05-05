@@ -39,7 +39,14 @@ LOCAL_AUDIT_PATH = Path(
         "AEGIS_LOCAL_AUDIT", str(Path.home() / ".aegis" / "audit.jsonl")
     )
 )
-RETRY_THRESHOLD = float(os.environ.get("AEGIS_USER_RETRY_THRESHOLD", "0.5"))
+# RETRY_THRESHOLD = None → method-aware auto-pick (PR #57): 0.85 for
+# BGE-cosine, 0.5 for Jaccard. Setting AEGIS_USER_RETRY_THRESHOLD pins
+# a single threshold regardless of method (use this only when you've
+# tuned to a specific deployment).
+_threshold_env = os.environ.get("AEGIS_USER_RETRY_THRESHOLD", "").strip()
+RETRY_THRESHOLD: float | None = (
+    float(_threshold_env) if _threshold_env else None
+)
 VERBOSE = os.environ.get("AEGIS_HOOK_VERBOSE", "0") == "1"
 
 

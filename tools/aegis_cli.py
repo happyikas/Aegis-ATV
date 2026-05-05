@@ -223,9 +223,12 @@ def cmd_status(args: argparse.Namespace) -> int:
     if getattr(args, "performance", False):
         from aegis.performance.dashboard import (
             build_performance_summary,
+            redact_summary,
             summary_to_dict,
         )
         summary = build_performance_summary(audit_path)
+        if getattr(args, "redact", False):
+            summary = redact_summary(summary)
 
         if getattr(args, "json", False):
             print()
@@ -3412,6 +3415,16 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "(--performance only) emit the PerformanceSummary as JSON "
             "to stdout, instead of the human-readable rendering"
+        ),
+    )
+    st.add_argument(
+        "--redact",
+        action="store_true",
+        help=(
+            "(--performance only) redact sensitive fields: absolute "
+            "billed_dollars become $-relative ratios, session ts becomes "
+            "day-precision quantized, audit path hashed. Use this when "
+            "sharing the dashboard in support tickets / public logs."
         ),
     )
     st.set_defaults(fn=cmd_status)
