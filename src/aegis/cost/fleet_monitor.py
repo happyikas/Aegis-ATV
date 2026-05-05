@@ -289,22 +289,44 @@ def is_running(pid_path: Path = DEFAULT_PID_PATH) -> bool:
 def make_default_notifier(
     *,
     slack_webhook_url: str | None = None,
+    ntfy_topic: str | None = None,
+    ntfy_base_url: str = "https://ntfy.sh",
+    crossings_log: Path | str | None = None,
     interactive: bool = False,
 ) -> Notifier:
     """Build the production notifier from CLI knobs.
 
-    * Slack URL set → CompositeNotifier([Slack, Stderr])
-    * No Slack URL    → StderrNotifier(interactive=...)
-    """
-    if slack_webhook_url:
-        from aegis.cost.composite_notifier import CompositeNotifier
-        from aegis.cost.slack_notifier import SlackWebhookNotifier
+    The notifier is always at least :class:`StderrNotifier`; every
+    other channel (Slack / ntfy / file) is **added** to a
+    :class:`CompositeNotifier` so operators can wire as many
+    redundant channels as they want.
 
-        return CompositeNotifier([
-            SlackWebhookNotifier(slack_webhook_url),
-            StderrNotifier(interactive=interactive),
-        ])
-    return StderrNotifier(interactive=interactive)
+    Production combo (recommended, no Slack workspace required):
+
+        make_default_notifier(
+            ntfy_topic="aegis-cost-alerts-<uuid>",   # phone push
+            crossings_log="~/.aegis/crossings.jsonl", # audit log
+        )
+    """
+    notifiers: list[Notifier] = [StderrNotifier(interactive=interactive)]
+
+    if slack_webhook_url:
+        from aegis.cost.slack_notifier import SlackWebhookNotifier
+        notifiers.append(SlackWebhookNotifier(slack_webhook_url))
+
+    if ntfy_topic:
+        from aegis.cost.ntfy_notifier import NtfyNotifier
+        notifiers.append(NtfyNotifier(topic=ntfy_topic, base_url=ntfy_base_url))
+
+    if crossings_log is not None:
+        from aegis.cost.file_notifier import FileNotifier
+        notifiers.append(FileNotifier(Path(crossings_log)))
+
+    if len(notifiers) == 1:
+        return notifiers[0]
+
+    from aegis.cost.composite_notifier import CompositeNotifier
+    return CompositeNotifier(notifiers)
 
 
 __all__ = [
