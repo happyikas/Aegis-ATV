@@ -49,6 +49,8 @@ HOOK_SCRIPT = HERE / "aegis_hook.py"               # sidecar mode (POST /evaluat
 LOCAL_HOOK_SCRIPT = HERE / "aegis_local_hook.py"   # local mode (in-process)
 POST_HOOK_SCRIPT = HERE / "hooks" / "post_tool.py"
 STOP_HOOK_SCRIPT = HERE / "hooks" / "session_end.py"
+PRECOMPACT_HOOK_SCRIPT = HERE / "hooks" / "pre_compact.py"
+USER_PROMPT_HOOK_SCRIPT = HERE / "hooks" / "user_prompt_submit.py"
 PLUGIN_MANIFEST = PROJECT_ROOT / ".claude-plugin" / "plugin.json"
 POLICIES_DIR = PROJECT_ROOT / "policies"
 SRC_DIR = PROJECT_ROOT / "src"
@@ -1025,7 +1027,10 @@ def _drop_aegis_entries(hooks_section: dict[str, list[dict[str, Any]]]) -> int:
     evicted instead of accumulating.
     """
     n_dropped = 0
-    for stage in ("PreToolUse", "PostToolUse", "Stop"):
+    for stage in (
+        "PreToolUse", "PostToolUse", "Stop",
+        "PreCompact", "UserPromptSubmit",   # PR #47
+    ):
         entries = hooks_section.get(stage, [])
         keep: list[dict[str, Any]] = []
         for entry in entries:
@@ -1669,6 +1674,36 @@ def cmd_install(args: argparse.Namespace) -> int:
         stop_cmd = f"{_hook_python_executable()} {STOP_HOOK_SCRIPT}"
         stop_hooks.append({"hooks": [{"type": "command", "command": stop_cmd}]})
 
+    # PR #47 — PreCompact + UserPromptSubmit forensic hooks. Both are
+    # additive, never block, and need PYTHONPATH=src to import the
+    # aegis package.
+    py = _hook_python_executable()
+    env_prefix = f"PYTHONPATH={SRC_DIR}"
+
+    precompact_hooks = hooks_section.setdefault("PreCompact", [])
+    precompact_already = any(
+        str(PRECOMPACT_HOOK_SCRIPT) in h.get("command", "")
+        for entry in precompact_hooks
+        for h in entry.get("hooks", [])
+    )
+    if not precompact_already:
+        precompact_cmd = f"{env_prefix} {py} {PRECOMPACT_HOOK_SCRIPT}"
+        precompact_hooks.append({
+            "hooks": [{"type": "command", "command": precompact_cmd}],
+        })
+
+    user_prompt_hooks = hooks_section.setdefault("UserPromptSubmit", [])
+    user_prompt_already = any(
+        str(USER_PROMPT_HOOK_SCRIPT) in h.get("command", "")
+        for entry in user_prompt_hooks
+        for h in entry.get("hooks", [])
+    )
+    if not user_prompt_already:
+        user_prompt_cmd = f"{env_prefix} {py} {USER_PROMPT_HOOK_SCRIPT}"
+        user_prompt_hooks.append({
+            "hooks": [{"type": "command", "command": user_prompt_cmd}],
+        })
+
     SETTINGS_PATH.write_text(json.dumps(existing, indent=2) + "\n")
 
     print(_green(f"\u2713 installed Aegis hooks → {SETTINGS_PATH}"))
@@ -1677,6 +1712,10 @@ def cmd_install(args: argparse.Namespace) -> int:
         print(f"  PostToolUse: {posttool_cmd}")
     if not stop_already:
         print(f"  Stop:        {_hook_python_executable()} {STOP_HOOK_SCRIPT}")
+    if not precompact_already:
+        print(f"  PreCompact:  {PRECOMPACT_HOOK_SCRIPT}")
+    if not user_prompt_already:
+        print(f"  UserPromptSubmit: {USER_PROMPT_HOOK_SCRIPT}")
     print('  matcher: "*" (every tool — narrow this in settings.json if too noisy)')
     print()
     if mode == "sidecar":
@@ -1755,7 +1794,10 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     # Walk the rotation set so dry-run can show exactly what would
     # be removed (using the same predicate as the live drop).
     to_remove: list[tuple[str, str]] = []
-    for stage in ("PreToolUse", "PostToolUse", "Stop"):
+    for stage in (
+        "PreToolUse", "PostToolUse", "Stop",
+        "PreCompact", "UserPromptSubmit",   # PR #47
+    ):
         for entry in hooks_section.get(stage, []):
             for h in entry.get("hooks", []):
                 cmd = h.get("command", "")
