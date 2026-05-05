@@ -40,6 +40,14 @@ from pathlib import Path
 
 # v2.2: the canonical instruction-surface set. Glob patterns relative
 # to the repo root, evaluated by Path.glob.
+#
+# v4.4 added ``tools/hooks/*.py`` — the Claude Code hook scripts
+# themselves. They run with full session privileges (read transcript,
+# append to audit), so a tampered hook is a high-impact compromise:
+# it could exfil prompts, falsify cost data, or silently downgrade
+# decisions. Baselining the hook SHA3s lets step309 detect
+# self-tamper between ``aegis baseline init`` and any subsequent
+# session.
 DEFAULT_INSTRUCTION_PATHS: tuple[str, ...] = (
     "CLAUDE.md",
     "AGENTS.md",
@@ -48,6 +56,7 @@ DEFAULT_INSTRUCTION_PATHS: tuple[str, ...] = (
     ".claude/skills/*.md",
     ".claude/commands/*.md",
     ".cursor/rules/*.mdc",
+    "tools/hooks/*.py",
 )
 
 

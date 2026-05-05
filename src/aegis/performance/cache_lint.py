@@ -56,6 +56,47 @@ DEFAULT_BREAK_THRESHOLD_PP: float = 30.0
 # Keeps PII / secrets out of the diagnostic output.
 STATIC_EXCERPT_MAX_CHARS: int = 60
 
+# Pattern names whose match value MIGHT be a secret (UUIDs are
+# frequently used as session tokens / API keys, epoch_ms is rarely a
+# secret on its own but combined with other context can fingerprint).
+# When a finding's pattern is in this set, the excerpt is REDACTED —
+# only enough characters survive to confirm shape, but not enough to
+# leak the secret if the report ends up in a log / support ticket.
+_REDACT_PATTERNS: frozenset[str] = frozenset({
+    "uuid",
+    "epoch_ms",
+})
+
+
+def _redact_excerpt(pattern_name: str, raw: str) -> str:
+    """Mask an anti-pattern match when it could be a secret.
+
+    Strategy: keep enough characters to recognise the shape (so the
+    finding is debuggable) but mask the bulk of the value with ``×``
+    so it can't be reversed back to the original token.
+
+    * ``uuid`` (``a1b2c3d4-e5f6-7890-abcd-ef1234567890``):
+      keep first 8 chars + dash, mask the rest as ``×``s.
+      → ``a1b2c3d4-××××-××××-××××-××××××××××××``
+    * ``epoch_ms`` (13-digit number):
+      keep first 4 digits, mask the rest.
+      → ``1714×××××××××``
+    * other patterns are returned unchanged — date / time / phrase
+      markers are not secrets.
+    """
+    if pattern_name not in _REDACT_PATTERNS or not raw:
+        return raw
+    if pattern_name == "uuid":
+        # UUID structure: 8-4-4-4-12. Keep first 9 (8 + dash), mask rest.
+        if len(raw) < 9:
+            return "×" * len(raw)
+        return raw[:9] + "".join("×" if c != "-" else "-" for c in raw[9:])
+    if pattern_name == "epoch_ms":
+        if len(raw) <= 4:
+            return "×" * len(raw)
+        return raw[:4] + "×" * (len(raw) - 4)
+    return raw
+
 Severity = Literal["error", "warning", "info"]
 
 
@@ -218,7 +259,10 @@ def analyze_system_prompt(text: str) -> list[StaticLintFinding]:
         return findings
     for pat in _PATTERNS:
         for m in pat.regex.finditer(text):
-            excerpt = m.group(0)
+            raw_match = m.group(0)
+            # Redact secret-shaped patterns BEFORE truncation — so even
+            # if the redaction is verbose we still respect the size cap.
+            excerpt = _redact_excerpt(pat.name, raw_match)
             if len(excerpt) > STATIC_EXCERPT_MAX_CHARS:
                 excerpt = excerpt[: STATIC_EXCERPT_MAX_CHARS - 1] + "…"
             findings.append(

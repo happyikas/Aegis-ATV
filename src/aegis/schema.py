@@ -295,8 +295,24 @@ class ATVInput(BaseModel):
     # stats that the builder folds into ``prompt_structure[9..13]``.
     # Both are optional; absence keeps the advisor on its policy-only
     # path. See :class:`AttentionSummary`.
-    attention_per_token: list[float] | None = None
-    attention_summary: AttentionSummary | None = None
+    #
+    # SECURITY: both fields use ``Field(exclude=True)`` so they are
+    # unconditionally excluded from ``model_dump()`` and
+    # ``model_dump_json()`` — even with ``include={...}`` they will
+    # NOT surface. This means any audit-chain serialiser that goes
+    # through Pydantic cannot accidentally persist them. Per-token
+    # attention can leak the position of secrets in a prompt, and the
+    # aggregate summary can fingerprint agent behaviour over time.
+    # The advisor reads them via attribute access
+    # (``inp.attention_per_token``), which bypasses serialisation.
+    # Debug callers that need to inspect them must access the
+    # attribute directly (e.g., ``print(inp.attention_per_token)``).
+    attention_per_token: list[float] | None = Field(
+        default=None, exclude=True,
+    )
+    attention_summary: AttentionSummary | None = Field(
+        default=None, exclude=True,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────
