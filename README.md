@@ -68,6 +68,7 @@ uv run aegis report                    # 5-line Agent Risk Report
 
 📖 **[v2.2 사용자 매뉴얼 (한국어)](docs/MANUAL_v2.2.md)** — 설치, CLI 레퍼런스, 시나리오, 트러블슈팅 14개 섹션.
 🧪 **[Mac mini 90-case 검증 매뉴얼 (한국어)](docs/MANUAL_macmini_validation.md)** — `python -m demo.macmini` 으로 8 advisor / 11 verb 결정적 검증.
+🗺️ **[ATV-2080-v1 구조 다이어그램](docs/diagrams/atv_2080_v1.png)** — 30 subfields × 2,080 float32 + 16-step firewall pipeline. 소스: [`docs/diagrams/draw_atv_2080_v1.py`](docs/diagrams/draw_atv_2080_v1.py).
 🎯 10분 라이브 데모: [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 📋 변경 내역: [`CHANGELOG.md`](CHANGELOG.md).
 
