@@ -46,6 +46,27 @@ Include ONLY the subfields you actually relied on (omit zeros). Allowed
 subfield names: {_SUBFIELDS_LIST}."""
 
 
+def _build_user_message(summary: str) -> str:
+    """User message = summary + (optional) RAG corpus block.
+
+    The system prompt is unchanged so Anthropic prompt-cache prefix
+    stays stable. Per-call dynamic content lives in the user message.
+    Fail-soft: any retrieval error falls through to a bare summary.
+    """
+    try:
+        from aegis.judge.rag_retrieval import retrieve_block
+        block = retrieve_block(summary)
+    except Exception:  # noqa: BLE001 — RAG must never block judge
+        block = ""
+    if not block:
+        return summary
+    return (
+        f"{summary}\n\n"
+        "## Relevant policy / incident context\n\n"
+        f"{block}"
+    )
+
+
 class HaikuJudge(Judge):
     def __init__(self) -> None:
         self.client = Anthropic()
@@ -53,12 +74,13 @@ class HaikuJudge(Judge):
         self.temperature = settings.aegis_judge_temperature
 
     def evaluate(self, summary: str) -> JudgeVerdict:
+        user_message = _build_user_message(summary)
         resp = self.client.messages.create(
             model=self.model,
             max_tokens=400,            # bumped from 200 for the attribution dict
             temperature=self.temperature,
             system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": summary}],
+            messages=[{"role": "user", "content": user_message}],
         )
         block = resp.content[0]
         text = cast(str, getattr(block, "text", "")).strip()
