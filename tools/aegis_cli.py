@@ -2817,10 +2817,14 @@ def _cmd_burnin_shadow_status(args: argparse.Namespace) -> int:
 def _cmd_burnin_export_baseline(args: argparse.Namespace) -> int:
     """Walk the local audit JSONL and write a per-tenant RAG baseline chunk.
 
-    Replaces ``policies/rag_corpus/baselines.jsonl`` with a single chunk
-    summarising the tenant's typical traffic at the metadata level
-    (which tools, which keys, decision distribution). Tool input
-    *values* are never logged so the chunk cannot leak content.
+    Default (``--rotate=False``) replaces
+    ``policies/rag_corpus/baselines.jsonl`` with a single chunk for the
+    named tenant — convenient for one-tenant local installs.
+
+    With ``--rotate``, appends a new datestamped chunk and seals the
+    previous open baseline for this tenant by stamping
+    ``valid_until=now`` on it. Tool input *values* are never logged so
+    the chunk cannot leak content. See PR ② of the temporal-RAG track.
     """
     from pathlib import Path as _Path
 
@@ -2835,8 +2839,14 @@ def _cmd_burnin_export_baseline(args: argparse.Namespace) -> int:
     out_path, summary = export_to_corpus(
         audit_path=audit_path,
         tenant=args.tenant,
+        rotate=getattr(args, "rotate", False),
     )
     print(render_export_report(summary, out_path))
+    if getattr(args, "rotate", False):
+        print(
+            "  rotate:            previous open baseline (if any) "
+            "sealed with valid_until=<now>"
+        )
     return 0 if summary.is_useful else 1
 
 
@@ -3829,6 +3839,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "(export-baseline) tenant identifier embedded in the "
             "RAG baseline chunk (default: local)"
+        ),
+    )
+    bn.add_argument(
+        "--rotate", action="store_true",
+        help=(
+            "(export-baseline) append a new datestamped chunk and "
+            "seal the previous open baseline for this tenant with "
+            "valid_until=<now>. Default off → overwrite-mode."
         ),
     )
     bn.set_defaults(fn=cmd_burnin)
