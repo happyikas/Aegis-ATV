@@ -278,25 +278,27 @@ class TestDefaultMemoryCache:
 # RAG block builder integration
 # ─────────────────────────────────────────────────────────────────────
 class TestBuildRAGBlock:
-    """Exercises ``aegis.judge.local_phi._build_rag_block`` — the
-    integration point between case memory and the LLM prompt."""
+    """Exercises ``aegis.judge.local_phi._build_case_memory_block`` —
+    the case-memory leg of the RAG block. The combined ``_build_rag_block``
+    composes this with the corpus retrieval path (PR 2 onwards); the
+    case-memory path is what these tests pin down."""
 
     def test_returns_empty_when_provider_not_bge_local(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from aegis.config import settings as _settings
         monkeypatch.setattr(_settings, "aegis_embedding_provider", "dummy")
-        from aegis.judge.local_phi import _build_rag_block
+        from aegis.judge.local_phi import _build_case_memory_block
         # atv None / dummy provider: must return ""
-        assert _build_rag_block(None, None, "summary") == ""
+        assert _build_case_memory_block(None) == ""
 
     def test_returns_empty_when_atv_none(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from aegis.config import settings as _settings
         monkeypatch.setattr(_settings, "aegis_embedding_provider", "bge-local")
-        from aegis.judge.local_phi import _build_rag_block
-        assert _build_rag_block(None, None, "summary") == ""
+        from aegis.judge.local_phi import _build_case_memory_block
+        assert _build_case_memory_block(None) == ""
 
     def test_returns_empty_when_memory_empty(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
@@ -306,10 +308,10 @@ class TestBuildRAGBlock:
         from aegis.judge import case_memory as _cm
         monkeypatch.setattr(_cm, "DEFAULT_CASE_MEMORY_PATH", tmp_path / "ghost.npz")
         reset_memory_cache()
-        from aegis.judge.local_phi import _build_rag_block
+        from aegis.judge.local_phi import _build_case_memory_block
         # Real ATV but empty memory: ""
         atv = np.zeros(2080, dtype=np.float32)
-        assert _build_rag_block(atv, None, "summary") == ""
+        assert _build_case_memory_block(atv) == ""
 
     def test_renders_block_when_memory_present(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,

@@ -190,21 +190,30 @@ def _real_evaluate(
 def _build_rag_block(
     atv: Any, inp: Any, summary: str,
 ) -> str:
-    """Retrieve similar past cases via the BGE-derived agent_state slice.
+    """Build the RAG block by combining two retrieval paths.
 
-    Returns an empty string when:
-    * the case memory is empty (no npz / `aegis case-memory build` not
-      run yet);
-    * BGE-local is not the active embedding provider (the
-      ``agent_state_embedding`` slice is then SHA3 noise — meaningless
-      cosines);
-    * any retrieval error occurs (the prompt builder degrades silently
-      to "no RAG block" rather than crashing the firewall).
+    Path A — **case memory** (legacy): BGE search over past ATV
+    ``agent_state_embedding`` vectors. Active only when ``bge-local`` is
+    the embedding provider AND the case memory ``.npz`` is populated.
 
-    The returned string is already trimmed by
-    :func:`format_cases_for_prompt` — drops in directly between rubric
-    and format example.
+    Path B — **policy/playbook corpus** (PR 2): cosine retrieval over
+    ``policies/rag_corpus/`` with the *active* provider. Works under
+    every provider (``dummy`` produces meaningless cosines but the
+    plumbing is identical, useful for tests).
+
+    Both paths are independently fail-soft. The block builder never
+    raises; an empty string disables RAG silently.
     """
+    blocks: list[str] = []
+
+    blocks.append(_build_case_memory_block(atv))
+    blocks.append(_build_corpus_block(summary))
+
+    return "\n\n".join(b for b in blocks if b)
+
+
+def _build_case_memory_block(atv: Any) -> str:
+    """Path A — past-ATV similarity search via case_memory."""
     try:
         from aegis.config import settings
         from aegis.judge.case_memory import (
@@ -213,7 +222,6 @@ def _build_rag_block(
         )
         from aegis.schema import SLICE_AGENT_STATE_EMBEDDING
 
-        # RAG only adds value when BGE provides a real semantic signal.
         if settings.aegis_embedding_provider != "bge-local":
             return ""
 
@@ -231,6 +239,17 @@ def _build_rag_block(
 
         cases = memory.search(query, k=3)
         return format_cases_for_prompt(cases)
+    except Exception:  # noqa: BLE001 — RAG must never block judge
+        return ""
+
+
+def _build_corpus_block(summary: str) -> str:
+    """Path B — policy/playbook RAG corpus retrieval (PR 2)."""
+    if not summary:
+        return ""
+    try:
+        from aegis.judge.rag_retrieval import retrieve_block
+        return retrieve_block(summary, k=3, max_chars=1500)
     except Exception:  # noqa: BLE001 — RAG must never block judge
         return ""
 
