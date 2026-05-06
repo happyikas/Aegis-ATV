@@ -589,3 +589,156 @@ class TestDummyAdvisorMultiDomain:
         )
         names = [r.advisor for r in advice.recommended_advisors]
         assert "cost-optimizer" in names
+
+
+# ──────────────────────────────────────────────────────────────────────
+# v2.8 PR-β — Tier 3 sLLM action_steps[] round-trip
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestHaikuActionSteps:
+    @respx.mock
+    def test_haiku_emits_action_steps_with_concrete_params(
+        self, _haiku_env: None
+    ) -> None:
+        """Tier 3 advisor surface: Haiku emits structured executable
+        steps with concrete turn indices, model names, savings
+        estimates. Each step round-trips through the parser intact."""
+        body = json.dumps({
+            "decision": "REQUIRE_APPROVAL",
+            "confidence": 0.85,
+            "reason": "cost 1.50x of budget; cache broke at turn -6",
+            "recommended_advisors": [
+                {
+                    "advisor": "cost-optimizer",
+                    "priority": "high",
+                    "action": "Trim expensive turns or swap model",
+                    "reasoning": "projected $1.50 = 150% of budget",
+                    "cited_signals": ["budget_used_ratio",
+                                      "cache_hit_rate_max_drop_pp"],
+                    "action_steps": [
+                        {
+                            "verb": "prune-turns",
+                            "parameters": {
+                                "turn_indices_rel": [-6, -5, -4],
+                                "saved_tokens_estimate": 14000,
+                                "saved_dollars_estimate": 0.32,
+                            },
+                            "expected_impact":
+                                "ratio 1.50 → 1.18; cache stabilises",
+                            "confidence": 0.85,
+                            "cited_signals": ["cache_hit_rate_max_drop_pp"],
+                        },
+                        {
+                            "verb": "swap-model",
+                            "parameters": {
+                                "from_model": "claude-opus-4-7",
+                                "to_model": "claude-haiku-4-5",
+                                "ratio_savings": 3.0,
+                            },
+                            "expected_impact": "~3x cheaper for remainder",
+                            "confidence": 0.6,
+                            "cited_signals": ["budget_used_ratio"],
+                        },
+                    ],
+                },
+            ],
+        })
+        respx.post("https://api.anthropic.com/v1/messages").mock(
+            return_value=httpx.Response(
+                200, json=_anthropic_response(body)
+            )
+        )
+        advice = HaikuAdvisor().advise(base_decision="ALLOW")
+
+        assert len(advice.recommended_advisors) == 1
+        rec = advice.recommended_advisors[0]
+        assert rec.advisor == "cost-optimizer"
+        assert len(rec.action_steps) == 2
+
+        prune = rec.action_steps[0]
+        assert prune.verb == "prune-turns"
+        assert prune.parameters["turn_indices_rel"] == [-6, -5, -4]
+        assert prune.parameters["saved_tokens_estimate"] == 14000
+        assert prune.confidence == 0.85
+        assert "cache_hit_rate_max_drop_pp" in prune.cited_signals
+
+        swap = rec.action_steps[1]
+        assert swap.verb == "swap-model"
+        assert swap.parameters["from_model"] == "claude-opus-4-7"
+        assert swap.parameters["ratio_savings"] == 3.0
+
+    @respx.mock
+    def test_haiku_unknown_verb_dropped_silently(
+        self, _haiku_env: None
+    ) -> None:
+        """Hallucination defense: a step with verb='do-magic-fix' must
+        be dropped without affecting other valid steps."""
+        body = json.dumps({
+            "decision": "ALLOW", "confidence": 0.6, "reason": "ok",
+            "recommended_advisors": [{
+                "advisor": "cost-optimizer", "priority": "low",
+                "action": "x",
+                "action_steps": [
+                    {"verb": "do-magic-fix", "parameters": {}},
+                    {"verb": "end-session", "parameters": {}},
+                    {"verb": "another-fake", "parameters": {"foo": 1}},
+                ],
+            }],
+        })
+        respx.post("https://api.anthropic.com/v1/messages").mock(
+            return_value=httpx.Response(
+                200, json=_anthropic_response(body)
+            )
+        )
+        advice = HaikuAdvisor().advise(base_decision="ALLOW")
+        steps = advice.recommended_advisors[0].action_steps
+        verbs = [s.verb for s in steps]
+        assert verbs == ["end-session"]
+
+    @respx.mock
+    def test_haiku_step_missing_required_param_dropped(
+        self, _haiku_env: None
+    ) -> None:
+        """swap-model requires from_model + to_model; one without
+        them must be silently dropped."""
+        body = json.dumps({
+            "decision": "ALLOW", "confidence": 0.6, "reason": "ok",
+            "recommended_advisors": [{
+                "advisor": "cost-optimizer", "priority": "low",
+                "action": "x",
+                "action_steps": [
+                    {"verb": "swap-model",
+                     "parameters": {"from_model": "opus"}},
+                    {"verb": "swap-model",
+                     "parameters": {"from_model": "opus",
+                                    "to_model": "haiku"}},
+                ],
+            }],
+        })
+        respx.post("https://api.anthropic.com/v1/messages").mock(
+            return_value=httpx.Response(
+                200, json=_anthropic_response(body)
+            )
+        )
+        advice = HaikuAdvisor().advise(base_decision="ALLOW")
+        steps = advice.recommended_advisors[0].action_steps
+        assert len(steps) == 1
+        assert steps[0].parameters["to_model"] == "haiku"
+
+
+class TestPromptVersion:
+    def test_prompt_hash_changed_for_v3(self) -> None:
+        """ADVISOR_PROMPT_HASH must change when the prompt is
+        revised. Audit replay relies on this to distinguish advice
+        produced by v2 (no action_steps) vs v3 (with action_steps)."""
+        # Minimal sanity: the hash is a 64-hex string and the system
+        # prompt mentions the new closed verb catalog.
+        assert len(ADVISOR_PROMPT_HASH) == 64
+        for verb in (
+            "prune-turns", "swap-model", "swap-tool", "end-session",
+            "summarize-window", "narrow-scope", "clarify-intent",
+            "run-diagnostic", "verify-state",
+            "notify-operator", "require-approval",
+        ):
+            assert verb in ADVISOR_SYSTEM_PROMPT
