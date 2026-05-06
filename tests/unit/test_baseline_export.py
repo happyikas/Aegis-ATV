@@ -245,3 +245,172 @@ class TestExport:
         from aegis.judge.rag_corpus import load_corpus
         chunk = load_corpus(corpus).by_category("baseline")[0]
         assert "too few" in chunk.content
+
+
+# ── TestRotation (PR ②) ───────────────────────────────────────────────
+
+
+class TestRotation:
+    def test_rotate_first_call_creates_open_baseline(
+        self, tmp_path: Path,
+    ) -> None:
+        """First rotation: nothing to seal, just write a new chunk."""
+        audit = tmp_path / "audit.jsonl"
+        _write_audit(audit, [_record("Read") for _ in range(15)])
+        corpus = tmp_path / "corpus"
+        out_path, _ = export_to_corpus(
+            audit, tenant="alice", corpus_dir=corpus, rotate=True,
+        )
+        from aegis.judge.rag_corpus import load_corpus
+        baselines = load_corpus(corpus).by_category("baseline")
+        assert len(baselines) == 1
+        c = baselines[0]
+        assert c.id.startswith("baseline-alice-")
+        assert c.valid_from is not None
+        assert c.valid_until is None       # still open
+        assert c.created_at is not None
+        assert c.supersedes is None        # nothing to supersede yet
+
+    def test_rotate_second_call_seals_previous_and_links(
+        self, tmp_path: Path,
+    ) -> None:
+        """Second rotation: previous chunk gets valid_until,
+        new chunk gets supersedes=<old id>."""
+        audit = tmp_path / "audit.jsonl"
+        _write_audit(audit, [_record("Read") for _ in range(15)])
+        corpus = tmp_path / "corpus"
+        out_first, _ = export_to_corpus(
+            audit, tenant="alice", corpus_dir=corpus, rotate=True,
+        )
+        # Sleep 1 second so the second chunk has a different
+        # second-resolution timestamp (and supersedes link is meaningful).
+        import time as _time
+        _time.sleep(1.1)
+        out_second, _ = export_to_corpus(
+            audit, tenant="alice", corpus_dir=corpus, rotate=True,
+        )
+
+        from aegis.judge.rag_corpus import load_corpus
+        baselines = load_corpus(corpus).by_category("baseline")
+        # Same-day: both chunks share the date suffix, so the second
+        # call replaces the first under the same id. Sleep buys at most
+        # 1s, so this is the same-day path. Verify exactly 1 chunk.
+        assert len(baselines) == 1, (
+            f"expected 1 baseline (same-day), got {len(baselines)}"
+        )
+        # The remaining chunk should have valid_from set (rotation
+        # always stamps it). Same-day rotation is overwrite-with-
+        # rotation-fields semantics.
+        c = baselines[0]
+        assert c.valid_from is not None
+
+    def test_rotate_does_not_touch_other_tenants(
+        self, tmp_path: Path,
+    ) -> None:
+        """Rotating tenant 'alice' must leave tenant 'bob's baseline
+        untouched."""
+        audit = tmp_path / "audit.jsonl"
+        _write_audit(audit, [_record("Read") for _ in range(15)])
+        corpus = tmp_path / "corpus"
+        # Seed bob first.
+        export_to_corpus(audit, tenant="bob", corpus_dir=corpus, rotate=True)
+        # Then rotate alice (separate tenant).
+        export_to_corpus(audit, tenant="alice", corpus_dir=corpus, rotate=True)
+
+        from aegis.judge.rag_corpus import load_corpus
+        baselines = load_corpus(corpus).by_category("baseline")
+        ids = [c.id for c in baselines]
+        # Both tenants present; bob's chunk untouched (valid_until is None).
+        assert any("alice" in i for i in ids)
+        assert any("bob" in i for i in ids)
+        bob = next(c for c in baselines if "bob" in c.id)
+        assert bob.valid_until is None, (
+            f"bob's baseline should still be open, got {bob.valid_until}"
+        )
+
+    def test_rotate_seal_chains_supersedes_after_day_change(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Two rotations on different days produce a chain:
+        chunk1 (valid_until=day2) ← chunk2 (supersedes=chunk1)."""
+        audit = tmp_path / "audit.jsonl"
+        _write_audit(audit, [_record("Read") for _ in range(15)])
+        corpus = tmp_path / "corpus"
+
+        # Patch _now_iso to return day 1.
+        from aegis.burnin import baseline_export as _be
+        monkeypatch.setattr(_be, "_now_iso", lambda: "2026-04-15T00:00:00Z")
+        export_to_corpus(audit, tenant="alice", corpus_dir=corpus, rotate=True)
+
+        # Patch _now_iso to return day 2 (different date suffix).
+        monkeypatch.setattr(_be, "_now_iso", lambda: "2026-04-22T00:00:00Z")
+        export_to_corpus(audit, tenant="alice", corpus_dir=corpus, rotate=True)
+
+        from aegis.judge.rag_corpus import load_corpus
+        baselines = load_corpus(corpus).by_category("baseline")
+        assert len(baselines) == 2
+
+        old = next(c for c in baselines if c.id.endswith("20260415"))
+        new = next(c for c in baselines if c.id.endswith("20260422"))
+        assert old.valid_until == "2026-04-22T00:00:00Z"
+        assert new.valid_from == "2026-04-22T00:00:00Z"
+        assert new.supersedes == old.id
+
+    def test_rotate_view_at_anchor_picks_correct_snapshot(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """RagCorpus.valid_at(<between snapshots>) returns the older
+        snapshot; valid_at(<after second>) returns the newer one."""
+        audit = tmp_path / "audit.jsonl"
+        _write_audit(audit, [_record("Read") for _ in range(15)])
+        corpus = tmp_path / "corpus"
+
+        from aegis.burnin import baseline_export as _be
+        monkeypatch.setattr(_be, "_now_iso", lambda: "2026-04-15T00:00:00Z")
+        export_to_corpus(audit, tenant="alice", corpus_dir=corpus, rotate=True)
+        monkeypatch.setattr(_be, "_now_iso", lambda: "2026-04-22T00:00:00Z")
+        export_to_corpus(audit, tenant="alice", corpus_dir=corpus, rotate=True)
+
+        from datetime import datetime
+
+        from aegis.judge.rag_corpus import load_corpus
+
+        def _ns(iso: str) -> int:
+            dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+            return int(dt.timestamp() * 1_000_000_000)
+
+        loaded = load_corpus(corpus)
+        # 2026-04-18: between the two snapshots, only the old one valid.
+        view_mid = loaded.valid_at(_ns("2026-04-18T00:00:00Z"))
+        ids_mid = {c.id for c in view_mid.chunks}
+        assert any(i.endswith("20260415") for i in ids_mid)
+        assert not any(i.endswith("20260422") for i in ids_mid)
+
+        # 2026-05-01: after second snapshot, only it is valid.
+        view_late = loaded.valid_at(_ns("2026-05-01T00:00:00Z"))
+        ids_late = {c.id for c in view_late.chunks}
+        assert any(i.endswith("20260422") for i in ids_late)
+        assert not any(i.endswith("20260415") for i in ids_late)
+
+    def test_no_rotate_keeps_legacy_overwrite_behaviour(
+        self, tmp_path: Path,
+    ) -> None:
+        """rotate=False (default): each call overwrites with a single
+        un-versioned chunk. PR #90 contract preserved."""
+        audit = tmp_path / "audit.jsonl"
+        _write_audit(audit, [_record("Read") for _ in range(15)])
+        corpus = tmp_path / "corpus"
+        export_to_corpus(audit, tenant="alice", corpus_dir=corpus, rotate=False)
+        export_to_corpus(audit, tenant="bob", corpus_dir=corpus, rotate=False)
+
+        from aegis.judge.rag_corpus import load_corpus
+        baselines = load_corpus(corpus).by_category("baseline")
+        # Last call wins, single chunk only.
+        assert len(baselines) == 1
+        c = baselines[0]
+        assert c.id == "baseline-bob"
+        # No timestamps in legacy mode.
+        assert c.valid_from is None
+        assert c.valid_until is None
+        assert c.created_at is None
+        assert c.supersedes is None

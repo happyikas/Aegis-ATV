@@ -148,11 +148,27 @@ def _format_pairs(pairs: tuple[tuple[str, int], ...]) -> str:
     return ", ".join(f"{name} ({count})" for name, count in pairs)
 
 
-def render_baseline_chunk(summary: BaselineSummary) -> dict[str, Any]:
+def render_baseline_chunk(
+    summary: BaselineSummary,
+    *,
+    chunk_id: str | None = None,
+    created_at: str | None = None,
+    valid_from: str | None = None,
+    supersedes: str | None = None,
+) -> dict[str, Any]:
     """Turn a ``BaselineSummary`` into the JSONL chunk shape consumed by
-    ``aegis.judge.rag_corpus``. The ``content`` is natural-language
-    English so the sLLM judge can reason over it directly."""
-    chunk_id = f"baseline-{summary.tenant}"
+    ``aegis.judge.rag_corpus``.
+
+    ``chunk_id`` defaults to ``baseline-{tenant}`` (legacy single-chunk
+    layout). When the caller is rotating (PR ②) it should supply a
+    date-suffixed id like ``baseline-{tenant}-{YYYYMMDD}`` so multiple
+    snapshots can coexist with chained ``supersedes`` references.
+
+    ``created_at`` / ``valid_from`` / ``supersedes`` are passed straight
+    through to the chunk dict so the time-decay reranker (PR ③) and the
+    validity filter (PR ②/temporal-RAG) can see this baseline as part
+    of their time-aware retrieval."""
+    cid = chunk_id if chunk_id is not None else f"baseline-{summary.tenant}"
     if not summary.is_useful:
         content = (
             f"Tenant '{summary.tenant}' has only {summary.n_records} "
@@ -181,8 +197,8 @@ def render_baseline_chunk(summary: BaselineSummary) -> dict[str, Any]:
             "(unfamiliar tools, unusual key combinations, decision "
             "mix shifts) as a signal worth flagging."
         )
-    return {
-        "id": chunk_id,
+    out: dict[str, Any] = {
+        "id": cid,
         "category": "baseline",
         "title": f"Tenant {summary.tenant} traffic baseline",
         "content": content,
@@ -190,6 +206,72 @@ def render_baseline_chunk(summary: BaselineSummary) -> dict[str, Any]:
         "policy_rule": None,
         "decision": "ALLOW",
     }
+    if created_at is not None:
+        out["created_at"] = created_at
+    if valid_from is not None:
+        out["valid_from"] = valid_from
+    if supersedes is not None:
+        out["supersedes"] = supersedes
+    return out
+
+
+def _now_iso() -> str:
+    """Stable ISO 8601 UTC stamp for chunk timestamps."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _rotated_chunk_id(tenant: str, when_iso: str) -> str:
+    """``baseline-<tenant>-<YYYYMMDD>`` — datestamped slug for
+    multi-snapshot layouts. When a tenant rotates more than once a
+    day, the second call would collide; the rotate path detects that
+    and falls through to overwrite-mode for the same-day case."""
+    date = when_iso[:10].replace("-", "")
+    return f"baseline-{tenant}-{date}"
+
+
+def _read_existing_baselines(path: Path) -> list[dict[str, Any]]:
+    """Return parsed JSON objects from ``baselines.jsonl``; tolerates
+    the file being absent or empty."""
+    if not path.is_file():
+        return []
+    out: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            out.append(obj)
+    return out
+
+
+def _seal_previous_for_tenant(
+    existing: list[dict[str, Any]], tenant: str, *, until_iso: str,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """Find the still-open baseline for ``tenant`` (no ``valid_until``)
+    and stamp ``valid_until=until_iso`` on it. Returns
+    ``(sealed_chunk, full_list)``; returns ``(None, existing)`` when
+    there is nothing to seal (placeholder template, other tenants,
+    or already-rotated chunks)."""
+    sealed: dict[str, Any] | None = None
+    out = []
+    for chunk in existing:
+        is_match = (
+            chunk.get("category") == "baseline"
+            and tenant in (chunk.get("tags") or [])
+            and chunk.get("valid_until") is None
+        )
+        if is_match and sealed is None:
+            new = dict(chunk)
+            new["valid_until"] = until_iso
+            sealed = new
+            out.append(new)
+        else:
+            out.append(chunk)
+    return sealed, out
 
 
 def export_to_corpus(
@@ -197,25 +279,64 @@ def export_to_corpus(
     *,
     tenant: str = "local",
     corpus_dir: Path | None = None,
+    rotate: bool = False,
 ) -> tuple[Path, BaselineSummary]:
     """Run the full pipeline: analyse → render → write baselines.jsonl.
 
-    Overwrites ``policies/rag_corpus/baselines.jsonl`` with a single
-    chunk for the named tenant. The placeholder shipped in the repo is
-    replaced; multi-tenant deployments can call this once per tenant
-    and pre-merge the resulting JSONL files.
+    Behaviour split:
 
-    Returns the (path_written, summary) pair.
+    * ``rotate=False`` (default, back-compat with PR #90) — overwrites
+      the entire ``baselines.jsonl`` with a single chunk for the named
+      tenant. Lower-friction for one-tenant local installs.
+
+    * ``rotate=True`` (PR ②) — appends a new datestamped chunk and
+      stamps ``valid_until=now`` on the previous open baseline for the
+      same tenant. The ``supersedes`` link makes the chain traversable
+      for audit replay; the validity-window filter (PR #94) + time
+      decay (PR ③) make sure retrieval at any anchor time picks the
+      right snapshot. Other tenants' baselines are left untouched, so
+      multi-tenant Sidecar deployments can call this once per tenant
+      on a schedule and accumulate per-tenant histories.
+
+    Returns the ``(path_written, summary)`` pair.
     """
     summary = analyse_audit(audit_path, tenant=tenant)
-    chunk = render_baseline_chunk(summary)
 
     if corpus_dir is None:
         from aegis.judge.rag_corpus import default_corpus_dir
         corpus_dir = default_corpus_dir()
     corpus_dir.mkdir(parents=True, exist_ok=True)
     out_path = corpus_dir / "baselines.jsonl"
-    out_path.write_text(json.dumps(chunk) + "\n", encoding="utf-8")
+
+    if rotate:
+        now_iso = _now_iso()
+        existing = _read_existing_baselines(out_path)
+        sealed, existing_after_seal = _seal_previous_for_tenant(
+            existing, tenant, until_iso=now_iso,
+        )
+        new_id = _rotated_chunk_id(tenant, now_iso)
+        # Same-day collision: drop the colliding entry from existing
+        # (it was a previous rotation we're replacing). The ``sealed``
+        # entry will still carry valid_until even if its id collides,
+        # but here it would be the new_id we're about to write — so
+        # drop it.
+        existing_after_seal = [
+            c for c in existing_after_seal if c.get("id") != new_id
+        ]
+        new_chunk = render_baseline_chunk(
+            summary,
+            chunk_id=new_id,
+            created_at=now_iso,
+            valid_from=now_iso,
+            supersedes=(sealed.get("id") if sealed else None),
+        )
+        with out_path.open("w", encoding="utf-8") as f:
+            for c in existing_after_seal:
+                f.write(json.dumps(c) + "\n")
+            f.write(json.dumps(new_chunk) + "\n")
+    else:
+        chunk = render_baseline_chunk(summary)
+        out_path.write_text(json.dumps(chunk) + "\n", encoding="utf-8")
 
     # Invalidate caches so the next retrieval sees the new content.
     from aegis.judge.rag_corpus import reset_corpus_cache
