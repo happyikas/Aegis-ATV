@@ -136,7 +136,17 @@ class RagIndex:
 
     def search(
         self, query: np.ndarray, k: int = 3,
+        *, anchor_ts_ns: int | None = None,
     ) -> list[tuple[RagChunk, float]]:
+        """Return the top-k chunks by cosine similarity to ``query``.
+
+        When ``anchor_ts_ns`` is supplied, chunks whose validity window
+        does not cover that timestamp are skipped (PR ② of temporal
+        RAG). The walk continues down the score order until k *valid*
+        chunks have been collected (or the corpus is exhausted), so
+        callers always get the best k chunks available at that anchor
+        time rather than a possibly-empty filtered slice.
+        """
         if self.is_empty:
             return []
         q = np.asarray(query, dtype=np.float32)
@@ -147,8 +157,25 @@ class RagIndex:
             return []
         q = q / norm
         scores = self.embeddings @ q
-        top = np.argsort(-scores)[: max(k, 0)]
-        return [(self.corpus.chunks[int(i)], float(scores[int(i)])) for i in top]
+
+        if anchor_ts_ns is None:
+            top = np.argsort(-scores)[: max(k, 0)]
+            return [
+                (self.corpus.chunks[int(i)], float(scores[int(i)])) for i in top
+            ]
+
+        # Validity-aware top-k: walk argsort, skip invalid chunks.
+        order = np.argsort(-scores)
+        out: list[tuple[RagChunk, float]] = []
+        kk = max(k, 0)
+        for i in order:
+            idx = int(i)
+            chunk = self.corpus.chunks[idx]
+            if chunk.is_valid_at(anchor_ts_ns):
+                out.append((chunk, float(scores[idx])))
+                if len(out) >= kk:
+                    break
+        return out
 
 
 def build_index(
@@ -210,12 +237,15 @@ def retrieve(
     k: int = 3,
     index: RagIndex | None = None,
     provider: EmbeddingProvider | None = None,
+    anchor_ts_ns: int | None = None,
 ) -> list[tuple[RagChunk, float]]:
     """Retrieve top-k chunks for ``query_text``.
 
     If ``index`` is omitted, uses :func:`build_default_index`. If
     ``provider`` is omitted, uses the active provider for query
-    embedding too.
+    embedding too. When ``anchor_ts_ns`` is supplied, the result is
+    filtered to chunks valid at that timestamp (PR ②); ``None`` keeps
+    the historical behaviour (no time filter).
     """
     idx = index if index is not None else build_default_index()
     if idx.is_empty:
@@ -224,7 +254,7 @@ def retrieve(
         from aegis.atv.embeddings import get_provider
         provider = get_provider()
     q_vec = _embed_text(query_text, provider, idx.dim)
-    return idx.search(q_vec, k=k)
+    return idx.search(q_vec, k=k, anchor_ts_ns=anchor_ts_ns)
 
 
 def retrieve_block(
@@ -234,6 +264,7 @@ def retrieve_block(
     max_chars: int | None = None,
     index: RagIndex | None = None,
     provider: EmbeddingProvider | None = None,
+    anchor_ts_ns: int | None = None,
 ) -> str:
     """Retrieve top-k chunks and render them into a prompt block.
 
@@ -242,10 +273,22 @@ def retrieve_block(
     When ``aegis_rag_enabled`` is False the function returns ``""``
     without doing any work.
 
+    ``anchor_ts_ns`` semantics (PR ②):
+
+    * ``None`` — anchor at ``time.time_ns()`` (live-judge default).
+      Chunks whose validity window has expired are silently filtered
+      out before top-k. New chunks scheduled for the future are also
+      skipped. This is what production traffic should see.
+    * any int — anchor at that exact timestamp. Used by audit replay
+      so the judge sees the corpus state *as it was at the time of
+      the recorded incident*, not the current state.
+
     Returns ``""`` if retrieval fails for any reason. The judge prompt
     builder relies on this fail-soft contract.
     """
     try:
+        import time as _time
+
         from aegis.config import settings
         if not settings.aegis_rag_enabled:
             return ""
@@ -253,8 +296,12 @@ def retrieve_block(
         effective_max = (
             max_chars if max_chars is not None else settings.aegis_rag_max_chars
         )
+        effective_anchor = (
+            anchor_ts_ns if anchor_ts_ns is not None else _time.time_ns()
+        )
         hits = retrieve(
             query_text, k=effective_k, index=index, provider=provider,
+            anchor_ts_ns=effective_anchor,
         )
     except Exception:  # noqa: BLE001 — RAG must never block the judge
         return ""
@@ -264,6 +311,34 @@ def retrieve_block(
     return render_chunks_for_prompt(chunks, max_chars=effective_max)
 
 
+def retrieve_for_audit_record(
+    audit_rec: dict[str, object],
+    query_text: str,
+    *,
+    k: int | None = None,
+    index: RagIndex | None = None,
+    provider: EmbeddingProvider | None = None,
+) -> list[tuple[RagChunk, float]]:
+    """Audit-replay convenience: anchor retrieval at the record's ``ts_ns``.
+
+    Use when re-running a saved audit JSONL line through the judge —
+    the corpus view will be filtered to chunks effective at the
+    incident time, not the current time. If the record is missing
+    ``ts_ns`` (older audits), falls back to live retrieval (no time
+    filter). ``index`` and ``provider`` are pass-throughs for tests
+    and bespoke flows; production code can leave both as ``None`` to
+    use the default index built from the active embedding provider.
+    """
+    ts_raw = audit_rec.get("ts_ns")
+    anchor: int | None = int(ts_raw) if isinstance(ts_raw, (int, float)) else None
+    from aegis.config import settings
+    effective_k = k if k is not None else settings.aegis_rag_top_k
+    return retrieve(
+        query_text, k=effective_k, anchor_ts_ns=anchor,
+        index=index, provider=provider,
+    )
+
+
 __all__: tuple[str, ...] = (
     "RagIndex",
     "build_index",
@@ -271,4 +346,5 @@ __all__: tuple[str, ...] = (
     "reset_index_cache",
     "retrieve",
     "retrieve_block",
+    "retrieve_for_audit_record",
 )
