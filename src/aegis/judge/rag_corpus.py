@@ -97,6 +97,12 @@ class RagChunk:
     valid_from: str | None = None       # inclusive
     valid_until: str | None = None      # exclusive
     supersedes: str | None = None       # chunk id this entry replaces
+    # ── PR ③ time-decay metadata ───────────────────────────────────
+    # ISO 8601 UTC. When set, the retrieval reranker applies an
+    # exponential decay factor based on (anchor − created_at) and a
+    # per-category half-life (settings.aegis_rag_decay_*_days).
+    # Absent → no decay (factor 1.0, back-compat).
+    created_at: str | None = None
 
     def render_for_prompt(self) -> str:
         """Return the chunk in the form the model sees in-context."""
@@ -250,6 +256,23 @@ def _validate_chunk(raw: dict[str, object], src: Path) -> RagChunk:
                 f"must be strictly after valid_from ({valid_from})"
             )
 
+    # ── PR ③ created_at — strict ISO parse, optional ───────────────
+    created_at_raw = raw.get("created_at")
+    created_at: str | None = (
+        created_at_raw if isinstance(created_at_raw, str) else None
+    )
+    if created_at_raw is not None and created_at is None:
+        raise ValueError(
+            f"{src}: chunk {cid!r} created_at must be ISO 8601 UTC string or null"
+        )
+    if created_at is not None:
+        try:
+            _parse_iso_to_ns(created_at, field_name="created_at")
+        except ValueError as exc:
+            raise ValueError(
+                f"{src}: chunk {cid!r} {exc}"
+            ) from exc
+
     return RagChunk(
         id=cid,
         category=category,  # type: ignore[arg-type]
@@ -261,6 +284,7 @@ def _validate_chunk(raw: dict[str, object], src: Path) -> RagChunk:
         valid_from=valid_from,
         valid_until=valid_until,
         supersedes=supersedes,
+        created_at=created_at,
     )
 
 
