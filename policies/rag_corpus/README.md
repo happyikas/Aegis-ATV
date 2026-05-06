@@ -38,6 +38,31 @@ Every line is one JSON object:
 | `tags` | string[] | no | Extra keywords for keyword pre-filter (future). |
 | `policy_rule` | string | no | Cross-reference to the step311 / step320 rule code. |
 | `decision` | enum | no | `BLOCK` / `REQUIRE_APPROVAL` / `ALLOW` — the verdict this chunk argues for. |
+| `valid_from` | string | no | ISO 8601 UTC (`YYYY-MM-DDTHH:MM:SSZ`) — chunk first becomes effective at this time. Inclusive. Absent → always valid. |
+| `valid_until` | string | no | ISO 8601 UTC — chunk stops being effective at this time. **Exclusive**. Absent → no end. |
+| `supersedes` | string | no | ID of the chunk this entry replaces (informational; the validity window is what actually filters retrieval). |
+
+### Validity windows (PR #94)
+
+Without timestamps, RAG cannot tell stale rules apart from current ones. Each chunk can carry an optional validity window so that:
+
+* **Forensic replay (PR #95)** can ask "what was the policy at the time of incident I-127?" and retrieval will return only the chunks that were in effect at that timestamp.
+* **Rule supersession** is automatic — when a regex changes, the new chunk gets `valid_from: <today>` and the old chunk gets `valid_until: <today>` and `supersedes: <old-id>`. Retrieval at *current* time only sees the new one; retrieval at a pre-change timestamp still sees the old one.
+* **Tenant baselines** become time-aware — last week's baseline gets `valid_from: <last-week>`; the previous month's baseline rolls off naturally without manual deletion.
+
+Example superseded pair:
+
+```json
+{"id": "rule-aws-iam-mutation-v0", "category": "rule",
+ "title": "AWS IAM mutation (v0)", "content": "...",
+ "valid_from": "2024-01-01T00:00:00Z",
+ "valid_until": "2024-08-01T00:00:00Z"}
+
+{"id": "rule-aws-iam-mutation", "category": "rule",
+ "title": "AWS IAM mutation", "content": "...",
+ "valid_from": "2024-08-01T00:00:00Z",
+ "supersedes": "rule-aws-iam-mutation-v0"}
+```
 
 ## Loader
 
@@ -45,12 +70,19 @@ Every line is one JSON object:
 from aegis.judge.rag_corpus import load_default_corpus
 
 corpus = load_default_corpus()
-print(len(corpus.chunks))
+print(len(corpus.chunks))                     # all chunks, all eras
 print(corpus.chunks[0].title)
+
+# Time-anchored view (PR ①):
+import time
+now = corpus.valid_at(time.time_ns())          # chunks effective right now
+historical = corpus.valid_at(1_700_000_000_000_000_000)  # chunks at 2023-11-14
 ```
 
-The loader is **stdlib-only** — no embedding, no model load. PR 2 will
-add the embedding-based retrieval on top of the loaded chunks.
+The loader is **stdlib-only** — no embedding, no model load. PR 2 added
+the embedding-based retrieval; PR ① added validity-window filtering;
+PR ② will thread an `anchor_ts_ns` through `retrieve()` so the
+retrieval-time filter matches.
 
 ## Adding a new chunk
 
