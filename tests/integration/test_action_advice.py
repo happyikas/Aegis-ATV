@@ -751,6 +751,104 @@ class TestActionStepDefensiveParse:
             assert steps[0].verb == verb
 
 
+class TestVerbParamValidation:
+    """v2.8 PR-γ — per-verb parameter shape validation drops steps
+    with structurally invalid params even if required keys are present."""
+
+    def _step_dict(self, verb: str, params: dict) -> dict:
+        return {
+            "decision": "ALLOW", "reason": "x", "confidence": 0.5,
+            "recommended_advisors": [{
+                "advisor": "cost-optimizer", "priority": "high",
+                "action": "x",
+                "action_steps": [
+                    {"verb": verb, "parameters": params},
+                ],
+            }],
+        }
+
+    def test_prune_turns_rejects_positive_index(self) -> None:
+        # turn_indices_rel must be all <= 0
+        d = self._step_dict("prune-turns", {"turn_indices_rel": [-1, 2, -3]})
+        restored = advice_from_dict(d)
+        assert restored.recommended_advisors[0].action_steps == ()
+
+    def test_prune_turns_rejects_empty_list(self) -> None:
+        # empty prune is meaningless
+        d = self._step_dict("prune-turns", {"turn_indices_rel": []})
+        restored = advice_from_dict(d)
+        assert restored.recommended_advisors[0].action_steps == ()
+
+    def test_prune_turns_accepts_valid_indices(self) -> None:
+        d = self._step_dict("prune-turns",
+                            {"turn_indices_rel": [-3, -2, -1]})
+        restored = advice_from_dict(d)
+        assert len(restored.recommended_advisors[0].action_steps) == 1
+
+    def test_prune_turns_rejects_negative_savings(self) -> None:
+        d = self._step_dict("prune-turns", {
+            "turn_indices_rel": [-1],
+            "saved_tokens_estimate": -100,
+        })
+        restored = advice_from_dict(d)
+        assert restored.recommended_advisors[0].action_steps == ()
+
+    def test_summarize_window_rejects_inverted_range(self) -> None:
+        # start > end
+        d = self._step_dict("summarize-window",
+                            {"turn_range": [-1, -5]})
+        restored = advice_from_dict(d)
+        assert restored.recommended_advisors[0].action_steps == ()
+
+    def test_summarize_window_rejects_positive_in_range(self) -> None:
+        d = self._step_dict("summarize-window",
+                            {"turn_range": [-5, 1]})
+        restored = advice_from_dict(d)
+        assert restored.recommended_advisors[0].action_steps == ()
+
+    def test_summarize_window_accepts_valid(self) -> None:
+        d = self._step_dict("summarize-window",
+                            {"turn_range": [-5, -2]})
+        restored = advice_from_dict(d)
+        assert len(restored.recommended_advisors[0].action_steps) == 1
+
+    def test_swap_model_rejects_empty_model_names(self) -> None:
+        d = self._step_dict("swap-model",
+                            {"from_model": "", "to_model": "haiku"})
+        restored = advice_from_dict(d)
+        assert restored.recommended_advisors[0].action_steps == ()
+
+    def test_swap_model_rejects_negative_ratio(self) -> None:
+        d = self._step_dict("swap-model", {
+            "from_model": "opus", "to_model": "haiku",
+            "ratio_savings": -1.0,
+        })
+        restored = advice_from_dict(d)
+        assert restored.recommended_advisors[0].action_steps == ()
+
+    def test_clarify_intent_rejects_empty_question(self) -> None:
+        d = self._step_dict("clarify-intent",
+                            {"clarifying_question": "   "})
+        restored = advice_from_dict(d)
+        assert restored.recommended_advisors[0].action_steps == ()
+
+    def test_extra_keys_pass_through(self) -> None:
+        """Forward compat: validators only check known keys; extra
+        keys (e.g. ``saved_dollars_estimate``) pass through unchanged."""
+        d = self._step_dict("prune-turns", {
+            "turn_indices_rel": [-2, -1],
+            "saved_dollars_estimate": 0.42,
+            "future_field_we_havent_invented_yet": {"foo": "bar"},
+        })
+        restored = advice_from_dict(d)
+        steps = restored.recommended_advisors[0].action_steps
+        assert len(steps) == 1
+        assert (
+            steps[0].parameters["future_field_we_havent_invented_yet"]
+            == {"foo": "bar"}
+        )
+
+
 class TestRenderActionSteps:
     def test_render_includes_steps(self) -> None:
         advice = ActionAdvice(

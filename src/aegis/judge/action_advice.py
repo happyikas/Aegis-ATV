@@ -879,12 +879,100 @@ _ALLOWED_DOMAIN_ADVISORS: frozenset[str] = frozenset({
 _ALLOWED_PRIORITIES: frozenset[str] = frozenset({"high", "medium", "low"})
 
 
+def _validate_turn_indices(value: Any) -> bool:
+    """``turn_indices_rel`` must be a list of non-positive ints (0 is
+    'current', -1 is one back, etc.). Empty list rejected (a step that
+    prunes no turns is meaningless)."""
+    if not isinstance(value, list) or not value:
+        return False
+    for x in value:
+        if not isinstance(x, int) or isinstance(x, bool):
+            return False
+        if x > 0:
+            return False  # future turns can't be pruned
+    return True
+
+
+def _validate_turn_range(value: Any) -> bool:
+    """``turn_range`` is a 2-element [start, end] of non-positive ints
+    where start <= end."""
+    if not isinstance(value, list) or len(value) != 2:
+        return False
+    start, end = value
+    if not (isinstance(start, int) and isinstance(end, int)):
+        return False
+    if isinstance(start, bool) or isinstance(end, bool):
+        return False
+    if start > 0 or end > 0:
+        return False
+    return start <= end
+
+
+def _validate_non_negative_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and value >= 0
+    )
+
+
+def _validate_non_empty_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+# Per-verb param-shape validators. Each entry maps a parameter key to
+# a predicate. A step whose parameters fail ANY validator is dropped.
+# Keys not in this map are pass-through (extra keys allowed).
+_VERB_PARAM_VALIDATORS: dict[str, dict[str, Any]] = {
+    "prune-turns": {
+        "turn_indices_rel": _validate_turn_indices,
+        "saved_tokens_estimate": _validate_non_negative_number,
+        "saved_dollars_estimate": _validate_non_negative_number,
+    },
+    "summarize-window": {
+        "turn_range": _validate_turn_range,
+    },
+    "swap-model": {
+        "from_model": _validate_non_empty_string,
+        "to_model": _validate_non_empty_string,
+        "ratio_savings": _validate_non_negative_number,
+    },
+    "swap-tool": {
+        "from_tool": _validate_non_empty_string,
+        "to_tool": _validate_non_empty_string,
+    },
+    "narrow-scope": {
+        "original_args": _validate_non_empty_string,
+        "suggested_args": _validate_non_empty_string,
+    },
+    "clarify-intent": {
+        "clarifying_question": _validate_non_empty_string,
+    },
+    "run-diagnostic": {
+        "diagnostic_command": _validate_non_empty_string,
+    },
+    "verify-state": {
+        "check": _validate_non_empty_string,
+    },
+    "notify-operator": {
+        "channel": _validate_non_empty_string,
+        "summary": _validate_non_empty_string,
+    },
+    "require-approval": {
+        "reason": _validate_non_empty_string,
+    },
+}
+
+
 def _action_step_from_dict(d: dict[str, Any]) -> ActionStep | None:
     """Defensive parse of one ActionStep. Returns ``None`` when:
 
     * verb is outside :data:`_ALLOWED_VERBS` (sLLM hallucinated a verb)
     * parameters dict is missing any required key for the verb
     * parameters is not a dict / structurally invalid
+    * v2.8 PR-γ — any per-verb parameter validator rejects the value
+      (e.g. positive turn index for prune-turns, empty model name for
+      swap-model, etc.)
 
     Bounds string fields and clamps confidence to [0,1] via
     :meth:`ActionStep.__post_init__`.
@@ -898,6 +986,15 @@ def _action_step_from_dict(d: dict[str, Any]) -> ActionStep | None:
     required = _VERB_PARAM_KEYS.get(verb, frozenset())
     if not required.issubset(raw_params.keys()):
         return None
+
+    # PR-γ: per-key shape validation. A failing key drops the step.
+    # Keys that aren't in the validator map are pass-through (forward
+    # compat for extra metadata the model decides to add).
+    validators = _VERB_PARAM_VALIDATORS.get(verb, {})
+    for key, validator in validators.items():
+        if key in raw_params and not validator(raw_params[key]):
+            return None
+
     cited = d.get("cited_signals") or []
     return ActionStep(
         verb=cast(ActionVerb, verb),
