@@ -483,6 +483,25 @@ uv run aegis burnin {retrain|revert}  # D8 필요
 
 **`aegis install --mode local` 은 항상 dummy 강제** (Solo Free 컨트랙트). 사용자가 OpenAI/Haiku 를 쓰고 싶다면 `~/.claude/settings.json` 의 hook command 라인을 직접 편집.
 
+#### Local sLLM judge (GGUF) 권고
+
+`AEGIS_JUDGE_PROVIDER=local-phi` 사용 시 어떤 GGUF 를 깔지는
+**RAG 활성 여부**에 따라 갈립니다.
+
+| 조건 | 추천 모델 | 다운로드 |
+|------|----------|----------|
+| RAG OFF (`AEGIS_RAG_ENABLED=0`) 또는 RAM 8 GB 이하 | `llama-3.2-1b` (770 MB) | `aegis pull-model` |
+| RAG ON (default) — rule + playbook 컨텍스트를 안정적으로 활용 | **`phi-3.5-mini` (2.2 GB)** ★ | `aegis pull-model --model phi3-mini` |
+| 스모크 테스트 / 극저사양 | `qwen-0.5b` (400 MB) | `aegis pull-model --model qwen-0.5b` |
+
+`aegis pull-model --recommend` 로 항상 최신 권고 표를 확인할 수 있습니다. `phi3-mini` / `phi-3-mini` 둘 다 `phi-3.5-mini` 의 별칭입니다.
+
+**왜 RAG 켜면 1B → 3.8B 권고인가?** PR #88/#89 의 RAG corpus 가
+prompt 에 1500 자 분량의 rule + playbook 블록을 넣습니다. Llama-3.2-1B 는
+긴 컨텍스트를 무시하고 직전 문장만 보는 경향이 있는 반면 Phi-3.5-mini
+(3.8B params) 는 컨텍스트를 reasoning 에 반영합니다. RAG 가 비활성이면
+1B 가 더 빠르고 충분히 정확합니다.
+
 ### Local hook 변수
 
 | 변수 | 기본값 | 효과 |
