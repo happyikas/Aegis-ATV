@@ -295,6 +295,7 @@ class DummyAdvisor:
             cache_signals=cache_signals,
             security_signals=security_signals,
             step_traces=step_traces,
+            current_model=current_model,
         )
 
 
