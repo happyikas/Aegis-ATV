@@ -37,8 +37,11 @@ from aegis.judge.rag_retrieval import (
 
 @pytest.fixture(autouse=True)
 def _isolate_aegis_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Redirect AEGIS_HOME so tests never poison the real cache."""
+    """Redirect AEGIS_HOME and reset RAG state so tests never poison the
+    real cache or inherit a flag flipped by an earlier test."""
+    from aegis.config import settings
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path / "home"))
+    object.__setattr__(settings, "aegis_rag_enabled", True)
     reset_corpus_cache()
     reset_index_cache()
 

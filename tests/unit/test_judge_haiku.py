@@ -160,3 +160,115 @@ def test_get_judge_returns_dummy_in_test_env() -> None:
     from aegis.judge.dummy import DummyJudge
 
     assert isinstance(get_judge(), DummyJudge)
+
+
+# ── PR 3: RAG block in Haiku user message ─────────────────────────────
+
+
+class TestHaikuRAGUserMessage:
+    """Verifies _build_user_message appends a corpus retrieval block when
+    RAG is enabled and the corpus has chunks."""
+
+    def test_no_rag_when_disabled(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from aegis.config import settings
+        from aegis.judge.haiku import _build_user_message
+        object.__setattr__(settings, "aegis_rag_enabled", False)
+        out = _build_user_message("test summary")
+        assert out == "test summary"
+
+    def test_rag_block_appended_when_enabled(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from aegis.config import settings
+        from aegis.judge.haiku import _build_user_message
+        from aegis.judge.rag_corpus import reset_corpus_cache
+        from aegis.judge.rag_retrieval import reset_index_cache
+        object.__setattr__(settings, "aegis_rag_enabled", True)
+        reset_corpus_cache()
+        reset_index_cache()
+        out = _build_user_message("force-push to main is dangerous")
+        # The block adds a section header and at least one [rule]/[playbook] entry.
+        assert "## Relevant policy / incident context" in out
+        assert "[rule]" in out or "[playbook]" in out
+        assert out.startswith("force-push to main is dangerous")
+
+    def test_failsoft_returns_bare_summary(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from aegis.judge import haiku
+        # Patch retrieve_block to raise; the wrapper must swallow.
+        monkeypatch.setattr(
+            "aegis.judge.rag_retrieval.retrieve_block",
+            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        out = haiku._build_user_message("simple summary")
+        assert out == "simple summary"
+
+
+@respx.mock
+def test_haiku_evaluate_sends_rag_augmented_user_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: HaikuJudge.evaluate() should put the RAG block in the
+    user message when aegis_rag_enabled is True."""
+    from aegis.config import settings
+    from aegis.judge.haiku import HaikuJudge
+    from aegis.judge.rag_corpus import reset_corpus_cache
+    from aegis.judge.rag_retrieval import reset_index_cache
+    object.__setattr__(settings, "aegis_rag_enabled", True)
+    reset_corpus_cache()
+    reset_index_cache()
+
+    body = json.dumps({"decision": "ALLOW", "confidence": 0.5, "reason": "ok"})
+    captured: dict[str, object] = {}
+
+    def _record(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json=_anthropic_response(body))
+
+    respx.post("https://api.anthropic.com/v1/messages").mock(side_effect=_record)
+    HaikuJudge().evaluate("force-push pattern observed")
+
+    msgs = captured["body"]["messages"]  # type: ignore[index]
+    assert msgs[0]["role"] == "user"
+    user_text = msgs[0]["content"]
+    assert "force-push pattern observed" in user_text
+    assert "## Relevant policy / incident context" in user_text
+
+
+@respx.mock
+def test_haiku_evaluate_no_rag_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aegis.config import settings
+    from aegis.judge.haiku import HaikuJudge
+    object.__setattr__(settings, "aegis_rag_enabled", False)
+
+    body = json.dumps({"decision": "ALLOW", "confidence": 0.5, "reason": "ok"})
+    captured: dict[str, object] = {}
+
+    def _record(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json=_anthropic_response(body))
+
+    respx.post("https://api.anthropic.com/v1/messages").mock(side_effect=_record)
+    HaikuJudge().evaluate("simple summary")
+
+    msgs = captured["body"]["messages"]  # type: ignore[index]
+    user_text = msgs[0]["content"]
+    assert user_text == "simple summary"
+    assert "## Relevant policy" not in user_text
+
+
+# ── PR 3: rag_retrieval honours aegis_rag_enabled ─────────────────────
+
+
+def test_retrieve_block_disabled_returns_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aegis.config import settings
+    from aegis.judge.rag_retrieval import retrieve_block
+    object.__setattr__(settings, "aegis_rag_enabled", False)
+    assert retrieve_block("anything") == ""
