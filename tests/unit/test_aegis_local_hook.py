@@ -430,7 +430,7 @@ def test_advisor_off_by_default_no_advice_in_audit(
     _isolated_audit: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Default Solo Free path — without AEGIS_ADVISOR_ENABLED the audit
-    record must NOT carry an action_advice block (zero-impact)."""
+    record must NOT carry action_advice OR advisor_gate (zero-impact)."""
     monkeypatch.setattr(aegis_local_hook, "ADVISOR_ENABLED", False)
     rc, _, _ = _run(
         {
@@ -443,25 +443,55 @@ def test_advisor_off_by_default_no_advice_in_audit(
     assert rc == 0
     rec = json.loads(_isolated_audit.read_text().strip().splitlines()[-1])
     assert "action_advice" not in rec["explain"]
+    assert "advisor_gate" not in rec["explain"]
 
 
-def test_advisor_enabled_stamps_heuristic_advice(
+def test_advisor_gate_skips_routine_allow(
     _isolated_audit: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With AEGIS_ADVISOR_ENABLED=1 (and default dummy provider) the audit
-    record carries an action_advice block stamped ``heuristic``."""
+    """With advisor enabled + a routine ALLOW, the gate logs ``invoked:
+    false`` with reason "no critical signals" and the expensive 4-layer
+    pipeline never runs. The audit record carries advisor_gate but not
+    action_advice."""
     monkeypatch.setattr(aegis_local_hook, "ADVISOR_ENABLED", True)
-    monkeypatch.delenv("AEGIS_ADVISOR_PROVIDER", raising=False)
+    monkeypatch.setattr(aegis_local_hook, "ADVISOR_ALWAYS", False)
     rc, _, _ = _run(
         {
             "hook_event_name": "PreToolUse",
-            "session_id": "sess-adv",
+            "session_id": "sess-allow",
             "tool_name": "Read",
             "tool_input": {"file_path": "/tmp/x"},
         }
     )
     assert rc == 0
     rec = json.loads(_isolated_audit.read_text().strip().splitlines()[-1])
+    gate = rec["explain"]["advisor_gate"]
+    assert gate["invoked"] is False
+    assert gate["reason"] == "no critical signals"
+    assert "action_advice" not in rec["explain"]
+
+
+def test_advisor_gate_fires_on_non_allow_verdict(
+    _isolated_audit: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A BLOCK verdict is the textbook critical moment — gate fires and
+    records the verdict-derived reason. action_advice is then composed
+    by the heuristic advisor (advisor_kind="heuristic")."""
+    monkeypatch.setattr(aegis_local_hook, "ADVISOR_ENABLED", True)
+    monkeypatch.setattr(aegis_local_hook, "ADVISOR_ALWAYS", False)
+    rc, _, _ = _run(
+        {
+            "hook_event_name": "PreToolUse",
+            "session_id": "sess-block",
+            "tool_name": "Bash",
+            "tool_input": {"command": "git push --force origin main"},
+        }
+    )
+    assert rc == 2
+    rec = json.loads(_isolated_audit.read_text().strip().splitlines()[-1])
+    gate = rec["explain"]["advisor_gate"]
+    assert gate["invoked"] is True
+    assert gate["reason"].startswith("verdict=")
     advice = rec["explain"]["action_advice"]
     assert advice["advisor_kind"] == "heuristic"
     for field in (
@@ -469,7 +499,29 @@ def test_advisor_enabled_stamps_heuristic_advice(
         "advisor_hash", "produced_at_ns",
     ):
         assert field in advice, f"missing {field}"
-    assert isinstance(advice["advisor_hash"], str)
+
+
+def test_advisor_always_env_bypasses_gate(
+    _isolated_audit: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``AEGIS_ADVISOR_ALWAYS=1`` forces the advisor on every call —
+    useful for burn-in collection / debugging."""
+    monkeypatch.setattr(aegis_local_hook, "ADVISOR_ENABLED", True)
+    monkeypatch.setattr(aegis_local_hook, "ADVISOR_ALWAYS", True)
+    rc, _, _ = _run(
+        {
+            "hook_event_name": "PreToolUse",
+            "session_id": "sess-always",
+            "tool_name": "Read",
+            "tool_input": {"file_path": "/tmp/x"},
+        }
+    )
+    assert rc == 0
+    rec = json.loads(_isolated_audit.read_text().strip().splitlines()[-1])
+    gate = rec["explain"]["advisor_gate"]
+    assert gate["invoked"] is True
+    assert gate["reason"] == "AEGIS_ADVISOR_ALWAYS=1"
+    assert "action_advice" in rec["explain"]
 
 
 def test_advisor_stderr_message_structure_on_block(
@@ -479,13 +531,12 @@ def test_advisor_stderr_message_structure_on_block(
 ) -> None:
     """When the firewall blocks and the advisor is enabled, the stderr
     message format stays well-formed (reason line present; hint/alt
-    lines may or may not appear depending on the heuristic). Claude
-    Code only sees stderr, so the message structure is the contract."""
+    lines may or may not appear depending on the heuristic)."""
     monkeypatch.setattr(aegis_local_hook, "ADVISOR_ENABLED", True)
     rc, _, _ = _run(
         {
             "hook_event_name": "PreToolUse",
-            "session_id": "sess-block",
+            "session_id": "sess-block-stderr",
             "tool_name": "Bash",
             "tool_input": {"command": "git push --force origin main"},
         }
@@ -499,9 +550,11 @@ def test_advisor_stderr_message_structure_on_block(
 def test_advisor_failure_does_not_block_tool_call(
     _isolated_audit: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """If the advisor pipeline raises, the hook must still return the
-    firewall verdict — advisor is best-effort bookkeeping, not gating."""
+    """If the advisor pipeline raises while the gate fires, the hook
+    must still return the firewall verdict — advisor is best-effort
+    bookkeeping, not gating."""
     monkeypatch.setattr(aegis_local_hook, "ADVISOR_ENABLED", True)
+    monkeypatch.setattr(aegis_local_hook, "ADVISOR_ALWAYS", True)
 
     def _boom(**_kwargs: object) -> object:
         raise RuntimeError("simulated advisor failure")
@@ -519,4 +572,57 @@ def test_advisor_failure_does_not_block_tool_call(
     )
     assert rc == 0  # firewall ALLOW survives
     rec = json.loads(_isolated_audit.read_text().strip().splitlines()[-1])
+    # Gate fired (ALWAYS=1) but advisor crashed — gate stamped, advice absent.
+    assert rec["explain"]["advisor_gate"]["invoked"] is True
     assert "action_advice" not in rec["explain"]
+
+
+def test_advisor_gate_fires_on_m12_cost_divergence(
+    _isolated_audit: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """M12 cost-divergence escalation rewrites the verdict to
+    REQUIRE_APPROVAL — gate fires via the verdict path and the advisor
+    runs. Confirms the cost-domain critical-moment path end-to-end."""
+    transcript = tmp_path / "session.jsonl"
+    lines = [
+        json.dumps({"type": "user", "content": "do it"}),
+        json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "text", "text": "ok"},
+                    {"type": "tool_use", "name": "Bash",
+                     "input": {"command": "ls"}},
+                ],
+                "usage": {"input_tokens": 1000, "output_tokens": 500},
+            },
+        }),
+        json.dumps({"type": "user", "content": "x" * 200}),
+    ]
+    transcript.write_text("\n".join(lines) + "\n")
+
+    monkeypatch.setattr(aegis_local_hook, "ADVISOR_ENABLED", True)
+    monkeypatch.setattr(aegis_local_hook, "ADVISOR_ALWAYS", False)
+    monkeypatch.setenv("AEGIS_HW_PROVIDER", "sim")
+    monkeypatch.setenv("AEGIS_HW_INJECT_ATTACK", "cost_underreport")
+    rc, _, _ = _run(
+        {
+            "hook_event_name": "PreToolUse",
+            "session_id": "sess-m12-adv",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+            "transcript_path": str(transcript),
+        }
+    )
+    assert rc == 2  # M12 escalation → REQUIRE_APPROVAL → exit 2
+    rec = json.loads(_isolated_audit.read_text().strip().splitlines()[-1])
+    gate = rec["explain"]["advisor_gate"]
+    assert gate["invoked"] is True
+    # Either verdict-driven or M12-trace-driven — both valid.
+    assert (
+        gate["reason"].startswith("verdict=")
+        or "cost-divergence" in gate["reason"]
+    )
+    assert "action_advice" in rec["explain"]
