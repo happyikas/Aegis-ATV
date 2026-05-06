@@ -59,6 +59,8 @@ class ModelSpec:
     sha256: str | None = None  # optional integrity check (None = skip)
     license: str = "see model card"
     filename: str = ""       # local filename (defaults to URL basename)
+    aliases: tuple[str, ...] = ()  # alternate CLI slugs (back-compat / shortcuts)
+    recommended_for: str = ""      # one-line use-case hint for `--recommend`
 
     def local_filename(self) -> str:
         return self.filename or self.url.rsplit("/", 1)[-1]
@@ -80,6 +82,10 @@ _REGISTRY: list[ModelSpec] = [
         ),
         size_mb=770,
         license="Llama 3.2 Community License",
+        recommended_for=(
+            "Lowest-latency local judge. Use when RAG is OFF or "
+            "when memory is tight (Mac mini 8 GB)."
+        ),
     ),
     ModelSpec(
         name="qwen-0.5b",
@@ -93,6 +99,10 @@ _REGISTRY: list[ModelSpec] = [
         ),
         size_mb=400,
         license="Apache-2.0",
+        recommended_for=(
+            "Smoke tests / extremely-constrained devices. Not a "
+            "production judge — JSON adherence is fragile."
+        ),
     ),
     ModelSpec(
         name="phi-3.5-mini",
@@ -106,6 +116,13 @@ _REGISTRY: list[ModelSpec] = [
         ),
         size_mb=2200,
         license="MIT",
+        aliases=("phi3-mini", "phi-3-mini"),
+        recommended_for=(
+            "★ Recommended when RAG is ON. 3.8B params handle the "
+            "rule + playbook context block reliably; Llama-3.2-1B "
+            "tends to ignore long context. Use this for the v3.0 "
+            "RAG-grounded judge stack."
+        ),
     ),
     # ── Embedding models (Solo Free default for ATV agent_state_embedding) ─
     ModelSpec(
@@ -152,13 +169,49 @@ def list_models() -> list[ModelSpec]:
 
 
 def get_model(name: str) -> ModelSpec:
-    """Look up by short name. Raises ``KeyError`` on miss."""
+    """Look up by canonical name or alias. Raises ``KeyError`` on miss."""
     for m in _REGISTRY:
-        if m.name == name:
+        if m.name == name or name in m.aliases:
             return m
-    raise KeyError(
-        f"unknown model {name!r}. Known: " + ", ".join(m.name for m in _REGISTRY)
+    known = ", ".join(
+        m.name + (f" (alias: {', '.join(m.aliases)})" if m.aliases else "")
+        for m in _REGISTRY
     )
+    raise KeyError(f"unknown model {name!r}. Known: {known}")
+
+
+def list_aliases() -> dict[str, str]:
+    """Return a mapping of every alias → canonical name. Includes the
+    canonical name itself for completeness."""
+    out: dict[str, str] = {}
+    for m in _REGISTRY:
+        out[m.name] = m.name
+        for a in m.aliases:
+            out[a] = m.name
+    return out
+
+
+def render_recommendations() -> str:
+    """One-paragraph recommendation per registered judge. Used by
+    ``aegis pull-model --recommend``."""
+    lines = [
+        "Aegis judge model recommendations",
+        "═════════════════════════════════",
+        "",
+    ]
+    for m in _REGISTRY:
+        if m.kind != "judge":
+            continue
+        head = f"  {m.name}"
+        if m.aliases:
+            head += f"  (alias: {', '.join(m.aliases)})"
+        lines.append(head)
+        lines.append(f"    {m.description}")
+        if m.recommended_for:
+            lines.append(f"    → {m.recommended_for}")
+        lines.append(f"    install: aegis pull-model --model {m.name}")
+        lines.append("")
+    return "\n".join(lines)
 
 
 def default_model() -> ModelSpec:
@@ -189,7 +242,9 @@ __all__ = [
     "default_embedding_model",
     "default_model",
     "get_model",
+    "list_aliases",
     "list_models",
     "list_models_by_kind",
     "model_target_path",
+    "render_recommendations",
 ]

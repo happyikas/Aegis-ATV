@@ -2369,7 +2369,12 @@ def cmd_pull_model(args: argparse.Namespace) -> int:
         get_model,
         list_models,
         model_target_path,
+        render_recommendations,
     )
+
+    if getattr(args, "recommend", False):
+        print(render_recommendations())
+        return 0
 
     if args.list:
         defaults = {DEFAULT_MODEL_NAME, DEFAULT_EMBEDDING_NAME}
@@ -2377,9 +2382,12 @@ def cmd_pull_model(args: argparse.Namespace) -> int:
         print("─" * 92)
         for m in list_models():
             marker = " (default)" if m.name in defaults else ""
+            alias_part = (
+                f" (alias: {', '.join(m.aliases)})" if m.aliases else ""
+            )
             print(
                 f"{m.name:<16} {m.kind:<10} {m.size_mb:>5} MB  "
-                f"{m.description}{marker}"
+                f"{m.description}{alias_part}{marker}"
             )
         return 0
 
@@ -3962,22 +3970,34 @@ def build_parser() -> argparse.ArgumentParser:
         "pull-model",
         help="Download a Solo Free local-sLLM GGUF into ./models/",
     )
-    from aegis.judge.model_registry import DEFAULT_MODEL_NAME, list_models
-    _model_choices = [m.name for m in list_models()]
+    from aegis.judge.model_registry import (
+        DEFAULT_MODEL_NAME,
+        list_aliases,
+        list_models,
+    )
+    _model_choices = sorted(list_aliases().keys())
     pm.add_argument(
         "--model",
         choices=_model_choices,
         default=DEFAULT_MODEL_NAME,
         help=(
             f"GGUF to fetch (default: {DEFAULT_MODEL_NAME}). "
-            f"Run `aegis pull-model --list` for full table."
+            f"Run `aegis pull-model --list` for full table or "
+            f"`--recommend` for use-case guidance. Aliases (e.g. "
+            f"`phi3-mini`) resolve to canonical names."
         ),
     )
     pm.add_argument("--list", action="store_true", help="show available models + exit")
     pm.add_argument(
+        "--recommend",
+        action="store_true",
+        help="print judge-model recommendations by use case + exit",
+    )
+    pm.add_argument(
         "--force", action="store_true",
         help="re-download even if the file is already present",
     )
+    _ = list_models  # imported for cmd_pull_model
     pm.set_defaults(fn=cmd_pull_model)
 
     cr = sub.add_parser(
