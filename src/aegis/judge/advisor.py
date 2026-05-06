@@ -164,6 +164,7 @@ class Advisor(Protocol):
         cost_signals: dict[str, Any] | None = None,
         cache_signals: dict[str, Any] | None = None,
         security_signals: dict[str, Any] | None = None,
+        step_traces: dict[str, Any] | None = None,
     ) -> ActionAdvice: ...
 
 
@@ -193,6 +194,7 @@ class DummyAdvisor:
         cost_signals: dict[str, Any] | None = None,
         cache_signals: dict[str, Any] | None = None,
         security_signals: dict[str, Any] | None = None,
+        step_traces: dict[str, Any] | None = None,
     ) -> ActionAdvice:
         return compose_advice_heuristic(
             temporal_ctx=temporal_ctx,
@@ -203,6 +205,7 @@ class DummyAdvisor:
             cost_signals=cost_signals,
             cache_signals=cache_signals,
             security_signals=security_signals,
+            step_traces=step_traces,
         )
 
 
@@ -430,6 +433,7 @@ class HaikuAdvisor:
         cost_signals: dict[str, Any] | None = None,
         cache_signals: dict[str, Any] | None = None,
         security_signals: dict[str, Any] | None = None,
+        step_traces: dict[str, Any] | None = None,
     ) -> ActionAdvice:
         user_msg = _build_user_message(
             temporal_ctx=temporal_ctx,
@@ -469,6 +473,7 @@ class HaikuAdvisor:
                 cost_signals=cost_signals,
                 cache_signals=cache_signals,
                 security_signals=security_signals,
+                step_traces=step_traces,
             )
 
         parsed = _parse_advice_json(
@@ -537,6 +542,7 @@ def compose_advice_sllm(
     cost_signals: dict[str, Any] | None = None,
     cache_signals: dict[str, Any] | None = None,
     security_signals: dict[str, Any] | None = None,
+    step_traces: dict[str, Any] | None = None,
     advisor: Advisor | None = None,
 ) -> ActionAdvice:
     """Build an :class:`ActionAdvice` via the configured advisor backend.
@@ -545,8 +551,11 @@ def compose_advice_sllm(
     extra ``baseline`` / ``catalog`` / ``intent_classifier`` /
     ``action_table`` context that an sLLM can leverage, plus the v2.5.2
     ``cost_signals`` / ``cache_signals`` / ``security_signals`` dicts
-    that drive multi-domain advisor recommendations. Pass ``advisor=``
-    to inject a specific advisor instance (useful for tests)."""
+    that drive multi-domain advisor recommendations. v2.7.1 adds
+    ``step_traces`` so the heuristic loop-breaker can fire on a fresh
+    session that has the firewall's step336 trace but no burn-in
+    redundancy baseline yet. Pass ``advisor=`` to inject a specific
+    advisor instance (useful for tests)."""
     chosen: Advisor = advisor if advisor is not None else get_advisor()
     return chosen.advise(
         temporal_ctx=temporal_ctx,
@@ -561,6 +570,7 @@ def compose_advice_sllm(
         cost_signals=cost_signals,
         cache_signals=cache_signals,
         security_signals=security_signals,
+        step_traces=step_traces,
     )
 
 

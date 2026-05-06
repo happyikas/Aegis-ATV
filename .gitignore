@@ -45,3 +45,4 @@ models/*.gguf
 models/*.gguf.part
 models/**/*.gguf
 models/**/*.gguf.part
+.aegis/

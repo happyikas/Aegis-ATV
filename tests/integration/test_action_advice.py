@@ -472,6 +472,48 @@ class TestHeuristicMultiDomainMapping:
         )
         assert advice.recommended_advisors == ()
 
+    def test_loop_breaker_fires_from_step336_trace(self) -> None:
+        """v2.7.1 — when burn-in baseline is unavailable but the
+        firewall's step336 detector flagged a loop, the heuristic
+        should still emit a `loop-breaker` recommendation."""
+        advice = compose_advice_heuristic(
+            base_decision="REQUIRE_APPROVAL",
+            current_tool="Bash",
+            step_traces={
+                "aegis.firewall.step336_loop.run":
+                    "step336: loop (3× seen) — Bash",
+            },
+        )
+        names = [r.advisor for r in advice.recommended_advisors]
+        assert "loop-breaker" in names
+        lb = next(r for r in advice.recommended_advisors
+                  if r.advisor == "loop-breaker")
+        assert lb.priority == "high"
+        assert "step336_loop_detector" in lb.cited_signals
+
+    def test_loop_breaker_fires_from_step336_redundant_trace(self) -> None:
+        advice = compose_advice_heuristic(
+            base_decision="ALLOW",
+            current_tool="Read",
+            step_traces={
+                "aegis.firewall.step336_loop.run":
+                    "step336: redundant read-only (2× seen)",
+            },
+        )
+        names = [r.advisor for r in advice.recommended_advisors]
+        assert "loop-breaker" in names
+
+    def test_loop_breaker_does_not_fire_on_fresh_call(self) -> None:
+        advice = compose_advice_heuristic(
+            base_decision="ALLOW",
+            current_tool="Read",
+            step_traces={
+                "aegis.firewall.step336_loop.run": "step336: fresh call",
+            },
+        )
+        names = [r.advisor for r in advice.recommended_advisors]
+        assert "loop-breaker" not in names
+
     def test_default_escalation_when_block_without_domain_signal(self) -> None:
         advice = compose_advice_heuristic(
             base_decision="BLOCK", base_reason="(no domain match)",
