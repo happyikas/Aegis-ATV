@@ -186,6 +186,16 @@ def run_session(audit_path: Path) -> None:
     # Reload the gate calibration cache in case prior tests poisoned it.
     aegis_local_hook._CALIBRATION_SINGLETON = None
 
+    # Reset the step336 loop detector — prior tests in the same
+    # process may have seeded its window with same-session_id calls,
+    # which would inflate the loop count and skew the demo's
+    # gate-skip ratio. Hermetic by design.
+    try:
+        from aegis.monitor.loop_detector import get_default_detector
+        get_default_detector().reset()
+    except Exception:  # noqa: BLE001
+        pass
+
     saved_stderr = sys.stderr
     sys.stderr = io.StringIO()
     try:
@@ -417,24 +427,25 @@ def write_report(report_path: Path, audit_path: Path,
         "within burn-in p10 / p95 bounds.",
         "",
         f"3. **Multi-domain recommendations:** {n_advisors} total "
-        "across all advisor invocations. Distribution favours "
-        "`permission-escalator` (default fallback when no domain "
-        "signal matches) and `security-reviewer` (destructive rule "
-        "match). `loop-breaker` does NOT yet fire on this session "
-        "even though step336 detected the loop — the heuristic "
-        "currently keys off `temporal_ctx.n_redundant >= 3`, which "
-        "requires burn-in baseline + enough audit history to count "
-        "redundancy. **Follow-up candidate**: have the heuristic "
-        "also read `step_traces[\"step336_loop_detector\"]` directly.",
+        "across all advisor invocations. After v2.7.1 the heuristic "
+        "reads the step336 trace directly, so `loop-breaker` now "
+        "fires on the 3 repeated `grep TODO` calls — alongside "
+        "`security-reviewer` on destructive paths and "
+        "`permission-escalator` as the default fallback when no "
+        "domain signal matches.",
         "",
         f"4. **Retrospective accuracy:** "
         f"{n_acc} accurate, {n_na} not_applicable, "
         f"{n_missed} missed_signal, {n_false} false_alarm. "
         "`not_applicable` dominates because the gate skipped the "
-        "advisor on most calls — by design. The two BLOCK calls and "
-        "two REQUIRE_APPROVAL calls all matched their predicted "
-        "outcomes (accurate). Run with `AEGIS_ADVISOR_ALWAYS=1` to "
-        "see the retrospective on every call instead.",
+        "advisor on most calls — by design. The "
+        f"{n_false} `false_alarm`(s) are the v2.7.1 loop-breaker "
+        "firing on the simulated `grep TODO src/` repeats; the "
+        "demo's PostToolUse handler returns success for all calls, "
+        "so a HIGH-priority loop-breaker recommendation against a "
+        "successful call is correctly flagged. Run with "
+        "`AEGIS_ADVISOR_ALWAYS=1` to see the retrospective on every "
+        "call instead of only the gate-fires.",
         "",
         f"5. **Hooks didn't crash on any call** — {n_post} "
         "PostToolUse records emitted, all with valid JSON. The "

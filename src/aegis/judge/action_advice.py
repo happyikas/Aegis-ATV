@@ -322,6 +322,7 @@ def _heuristic_recommendations(
     security_signals: dict[str, Any] | None,
     anomalies: list[AnomalyTag],
     temporal_ctx: TemporalContext | None,
+    step_traces: dict[str, Any] | None = None,
 ) -> tuple[AdvisorRecommendation, ...]:
     """Map signal dicts to a tuple of :class:`AdvisorRecommendation`.
 
@@ -464,11 +465,31 @@ def _heuristic_recommendations(
             cited_signals=("window_token_velocity_per_turn",),
         ))
 
-    # Trajectory — repeated-call pattern → loop-breaker.
+    # Trajectory — repeated-call pattern → loop-breaker. Triggered by
+    # ANY of three signals so the recommendation fires even on a fresh
+    # session without burn-in baseline:
+    #   - burn-in anomaly tag (mature install)
+    #   - temporal_ctx.n_redundant >= 3 (audit history present)
+    #   - step336 loop-detector trace (immediate firewall flag)
+    # The third was added in v2.7.1 after the demo session showed that
+    # loop-breaker missed a 3x-repeat case the firewall had already
+    # escalated to REQUIRE_APPROVAL.
     has_redundant = any("redundant" in t.metric for t in anomalies)
-    if has_redundant or (
+    step336_loop = False
+    if step_traces:
+        s336 = str(step_traces.get("aegis.firewall.step336_loop.run", ""))
+        # Detector emits "step336: loop (N× seen) — Tool" on a loop,
+        # "step336: redundant read-only (N× seen)" on a redundant repeat,
+        # and "step336: fresh call" otherwise. Match on "× seen" which
+        # appears only in the firing variants.
+        if "× seen" in s336 or "redundant" in s336.lower():
+            step336_loop = True
+    if has_redundant or step336_loop or (
         temporal_ctx is not None and temporal_ctx.n_redundant >= 3
     ):
+        cited = ["session_redundancy_ratio", "n_redundant"]
+        if step336_loop:
+            cited.append("step336_loop_detector")
         recs.append(AdvisorRecommendation(
             advisor="loop-breaker",
             priority="high",
@@ -477,10 +498,10 @@ def _heuristic_recommendations(
                 "repeated within the window."
             ),
             reasoning=(
-                f"n_redundant={getattr(temporal_ctx, 'n_redundant', 0)} "
-                "in window"
+                f"n_redundant={getattr(temporal_ctx, 'n_redundant', 0)}"
+                + ("; step336 fired" if step336_loop else "")
             ),
-            cited_signals=("session_redundancy_ratio", "n_redundant"),
+            cited_signals=tuple(cited),
         ))
 
     # Trajectory — error pattern → test-runner.
@@ -553,6 +574,7 @@ def compose_advice_heuristic(
     cost_signals: dict[str, Any] | None = None,
     cache_signals: dict[str, Any] | None = None,
     security_signals: dict[str, Any] | None = None,
+    step_traces: dict[str, Any] | None = None,
 ) -> ActionAdvice:
     """Build an ActionAdvice from temporal context + anomaly tags.
 
@@ -611,6 +633,7 @@ def compose_advice_heuristic(
         security_signals=security_signals,
         anomalies=tags,
         temporal_ctx=temporal_ctx,
+        step_traces=step_traces,
     )
 
     return ActionAdvice(

@@ -401,10 +401,13 @@ def _should_invoke_advisor(
     if "aegis.cost.escalation" in traces:
         return True, "cost-divergence escalation"
 
-    # 3. step336 loop / redundancy hint (even when not yet REQUIRE_APPROVAL).
-    s336 = str(traces.get("aegis.firewall.step336_loop_detector.run", ""))
-    low336 = s336.lower()
-    if "loop" in low336 or "redundant" in low336:
+    # 3. step336 loop / redundancy hint. The detector emits
+    #    "step336: loop (N× seen) — Tool" on a loop, "step336: redundant
+    #    read-only (N× seen)" on a redundant repeat, and "step336: fresh
+    #    call" otherwise. We match on "× seen" which appears only in
+    #    the firing variants, regardless of count.
+    s336 = str(traces.get("aegis.firewall.step336_loop.run", ""))
+    if "× seen" in s336 or "redundant" in s336.lower():
         return True, "loop/redundancy signal"
 
     # 4. step335 budget warning (cumulative dollars approaching limit).
@@ -511,6 +514,11 @@ def _compute_action_advice(
             inp=inp, verdict=verdict, explain_block=explain_block,
         )
 
+        # v2.7.1 — pass verdict.step_traces so the heuristic loop-breaker
+        # fires on a fresh session that has the firewall's step336
+        # trace but no burn-in redundancy baseline yet.
+        verdict_traces = dict(getattr(verdict, "step_traces", {}) or {})
+
         advice = compose_advice_sllm(
             temporal_ctx=ctx,
             anomalies=anomalies,
@@ -524,6 +532,7 @@ def _compute_action_advice(
             cost_signals=cost_signals,
             cache_signals=cache_signals,
             security_signals=security_signals,
+            step_traces=verdict_traces,
         )
         from aegis.judge.action_advice import advice_to_dict
 
