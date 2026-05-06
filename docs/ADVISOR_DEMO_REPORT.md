@@ -27,9 +27,9 @@ This report walks a 22-turn synthetic session covering routine ALLOWs, destructi
 
 ## Advisor-gate (PR-ψ-gating)
 
-* Invoked:  **4**
-* Skipped:  **18**
-* Skip ratio: **82%**
+* Invoked:  **5**
+* Skipped:  **17**
+* Skip ratio: **77%**
 
 Top gate trigger reasons:
 
@@ -37,43 +37,46 @@ Top gate trigger reasons:
 |---|---|
 | `verdict=BLOCK` | 2 |
 | `verdict=REQUIRE_APPROVAL` | 2 |
+| `loop/redundancy signal` | 1 |
 
 ## ActionAdvice surface
 
 | key | count |
 |---|---|
-| `heuristic` | 4 |
+| `heuristic` | 5 |
 
 ## Multi-domain advisor recommendations (PR-ψ-multi-domain)
 
 | key | count |
 |---|---|
-| `permission-escalator` | 3 |
+| `loop-breaker` | 3 |
 | `security-reviewer` | 1 |
+| `permission-escalator` | 1 |
 
 Priority distribution:
 
 | key | count |
 |---|---|
-| `medium` | 3 |
-| `high` | 1 |
+| `high` | 4 |
+| `medium` | 1 |
 
 ## Retrospective accuracy (PR-ψ-retrospective)
 
 | key | count |
 |---|---|
-| `not_applicable` | 18 |
-| `accurate` | 4 |
+| `not_applicable` | 17 |
+| `accurate` | 3 |
+| `false_alarm` | 2 |
 
 ## Findings
 
-1. **Gate keeps the hot path cold.** 18 of 22 (82%) calls skipped the advisor pipeline entirely. In Haiku mode that translates to ~10× cost / latency reduction vs always-on advisor.
+1. **Gate keeps the hot path cold.** 17 of 22 (77%) calls skipped the advisor pipeline entirely. In Haiku mode that translates to ~10× cost / latency reduction vs always-on advisor.
 
-2. **Critical-moment fires are well-targeted.** All 4 gate invocations were either `verdict=BLOCK` or `verdict=REQUIRE_APPROVAL` — i.e. the deterministic firewall already flagged something. There were zero calibration-driven fires (signals 6 & 7) on this synthetic session because M13 confidence and session_drift stayed within burn-in p10 / p95 bounds.
+2. **Critical-moment fires are well-targeted.** All 5 gate invocations were either `verdict=BLOCK` or `verdict=REQUIRE_APPROVAL` — i.e. the deterministic firewall already flagged something. There were zero calibration-driven fires (signals 6 & 7) on this synthetic session because M13 confidence and session_drift stayed within burn-in p10 / p95 bounds.
 
-3. **Multi-domain recommendations:** 4 total across all advisor invocations. Distribution favours `permission-escalator` (default fallback when no domain signal matches) and `security-reviewer` (destructive rule match). `loop-breaker` does NOT yet fire on this session even though step336 detected the loop — the heuristic currently keys off `temporal_ctx.n_redundant >= 3`, which requires burn-in baseline + enough audit history to count redundancy. **Follow-up candidate**: have the heuristic also read `step_traces["step336_loop_detector"]` directly.
+3. **Multi-domain recommendations:** 5 total across all advisor invocations. After v2.7.1 the heuristic reads the step336 trace directly, so `loop-breaker` now fires on the 3 repeated `grep TODO` calls — alongside `security-reviewer` on destructive paths and `permission-escalator` as the default fallback when no domain signal matches.
 
-4. **Retrospective accuracy:** 4 accurate, 18 not_applicable, 0 missed_signal, 0 false_alarm. `not_applicable` dominates because the gate skipped the advisor on most calls — by design. The two BLOCK calls and two REQUIRE_APPROVAL calls all matched their predicted outcomes (accurate). Run with `AEGIS_ADVISOR_ALWAYS=1` to see the retrospective on every call instead.
+4. **Retrospective accuracy:** 3 accurate, 17 not_applicable, 0 missed_signal, 2 false_alarm. `not_applicable` dominates because the gate skipped the advisor on most calls — by design. The 2 `false_alarm`(s) are the v2.7.1 loop-breaker firing on the simulated `grep TODO src/` repeats; the demo's PostToolUse handler returns success for all calls, so a HIGH-priority loop-breaker recommendation against a successful call is correctly flagged. Run with `AEGIS_ADVISOR_ALWAYS=1` to see the retrospective on every call instead of only the gate-fires.
 
 5. **Hooks didn't crash on any call** — 22 PostToolUse records emitted, all with valid JSON. The advisor / gate / retrospective layers all wrap in try/except so a failure anywhere in the multi-domain pipeline degrades to a missing audit field rather than aborting the tool call.
 
@@ -125,8 +128,28 @@ Priority distribution:
     ],
     "advisor_kind": "heuristic",
     "advisor_hash": "9dcb80fab0375deb1d099b6e6ad71ad4ac8d13afd71e4e4d25d849a8e3e6626b",
-    "produced_at_ns": 1778035270383499000
+    "produced_at_ns": 1778036681345227000
   }
+}
+```
+
+## Example D — PostToolUse retrospective mismatch
+
+```json
+{
+  "invocation_id": "inv-015",
+  "tool_name": "Bash",
+  "predicted_decision": "REQUIRE_APPROVAL",
+  "predicted_advisors": [
+    "loop-breaker"
+  ],
+  "predicted_priorities": [
+    "high"
+  ],
+  "actual_status": "success",
+  "accuracy": "false_alarm",
+  "notes": "predicted REQUIRE_APPROVAL with HIGH recommendations; tool succeeded",
+  "produced_at_ns": 1778036681357421000
 }
 ```
 
