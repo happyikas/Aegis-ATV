@@ -3418,6 +3418,55 @@ def cmd_cost_import(args: argparse.Namespace) -> int:
     return 2
 
 
+def cmd_policy(args: argparse.Namespace) -> int:
+    """`aegis policy {diff,log,show}` — explore the RAG corpus history.
+
+    * ``diff --since SPEC`` — chunks added / retired / superseded in
+      the window. SPEC accepts ISO date, ISO datetime, relative
+      (``7d``/``2w``/``3m``/``1y``), quarter (``2024-Q1``), or
+      ``all``.
+    * ``log [--limit N]`` — chronological timeline of mutations.
+    * ``show CHUNK_ID`` — single-chunk detail with predecessor /
+      successor links.
+    """
+    from aegis.judge.policy_diff import (
+        diff_since,
+        log_entries,
+        parse_since,
+        render_diff,
+        render_log,
+        render_show,
+        show_chunk,
+    )
+    from aegis.judge.rag_corpus import load_default_corpus, reset_corpus_cache
+
+    reset_corpus_cache()
+    corpus = load_default_corpus()
+
+    if args.action == "diff":
+        try:
+            since_ns = parse_since(args.since)
+        except ValueError as exc:
+            print(_red(str(exc)), file=sys.stderr)
+            return 2
+        diff = diff_since(corpus, since_ns)
+        print(render_diff(diff))
+        return 0
+    if args.action == "log":
+        entries = log_entries(corpus, limit=args.limit)
+        print(render_log(entries))
+        return 0
+    if args.action == "show":
+        shown = show_chunk(corpus, args.chunk_id)
+        if shown is None:
+            print(_red(f"[policy show] chunk {args.chunk_id!r} not found"),
+                  file=sys.stderr)
+            return 1
+        print(render_show(shown))
+        return 0
+    return 2
+
+
 def cmd_budget(args: argparse.Namespace) -> int:
     """Persistent per-tenant budget config (PR #5).
 
@@ -4052,6 +4101,39 @@ def build_parser() -> argparse.ArgumentParser:
     bg.add_argument("--per-call", type=float, dest="per_call", default=None,
                     help="Optional per-call ceiling.")
     bg.set_defaults(fn=cmd_budget)
+
+    pol = sub.add_parser(
+        "policy",
+        help=(
+            "Explore the RAG corpus history derived from chunk "
+            "timestamps (PR ③ of v3.1 temporal-RAG track)."
+        ),
+    )
+    pol.add_argument(
+        "action", choices=["diff", "log", "show"],
+        help=(
+            "diff: chunks added/retired/superseded in a window. "
+            "log: chronological mutation timeline. "
+            "show: single-chunk detail with supersession links."
+        ),
+    )
+    pol.add_argument(
+        "--since", default="30d",
+        help=(
+            "(diff) time window: ISO date (2024-08-01), ISO datetime, "
+            "relative (7d / 2w / 3m / 1y), quarter (2024-Q1), or "
+            "'all'. Default: 30d."
+        ),
+    )
+    pol.add_argument(
+        "--limit", type=int, default=20,
+        help="(log) max entries to show (default: 20; 0 = unlimited)",
+    )
+    pol.add_argument(
+        "chunk_id", nargs="?", default=None,
+        help="(show) chunk id to inspect.",
+    )
+    pol.set_defaults(fn=cmd_policy)
 
     bl = sub.add_parser(
         "baseline",
