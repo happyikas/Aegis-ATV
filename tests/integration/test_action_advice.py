@@ -10,6 +10,7 @@ from aegis.atv.temporal import ATVSnapshot, TemporalContext
 from aegis.burnin.anomaly import AnomalyTag
 from aegis.judge.action_advice import (
     ActionAdvice,
+    ActionStep,
     AdvisorRecommendation,
     advice_from_dict,
     advice_to_audit_record,
@@ -574,3 +575,204 @@ class TestRecommendationJsonRoundtrip:
         }
         restored = advice_from_dict(d)
         assert restored.recommended_advisors == ()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# v2.8 PR-α — ActionStep schema
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestActionStepSchema:
+    def test_constructs_with_required_fields(self) -> None:
+        s = ActionStep(
+            verb="prune-turns",
+            parameters={
+                "turn_indices_rel": [-3, -2, -1],
+                "saved_tokens_estimate": 4500,
+            },
+        )
+        assert s.verb == "prune-turns"
+        assert s.parameters["turn_indices_rel"] == [-3, -2, -1]
+        assert s.cited_signals == ()
+        assert s.confidence == 0.5  # default
+
+    def test_frozen(self) -> None:
+        s = ActionStep(verb="end-session", parameters={})
+        with pytest.raises((AttributeError, TypeError)):
+            s.verb = "swap-tool"  # type: ignore[misc]
+
+    def test_confidence_clamped_to_unit_interval(self) -> None:
+        too_high = ActionStep(
+            verb="end-session", parameters={}, confidence=1.7,
+        )
+        too_low = ActionStep(
+            verb="end-session", parameters={}, confidence=-0.4,
+        )
+        assert too_high.confidence == 1.0
+        assert too_low.confidence == 0.0
+
+
+class TestActionStepRoundTrip:
+    def test_round_trip_preserves_step(self) -> None:
+        original = AdvisorRecommendation(
+            advisor="cost-optimizer",
+            priority="high",
+            action="trim",
+            action_steps=(
+                ActionStep(
+                    verb="prune-turns",
+                    parameters={"turn_indices_rel": [-3, -2, -1],
+                                "saved_tokens_estimate": 4500},
+                    expected_impact="ratio 1.50 → 1.18",
+                    confidence=0.85,
+                    cited_signals=("budget_used_ratio",),
+                ),
+                ActionStep(
+                    verb="swap-model",
+                    parameters={"from_model": "claude-opus-4-7",
+                                "to_model": "claude-haiku-4-5"},
+                    expected_impact="3x cheaper",
+                    confidence=0.6,
+                ),
+            ),
+        )
+        advice = ActionAdvice(
+            decision="REQUIRE_APPROVAL", reason="x", confidence=0.8,
+            recommended_advisors=(original,),
+        )
+        d = advice_to_dict(advice)
+        json.dumps(d)  # serializable
+
+        restored = advice_from_dict(d)
+        assert len(restored.recommended_advisors) == 1
+        rec = restored.recommended_advisors[0]
+        assert len(rec.action_steps) == 2
+        assert rec.action_steps[0].verb == "prune-turns"
+        assert rec.action_steps[0].parameters["turn_indices_rel"] == [-3, -2, -1]
+        assert rec.action_steps[0].confidence == 0.85
+        assert rec.action_steps[1].verb == "swap-model"
+
+
+class TestActionStepDefensiveParse:
+    def test_unknown_verb_dropped(self) -> None:
+        d = {
+            "decision": "ALLOW", "reason": "x", "confidence": 0.5,
+            "recommended_advisors": [{
+                "advisor": "cost-optimizer", "priority": "high",
+                "action": "x",
+                "action_steps": [
+                    {"verb": "do-magic-fix", "parameters": {}},
+                    {"verb": "end-session", "parameters": {}},
+                ],
+            }],
+        }
+        restored = advice_from_dict(d)
+        steps = restored.recommended_advisors[0].action_steps
+        verbs = [s.verb for s in steps]
+        # "do-magic-fix" silently dropped; "end-session" survives
+        assert verbs == ["end-session"]
+
+    def test_missing_required_param_drops_step(self) -> None:
+        d = {
+            "decision": "ALLOW", "reason": "x", "confidence": 0.5,
+            "recommended_advisors": [{
+                "advisor": "cost-optimizer", "priority": "high",
+                "action": "x",
+                "action_steps": [
+                    # swap-model requires from_model + to_model
+                    {"verb": "swap-model",
+                     "parameters": {"from_model": "opus"}},
+                    # complete one
+                    {"verb": "swap-model",
+                     "parameters": {"from_model": "opus",
+                                    "to_model": "haiku"}},
+                ],
+            }],
+        }
+        restored = advice_from_dict(d)
+        steps = restored.recommended_advisors[0].action_steps
+        assert len(steps) == 1
+        assert steps[0].parameters["to_model"] == "haiku"
+
+    def test_non_dict_parameters_drops_step(self) -> None:
+        d = {
+            "decision": "ALLOW", "reason": "x", "confidence": 0.5,
+            "recommended_advisors": [{
+                "advisor": "cost-optimizer", "priority": "high",
+                "action": "x",
+                "action_steps": [
+                    {"verb": "end-session", "parameters": "not a dict"},
+                    {"verb": "end-session", "parameters": {}},
+                ],
+            }],
+        }
+        restored = advice_from_dict(d)
+        assert len(restored.recommended_advisors[0].action_steps) == 1
+
+    def test_legacy_recommendation_without_steps_loads(self) -> None:
+        # Pre-v2.8 audit records have no ``action_steps`` key.
+        d = {
+            "decision": "ALLOW", "reason": "x", "confidence": 0.5,
+            "recommended_advisors": [{
+                "advisor": "cost-optimizer", "priority": "high",
+                "action": "trim",
+            }],
+        }
+        restored = advice_from_dict(d)
+        assert restored.recommended_advisors[0].action_steps == ()
+
+    def test_all_eleven_verbs_accepted(self) -> None:
+        """Sanity: every verb in the closed catalog round-trips."""
+        verbs_with_params = [
+            ("prune-turns", {"turn_indices_rel": [-1]}),
+            ("summarize-window", {"turn_range": [-5, -1]}),
+            ("swap-model", {"from_model": "a", "to_model": "b"}),
+            ("end-session", {}),
+            ("swap-tool", {"from_tool": "Read", "to_tool": "Grep"}),
+            ("narrow-scope", {"original_args": "*", "suggested_args": "src/"}),
+            ("clarify-intent", {"clarifying_question": "X or Y?"}),
+            ("run-diagnostic", {"diagnostic_command": "pytest"}),
+            ("verify-state", {"check": "file exists"}),
+            ("notify-operator", {"channel": "#ops", "summary": "alert"}),
+            ("require-approval", {"reason": "destructive"}),
+        ]
+        for verb, params in verbs_with_params:
+            d = {
+                "decision": "ALLOW", "reason": "x", "confidence": 0.5,
+                "recommended_advisors": [{
+                    "advisor": "cost-optimizer", "priority": "high",
+                    "action": "x",
+                    "action_steps": [{"verb": verb, "parameters": params}],
+                }],
+            }
+            restored = advice_from_dict(d)
+            steps = restored.recommended_advisors[0].action_steps
+            assert len(steps) == 1, f"{verb} dropped — params={params}"
+            assert steps[0].verb == verb
+
+
+class TestRenderActionSteps:
+    def test_render_includes_steps(self) -> None:
+        advice = ActionAdvice(
+            decision="REQUIRE_APPROVAL", reason="x", confidence=0.8,
+            recommended_advisors=(
+                AdvisorRecommendation(
+                    advisor="cost-optimizer", priority="high",
+                    action="trim",
+                    action_steps=(
+                        ActionStep(
+                            verb="prune-turns",
+                            parameters={"turn_indices_rel": [-3, -2, -1]},
+                            expected_impact="saves $0.42",
+                            confidence=0.85,
+                            cited_signals=("budget_used_ratio",),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        out = render_advice(advice)
+        assert "steps:" in out
+        assert "prune-turns" in out
+        assert "saves $0.42" in out
+        assert "0.85" in out
