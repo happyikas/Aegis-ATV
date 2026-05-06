@@ -48,6 +48,15 @@ class Settings(BaseSettings):
     aegis_rag_enabled: bool = True
     aegis_rag_top_k: int = 3
     aegis_rag_max_chars: int = 1500
+    # Time-decay half-life by chunk category (PR ③). Score multiplier
+    # is 0.5 ^ (age_days / half_life_days). 0 = no decay (rules don't
+    # expire on a clock — only via valid_until + supersedes). Playbooks
+    # decay on a 90-day half-life because incident relevance drops
+    # over months. Tenant baselines decay on a 30-day half-life
+    # because traffic patterns drift fastest.
+    aegis_rag_decay_rule_days: int = 0
+    aegis_rag_decay_playbook_days: int = 90
+    aegis_rag_decay_baseline_days: int = 30
 
     aegis_signing_key_path: str = "./keys/ed25519.pem"
     aegis_public_key_path: str = "./keys/ed25519.pub"

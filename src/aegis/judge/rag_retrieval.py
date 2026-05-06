@@ -49,11 +49,49 @@ if TYPE_CHECKING:
 
 
 _DEFAULT_DIM = 768
+_NS_PER_DAY = 86_400 * 1_000_000_000
 
 
 def _cache_dir() -> Path:
     base = os.environ.get("AEGIS_HOME") or str(Path.home() / ".aegis")
     return Path(base) / "rag_cache"
+
+
+def _half_life_for(category: str) -> int:
+    """Per-category half-life in days. 0 = no decay."""
+    from aegis.config import settings
+    if category == "rule":
+        return int(settings.aegis_rag_decay_rule_days)
+    if category == "playbook":
+        return int(settings.aegis_rag_decay_playbook_days)
+    if category == "baseline":
+        return int(settings.aegis_rag_decay_baseline_days)
+    return 0
+
+
+def time_decay_factor(chunk: RagChunk, anchor_ts_ns: int) -> float:
+    """Score multiplier in (0, 1] for ``chunk`` viewed at ``anchor_ts_ns``.
+
+    Returns 1.0 (no decay) when:
+      * ``chunk.created_at`` is unset (back-compat),
+      * the per-category half-life is 0 (rules by default),
+      * ``anchor_ts_ns`` is at or before ``created_at`` (future-dated
+        chunks treated as fresh — relevant for replay anchors).
+
+    Otherwise returns ``0.5 ** (age_days / half_life_days)``. The
+    multiplier reaches ~0.5 at one half-life and ~0.25 at two.
+    """
+    if chunk.created_at is None:
+        return 1.0
+    half_life_days = _half_life_for(chunk.category)
+    if half_life_days <= 0:
+        return 1.0
+    from aegis.judge.rag_corpus import _parse_iso_to_ns
+    created_ns = _parse_iso_to_ns(chunk.created_at, field_name="created_at")
+    if created_ns is None or anchor_ts_ns <= created_ns:
+        return 1.0
+    age_days = (anchor_ts_ns - created_ns) / _NS_PER_DAY
+    return float(0.5 ** (age_days / half_life_days))
 
 
 def _corpus_fingerprint(corpus: RagCorpus, provider_name: str, dim: int) -> str:
@@ -137,15 +175,21 @@ class RagIndex:
     def search(
         self, query: np.ndarray, k: int = 3,
         *, anchor_ts_ns: int | None = None,
+        apply_decay: bool = True,
     ) -> list[tuple[RagChunk, float]]:
         """Return the top-k chunks by cosine similarity to ``query``.
 
         When ``anchor_ts_ns`` is supplied, chunks whose validity window
         does not cover that timestamp are skipped (PR ② of temporal
-        RAG). The walk continues down the score order until k *valid*
-        chunks have been collected (or the corpus is exhausted), so
-        callers always get the best k chunks available at that anchor
-        time rather than a possibly-empty filtered slice.
+        RAG), and chunks with a ``created_at`` are re-ranked by
+        :func:`time_decay_factor` against the per-category half-life
+        from settings (PR ③). The walk continues down the post-decay
+        score order until k valid chunks have been collected (or the
+        corpus is exhausted), so callers always get the best k chunks
+        available at that anchor time rather than a possibly-empty
+        filtered slice. Set ``apply_decay=False`` to keep cosine
+        scores untouched (used by tests + tools that want pure
+        similarity).
         """
         if self.is_empty:
             return []
@@ -163,6 +207,16 @@ class RagIndex:
             return [
                 (self.corpus.chunks[int(i)], float(scores[int(i)])) for i in top
             ]
+
+        # Apply per-chunk time-decay multiplier when requested + when
+        # the chunk carries a created_at. Rules without configured
+        # half-life keep their cosine score unchanged.
+        if apply_decay:
+            decayed = scores.copy()
+            for i, chunk in enumerate(self.corpus.chunks):
+                factor = time_decay_factor(chunk, anchor_ts_ns)
+                decayed[i] = scores[i] * factor
+            scores = decayed
 
         # Validity-aware top-k: walk argsort, skip invalid chunks.
         order = np.argsort(-scores)
@@ -238,14 +292,16 @@ def retrieve(
     index: RagIndex | None = None,
     provider: EmbeddingProvider | None = None,
     anchor_ts_ns: int | None = None,
+    apply_decay: bool = True,
 ) -> list[tuple[RagChunk, float]]:
     """Retrieve top-k chunks for ``query_text``.
 
     If ``index`` is omitted, uses :func:`build_default_index`. If
     ``provider`` is omitted, uses the active provider for query
     embedding too. When ``anchor_ts_ns`` is supplied, the result is
-    filtered to chunks valid at that timestamp (PR ②); ``None`` keeps
-    the historical behaviour (no time filter).
+    filtered to chunks valid at that timestamp (PR ②) and re-ranked
+    by per-category time-decay (PR ③). ``None`` keeps the historical
+    behaviour (no time filter, no decay).
     """
     idx = index if index is not None else build_default_index()
     if idx.is_empty:
@@ -254,7 +310,9 @@ def retrieve(
         from aegis.atv.embeddings import get_provider
         provider = get_provider()
     q_vec = _embed_text(query_text, provider, idx.dim)
-    return idx.search(q_vec, k=k, anchor_ts_ns=anchor_ts_ns)
+    return idx.search(
+        q_vec, k=k, anchor_ts_ns=anchor_ts_ns, apply_decay=apply_decay,
+    )
 
 
 def retrieve_block(
@@ -347,4 +405,5 @@ __all__: tuple[str, ...] = (
     "retrieve",
     "retrieve_block",
     "retrieve_for_audit_record",
+    "time_decay_factor",
 )

@@ -41,6 +41,7 @@ Every line is one JSON object:
 | `valid_from` | string | no | ISO 8601 UTC (`YYYY-MM-DDTHH:MM:SSZ`) — chunk first becomes effective at this time. Inclusive. Absent → always valid. |
 | `valid_until` | string | no | ISO 8601 UTC — chunk stops being effective at this time. **Exclusive**. Absent → no end. |
 | `supersedes` | string | no | ID of the chunk this entry replaces (informational; the validity window is what actually filters retrieval). |
+| `created_at` | string | no | ISO 8601 UTC — chunk authoring time. Drives **time-decay re-ranking** (PR ③). Absent → no decay. |
 
 ### Validity windows (PR #94)
 
@@ -63,6 +64,18 @@ Example superseded pair:
  "valid_from": "2024-08-01T00:00:00Z",
  "supersedes": "rule-aws-iam-mutation-v0"}
 ```
+
+### Time-decay re-ranking (PR ③)
+
+Chunks with a `created_at` are re-ranked by `cosine × 0.5^(age_days / half_life_days)` whenever an `anchor_ts_ns` is set on retrieve. The half-life is **per-category**, configured via settings:
+
+| category | default half-life | rationale |
+|----------|------------------:|-----------|
+| `rule`     | 0 (no decay)     | Rules don't expire on a clock — only via explicit `valid_until` + `supersedes`. |
+| `playbook` | 90 days          | Incident relevance drops over months; freshly-authored playbooks should win over old ones. |
+| `baseline` | 30 days          | Tenant traffic patterns drift fastest; recent baselines weigh more. |
+
+Override via env vars (e.g. `AEGIS_RAG_DECAY_PLAYBOOK_DAYS=180`). A half-life of `0` disables decay for that category. Chunks without `created_at` keep their cosine score unchanged.
 
 ## Loader
 
