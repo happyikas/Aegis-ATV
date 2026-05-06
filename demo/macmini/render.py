@@ -190,7 +190,7 @@ def render_summary(
     lines.append(
         f"    {'Category':<14} {'Cases':>6} {'Pass':>6} {'Fail':>6} {'Pass%':>7}"
     )
-    for cat in ("cost", "performance", "security"):
+    for cat in ("cost", "performance", "security", "rag"):
         cases = by_cat.get(cat, [])
         cp = sum(1 for r in cases if r.passed)
         if not cases:
@@ -240,7 +240,7 @@ def render_markdown(
     cases: list[TestCase], results: list[TestResult],
 ) -> str:
     by_cat: dict[str, list[tuple[TestCase, TestResult]]] = {
-        "cost": [], "performance": [], "security": [],
+        "cost": [], "performance": [], "security": [], "rag": [],
     }
     pairs = list(zip(cases, results, strict=False))
     for c, r in pairs:
@@ -268,7 +268,7 @@ def render_markdown(
         "| Category | Cases | Pass | Fail | Pass% |",
         "|----------|-------|------|------|-------|",
     ]
-    for cat in ("cost", "performance", "security"):
+    for cat in ("cost", "performance", "security", "rag"):
         cs = by_cat.get(cat, [])
         if not cs:
             continue
@@ -301,7 +301,7 @@ def render_markdown(
             lines.append(f"| `{verb}` | {cnt} |")
         lines.append("")
 
-    for cat in ("cost", "performance", "security"):
+    for cat in ("cost", "performance", "security", "rag"):
         cs = by_cat.get(cat, [])
         if not cs:
             continue

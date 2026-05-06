@@ -6,8 +6,8 @@ Self-contained 90-case validation suite covering Cost, Performance and Security 
 
 ## Headline
 
-- **Total cases**: 90
-- **Pass**: 90 (100%)
+- **Total cases**: 100
+- **Pass**: 100 (100%)
 - **Fail**: 0
 
 ## By category
@@ -17,6 +17,7 @@ Self-contained 90-case validation suite covering Cost, Performance and Security 
 | cost | 30 | 30 | 0 | 100% |
 | performance | 30 | 30 | 0 | 100% |
 | security | 30 | 30 | 0 | 100% |
+| rag | 10 | 10 | 0 | 100% |
 
 ## Advisor frequency
 
@@ -54,7 +55,7 @@ Self-contained 90-case validation suite covering Cost, Performance and Security 
 
 **Execution**: `compose_advice_heuristic(temporal_ctx=ctx_idle())`
 
-**Result**: decision=`ALLOW` (98.3 ms)
+**Result**: decision=`ALLOW` (96.3 ms)
 - (no advisor fired)
 
 ### COST-02 — Budget warn flag → cost-optimizer fires  (PASS)
@@ -248,7 +249,7 @@ Self-contained 90-case validation suite covering Cost, Performance and Security 
 
 **Execution**: `PreToolUse: Read /tmp/foo.md`
 
-**Result**: decision=`ALLOW` (20.1 ms)
+**Result**: decision=`ALLOW` (19.6 ms)
 - (no advisor fired)
 
 ### COST-23 — Routine ALLOW (e2e) — Bash echo  (PASS)
@@ -502,7 +503,7 @@ Self-contained 90-case validation suite covering Cost, Performance and Security 
 
 **Execution**: `3x PreToolUse Bash 'echo perf-loop-A'`
 
-**Result**: decision=`REQUIRE_APPROVAL` (4.5 ms)
+**Result**: decision=`REQUIRE_APPROVAL` (4.8 ms)
 - `loop-breaker` (prio=high) verbs=swap-tool,narrow-scope
 
 ### PERF-20 — loop-3rd e2e #2 — loop-breaker + swap-tool  (PASS)
@@ -511,7 +512,7 @@ Self-contained 90-case validation suite covering Cost, Performance and Security 
 
 **Execution**: `3x PreToolUse Bash 'echo perf-loop-B'`
 
-**Result**: decision=`REQUIRE_APPROVAL` (2.1 ms)
+**Result**: decision=`REQUIRE_APPROVAL` (2.0 ms)
 - `loop-breaker` (prio=high) verbs=swap-tool,narrow-scope
 
 ### PERF-21 — loop-3rd e2e #3 — loop-breaker + swap-tool  (PASS)
@@ -520,7 +521,7 @@ Self-contained 90-case validation suite covering Cost, Performance and Security 
 
 **Execution**: `3x PreToolUse Bash 'echo perf-loop-C'`
 
-**Result**: decision=`REQUIRE_APPROVAL` (1.8 ms)
+**Result**: decision=`REQUIRE_APPROVAL` (1.9 ms)
 - `loop-breaker` (prio=high) verbs=swap-tool,narrow-scope
 
 ### PERF-22 — loop-3rd e2e #4 — loop-breaker + swap-tool  (PASS)
@@ -615,7 +616,7 @@ Self-contained 90-case validation suite covering Cost, Performance and Security 
 
 **Execution**: `PreToolUse: Bash 'rm -rf /var/data'`
 
-**Result**: decision=`BLOCK` (1.0 ms)
+**Result**: decision=`BLOCK` (1.1 ms)
 - `security-reviewer` (prio=high) verbs=require-approval
 
 ### SEC-02 — recursive purge of a user home  (PASS)
@@ -651,7 +652,7 @@ Self-contained 90-case validation suite covering Cost, Performance and Security 
 
 **Execution**: `PreToolUse: Bash 'kubectl delete namespace production'`
 
-**Result**: decision=`BLOCK` (1.0 ms)
+**Result**: decision=`BLOCK` (1.1 ms)
 - `security-reviewer` (prio=high) verbs=require-approval
 
 ### SEC-06 — kubernetes deployment removal  (PASS)
@@ -660,7 +661,7 @@ Self-contained 90-case validation suite covering Cost, Performance and Security 
 
 **Execution**: `PreToolUse: Bash 'kubectl delete deployment api'`
 
-**Result**: decision=`BLOCK` (1.1 ms)
+**Result**: decision=`BLOCK` (1.2 ms)
 - `security-reviewer` (prio=high) verbs=require-approval
 
 ### SEC-07 — helm release teardown  (PASS)
@@ -669,7 +670,7 @@ Self-contained 90-case validation suite covering Cost, Performance and Security 
 
 **Execution**: `PreToolUse: Bash 'helm uninstall prod-release'`
 
-**Result**: decision=`BLOCK` (1.3 ms)
+**Result**: decision=`BLOCK` (1.2 ms)
 - `security-reviewer` (prio=high) verbs=require-approval
 
 ### SEC-08 — terraform full-stack teardown  (PASS)
@@ -678,7 +679,7 @@ Self-contained 90-case validation suite covering Cost, Performance and Security 
 
 **Execution**: `PreToolUse: Bash 'terraform destroy -auto-approve'`
 
-**Result**: decision=`BLOCK` (1.2 ms)
+**Result**: decision=`BLOCK` (1.1 ms)
 - `security-reviewer` (prio=high) verbs=require-approval
 
 ### SEC-09 — EC2 instance termination  (PASS)
@@ -696,7 +697,7 @@ Self-contained 90-case validation suite covering Cost, Performance and Security 
 
 **Execution**: `PreToolUse: Bash 'aws iam delete-policy --policy-arn arn:aws:iam::123:policy/D'`
 
-**Result**: decision=`BLOCK` (1.0 ms)
+**Result**: decision=`BLOCK` (1.2 ms)
 - `security-reviewer` (prio=high) verbs=require-approval
 
 ### SEC-11 — GCP project removal  (PASS)
@@ -714,7 +715,7 @@ Self-contained 90-case validation suite covering Cost, Performance and Security 
 
 **Execution**: `PreToolUse: Bash 'az vm delete --name prod-vm --yes'`
 
-**Result**: decision=`BLOCK` (1.0 ms)
+**Result**: decision=`BLOCK` (1.1 ms)
 - `security-reviewer` (prio=high) verbs=require-approval
 
 ### SEC-13 — privileged docker container launch  (PASS)
@@ -732,7 +733,7 @@ Self-contained 90-case validation suite covering Cost, Performance and Security 
 
 **Execution**: `PreToolUse: Bash 'docker rmi -f prod-image:latest'`
 
-**Result**: decision=`BLOCK` (1.0 ms)
+**Result**: decision=`BLOCK` (1.1 ms)
 - `security-reviewer` (prio=high) verbs=require-approval
 
 ### SEC-15 — SQL drop-table destructive pattern  (PASS)
@@ -786,7 +787,7 @@ Self-contained 90-case validation suite covering Cost, Performance and Security 
 
 **Execution**: `PreToolUse: Read '~/.ssh/id_rsa'`
 
-**Result**: decision=`BLOCK` (1.1 ms)
+**Result**: decision=`BLOCK` (1.2 ms)
 - `security-reviewer` (prio=high) verbs=require-approval
 
 ### SEC-21 — Read dotenv in production app dir  (PASS)
@@ -795,7 +796,7 @@ Self-contained 90-case validation suite covering Cost, Performance and Security 
 
 **Execution**: `PreToolUse: Read '~/.env'`
 
-**Result**: decision=`REQUIRE_APPROVAL` (1.2 ms)
+**Result**: decision=`REQUIRE_APPROVAL` (1.5 ms)
 - `security-reviewer` (prio=high) verbs=require-approval
 
 ### SEC-22 — Read system passwd file  (PASS)
@@ -813,7 +814,7 @@ Self-contained 90-case validation suite covering Cost, Performance and Security 
 
 **Execution**: `PreToolUse: Read /tmp/foo.md`
 
-**Result**: decision=`ALLOW` (0.6 ms)
+**Result**: decision=`ALLOW` (0.7 ms)
 - (no advisor fired)
 
 ### SEC-24 — Bash echo (control)  (PASS)
@@ -867,7 +868,7 @@ Self-contained 90-case validation suite covering Cost, Performance and Security 
 
 **Execution**: `PreToolUse: Read '/etc/shadow'`
 
-**Result**: decision=`BLOCK` (1.2 ms)
+**Result**: decision=`BLOCK` (1.1 ms)
 - `security-reviewer` (prio=high) verbs=require-approval
 
 ### SEC-30 — Security + cost combo → 2 advisors  (PASS)
@@ -879,6 +880,98 @@ Self-contained 90-case validation suite covering Cost, Performance and Security 
 **Result**: decision=`ALLOW` (0.0 ms)
 - `security-reviewer` (prio=high) verbs=require-approval
 - `cost-optimizer` (prio=high) verbs=end-session
+
+## Rag (10 cases)
+
+### RAG-01 — rag_enabled=False → 0 chunks (control)  (PASS)
+
+**Scenario**: With aegis_rag_enabled=False, retrieve_block must return no chunks regardless of query content. The plumbing must honour the env-var toggle.
+
+**Execution**: `retrieve(query, k=3) with rag_enabled=False`
+
+**Result**: decision=`None` (1.6 ms)
+- (no advisor fired)
+
+### RAG-02 — rag_enabled=True → exactly k chunks  (PASS)
+
+**Scenario**: With RAG on, retrieve(k=3) must return exactly 3 chunks from a corpus of >=30 entries.
+
+**Execution**: `retrieve(query, k=3)`
+
+**Result**: decision=`None` (0.8 ms)
+- (no advisor fired)
+
+### RAG-03 — rag k=5 returns 5 chunks  (PASS)
+
+**Scenario**: Top-k parameter passes through end-to-end; k=5 must yield exactly 5 chunks (corpus has 38).
+
+**Execution**: `retrieve(query, k=5)`
+
+**Result**: decision=`None` (0.5 ms)
+- (no advisor fired)
+
+### RAG-04 — every retrieval includes at least one rule chunk  (PASS)
+
+**Scenario**: The shipped corpus is dominated by rule chunks (31/38). Top-3 over any reasonable query must include at least one rule chunk — a sanity check on category coverage.
+
+**Execution**: `retrieve top-3, expect 'rule' present`
+
+**Result**: decision=`None` (0.4 ms)
+- (no advisor fired)
+
+### RAG-05 — empty query string returns valid result  (PASS)
+
+**Scenario**: Edge case: empty query embedded by dummy provider. Should not crash; should return some chunks (the L2-normalised zero vector falls back gracefully).
+
+**Execution**: `retrieve('', k=3) — fail-soft`
+
+**Result**: decision=`None` (0.4 ms)
+- (no advisor fired)
+
+### RAG-06 — long query (>500 chars) doesn't crash  (PASS)
+
+**Scenario**: Realistic ATV summary can be a few hundred chars. Verify retrieve handles long queries without truncation errors and still returns the expected number of chunks.
+
+**Execution**: `retrieve(long_query, k=3)`
+
+**Result**: decision=`None` (0.4 ms)
+- (no advisor fired)
+
+### RAG-07 — full-corpus retrieval surfaces all rule + playbook chunks  (PASS)
+
+**Scenario**: With k=999 (capped at corpus size) every chunk is returned. Expect both rule and playbook categories — catches regression where playbooks.jsonl is silently excluded from indexing.
+
+**Execution**: `retrieve(query, k=999)`
+
+**Result**: decision=`None` (0.4 ms)
+- (no advisor fired)
+
+### RAG-08 — full-corpus retrieval includes baseline category  (PASS)
+
+**Scenario**: The baseline placeholder chunk must be reachable at k=999. Catches regression where baselines.jsonl is excluded from indexing or its category is mislabelled.
+
+**Execution**: `retrieve(query, k=999)`
+
+**Result**: decision=`None` (0.4 ms)
+- (no advisor fired)
+
+### RAG-09 — k > corpus size capped at corpus size  (PASS)
+
+**Scenario**: Asking for more chunks than the corpus contains should return all chunks, not crash. Verifies search() bounds the slice to len(corpus).
+
+**Execution**: `retrieve(query, k=999)`
+
+**Result**: decision=`None` (0.4 ms)
+- (no advisor fired)
+
+### RAG-10 — k=1 returns exactly one chunk with valid id  (PASS)
+
+**Scenario**: Boundary: k=1 narrows to a single hit. Verifies the argsort -> top slice path with the smallest possible k.
+
+**Execution**: `retrieve(query, k=1)`
+
+**Result**: decision=`None` (0.4 ms)
+- (no advisor fired)
 
 ## Reproduction
 

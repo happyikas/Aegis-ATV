@@ -41,16 +41,30 @@ class TestCase:
     step_traces: Mapping[str, str] | None = None
     anomaly_metric: str | None = None
 
+    # RAG retrieval cases (test_type="rag")
+    rag_query: str = ""
+    rag_top_k: int = 3
+    rag_enabled: bool = True
+    rag_expected_min_count: int = 0
+    rag_expected_max_count: int = 0
+    rag_expected_categories: tuple[str, ...] = ()
+    rag_expected_chunk_ids: tuple[str, ...] = ()
+
     execution_summary: str = ""
 
     def __post_init__(self) -> None:
-        if self.test_type not in ("unit", "e2e"):
+        if self.test_type not in ("unit", "e2e", "rag"):
             raise ValueError(
-                f"{self.cid}: test_type must be 'unit' or 'e2e', "
+                f"{self.cid}: test_type must be 'unit' / 'e2e' / 'rag', "
                 f"got {self.test_type!r}"
             )
         if self.test_type == "e2e" and self.pre_event is None:
             raise ValueError(f"{self.cid}: e2e cases must set pre_event")
+        if self.test_type == "rag" and not self.rag_query and self.rag_enabled:
+            raise ValueError(
+                f"{self.cid}: rag cases must set rag_query (or "
+                "rag_enabled=False to test the off path)"
+            )
 
 
 @dataclass
@@ -71,7 +85,10 @@ class TestResult:
 
 
 def check(case: TestCase, observed: Mapping[str, Any]) -> tuple[bool, list[str]]:
-    """Compare observed advisor/verb output against case expectations."""
+    """Compare observed advisor/verb / retrieval output against case expectations."""
+    if case.test_type == "rag":
+        return _check_rag(case, observed)
+
     advisors = {a["advisor"] for a in observed.get("advisors", [])}
     verbs_per_advisor = {
         a["advisor"]: a["verbs"] for a in observed.get("advisors", [])
@@ -115,5 +132,51 @@ def check(case: TestCase, observed: Mapping[str, Any]) -> tuple[bool, list[str]]
             miss.append(
                 f"decision {actual!r} != {case.expected_decision!r}"
             )
+
+    return (len(miss) == 0, miss)
+
+
+def _check_rag(case: TestCase, observed: Mapping[str, Any]) -> tuple[bool, list[str]]:
+    """RAG retrieval expectations.
+
+    Observation shape (set by ``runner._run_rag``):
+      {
+        "n_retrieved": int,
+        "chunk_ids": list[str],
+        "categories": list[str],
+        "rendered": str,
+      }
+    """
+    miss: list[str] = []
+    n = int(observed.get("n_retrieved", 0))
+
+    if case.rag_expected_min_count and n < case.rag_expected_min_count:
+        miss.append(
+            f"retrieved {n} < expected min {case.rag_expected_min_count}"
+        )
+    if case.rag_expected_max_count and n > case.rag_expected_max_count:
+        miss.append(
+            f"retrieved {n} > expected max {case.rag_expected_max_count}"
+        )
+
+    chunk_ids = list(observed.get("chunk_ids", []))
+    categories = list(observed.get("categories", []))
+
+    if case.rag_expected_categories:
+        cats_set = set(categories)
+        for cat in case.rag_expected_categories:
+            if cat not in cats_set:
+                miss.append(
+                    f"missing category {cat!r} in retrieved "
+                    f"{sorted(cats_set)}"
+                )
+    if case.rag_expected_chunk_ids:
+        ids_set = set(chunk_ids)
+        for cid in case.rag_expected_chunk_ids:
+            if cid not in ids_set:
+                miss.append(
+                    f"expected chunk {cid!r} not retrieved "
+                    f"(got {chunk_ids})"
+                )
 
     return (len(miss) == 0, miss)
