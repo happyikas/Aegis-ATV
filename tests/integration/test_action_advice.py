@@ -849,6 +849,199 @@ class TestVerbParamValidation:
         )
 
 
+class TestHeuristicActionSteps:
+    """v2.8 PR-δ — heuristic recommendations carry concrete
+    action_steps (Layer A). Tests that each of the 8 advisors emits
+    sensible step verbs for its trigger."""
+
+    def _ctx_with_expensive_turns(self) -> TemporalContext:
+        # 5 turns with high token usage at indices -3, -2, -1.
+        snaps = []
+        for i in range(5):
+            rel = i - 4  # -4 .. 0
+            tokens = 200 if rel < -3 else 5000  # last 4 turns are expensive
+            snaps.append(ATVSnapshot(
+                turn_index_rel=rel, ts_ns=0, tool_name="Bash",
+                args_excerpt="", decision="ALLOW", outcome="success",
+                input_tokens=tokens // 2, output_tokens=tokens // 2,
+                cache_hit_rate=(0.8 if rel < -2 else 0.3),
+            ))
+        return TemporalContext(
+            history=tuple(snaps), window_size=5,
+            cumulative_token_trajectory=tuple(0 for _ in range(5)),
+            cache_hit_rate_trajectory=tuple(
+                s.cache_hit_rate for s in snaps
+            ),
+            n_backtracks=0, n_redundant=0, n_errors=0, n_failures=0,
+            cache_hit_rate_max_drop_pp=50.0,
+            token_velocity_per_turn=2500.0,
+            is_progress_stalled=False,
+            distinct_tools_in_window=("Bash",),
+        )
+
+    def test_security_reviewer_emits_require_approval(self) -> None:
+        advice = compose_advice_heuristic(
+            base_decision="BLOCK", base_reason="rule:git_destructive",
+            security_signals={
+                "verdict_decision": "BLOCK",
+                "destructive_path_match": True,
+                "policy_rule": "rule:git_destructive",
+                "blast_radius": "high",
+            },
+        )
+        sec_rec = next(
+            r for r in advice.recommended_advisors
+            if r.advisor == "security-reviewer"
+        )
+        verbs = [s.verb for s in sec_rec.action_steps]
+        assert "require-approval" in verbs
+
+    def test_cost_optimizer_emits_prune_swap_end(self) -> None:
+        ctx = self._ctx_with_expensive_turns()
+        advice = compose_advice_heuristic(
+            temporal_ctx=ctx,
+            cost_signals={"budget_used_ratio": 1.6},
+            current_model="claude-opus-4-7",
+        )
+        co = next(
+            r for r in advice.recommended_advisors
+            if r.advisor == "cost-optimizer"
+        )
+        verbs = [s.verb for s in co.action_steps]
+        # Budget pressure → prune-turns + swap-model + end-session
+        assert "prune-turns" in verbs
+        assert "swap-model" in verbs
+        assert "end-session" in verbs  # ratio 1.6 ≥ 1.5
+
+        # Validate prune-turns has actual turn indices, not empty.
+        prune = next(s for s in co.action_steps if s.verb == "prune-turns")
+        assert len(prune.parameters["turn_indices_rel"]) >= 1
+        # Validate swap-model destination matches the registry.
+        swap = next(s for s in co.action_steps if s.verb == "swap-model")
+        assert swap.parameters["from_model"] == "claude-opus-4-7"
+        assert swap.parameters["to_model"] == "claude-haiku-4-5"
+
+    def test_cost_optimizer_divergence_emits_notify(self) -> None:
+        advice = compose_advice_heuristic(
+            cost_signals={"hw_vs_sw_divergence_ratio": 3.15},
+        )
+        co = next(
+            r for r in advice.recommended_advisors
+            if r.advisor == "cost-optimizer"
+        )
+        verbs = [s.verb for s in co.action_steps]
+        assert "notify-operator" in verbs
+
+    def test_kv_cache_optimizer_emits_prune_turns(self) -> None:
+        ctx = self._ctx_with_expensive_turns()
+        advice = compose_advice_heuristic(
+            temporal_ctx=ctx,
+            cache_signals={"cache_hit_rate_max_drop_pp": 51.0},
+        )
+        kv = next(
+            r for r in advice.recommended_advisors
+            if r.advisor == "kv-cache-optimizer"
+        )
+        verbs = [s.verb for s in kv.action_steps]
+        assert "prune-turns" in verbs
+
+    def test_loop_breaker_emits_swap_tool(self) -> None:
+        advice = compose_advice_heuristic(
+            base_decision="REQUIRE_APPROVAL",
+            current_tool="Read",
+            step_traces={
+                "aegis.firewall.step336_loop.run":
+                    "step336: loop (3× seen) Read",
+            },
+        )
+        lb = next(
+            r for r in advice.recommended_advisors
+            if r.advisor == "loop-breaker"
+        )
+        verbs = [s.verb for s in lb.action_steps]
+        assert "swap-tool" in verbs
+        swap = next(s for s in lb.action_steps if s.verb == "swap-tool")
+        assert swap.parameters["from_tool"] == "Read"
+        # _LOOP_BREAKER_TOOL_SWAPS["Read"] == "Grep"
+        assert swap.parameters["to_tool"] == "Grep"
+
+    def test_test_runner_emits_run_diagnostic(self) -> None:
+        advice = compose_advice_heuristic(
+            anomalies=[
+                AnomalyTag(
+                    metric="session_error_rate", severity="warning",
+                    observed=10, baseline_mean=1, baseline_std=1,
+                    z_score=3.0, description="errors elevated",
+                ),
+            ],
+        )
+        tr = next(
+            r for r in advice.recommended_advisors
+            if r.advisor == "test-runner"
+        )
+        verbs = [s.verb for s in tr.action_steps]
+        assert "run-diagnostic" in verbs
+
+    def test_human_clarifier_emits_clarify_intent(self) -> None:
+        # Build a temporal_ctx with backtrack flag.
+        ctx = TemporalContext(
+            history=(
+                ATVSnapshot(
+                    turn_index_rel=-2, ts_ns=0, tool_name="Edit",
+                    args_excerpt="", decision="ALLOW", outcome="success",
+                    backtrack=True,
+                ),
+            ),
+            window_size=2,
+            cumulative_token_trajectory=(0,),
+            cache_hit_rate_trajectory=(0.0,),
+            n_backtracks=1, n_redundant=0, n_errors=0, n_failures=0,
+            cache_hit_rate_max_drop_pp=0.0,
+            token_velocity_per_turn=0.0,
+            is_progress_stalled=False,
+            distinct_tools_in_window=("Edit",),
+        )
+        advice = compose_advice_heuristic(temporal_ctx=ctx)
+        hc = next(
+            r for r in advice.recommended_advisors
+            if r.advisor == "human-clarifier"
+        )
+        verbs = [s.verb for s in hc.action_steps]
+        assert "clarify-intent" in verbs
+
+    def test_context_compactor_emits_summarize_window(self) -> None:
+        ctx = self._ctx_with_expensive_turns()
+        advice = compose_advice_heuristic(
+            temporal_ctx=ctx,
+            anomalies=[
+                AnomalyTag(
+                    metric="window_token_velocity_per_turn",
+                    severity="warning",
+                    observed=10, baseline_mean=1, baseline_std=1,
+                    z_score=3.0, description="velocity elevated",
+                ),
+            ],
+        )
+        cc = next(
+            r for r in advice.recommended_advisors
+            if r.advisor == "context-compactor"
+        )
+        verbs = [s.verb for s in cc.action_steps]
+        assert "summarize-window" in verbs
+
+    def test_permission_escalator_emits_notify_operator(self) -> None:
+        advice = compose_advice_heuristic(
+            base_decision="BLOCK", base_reason="(no domain)",
+            security_signals={"verdict_decision": "BLOCK"},
+        )
+        pe = next(
+            r for r in advice.recommended_advisors
+            if r.advisor == "permission-escalator"
+        )
+        verbs = [s.verb for s in pe.action_steps]
+        assert "notify-operator" in verbs
+
+
 class TestRenderActionSteps:
     def test_render_includes_steps(self) -> None:
         advice = ActionAdvice(
