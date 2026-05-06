@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     aegis_judge_temperature: float = 0.0
     aegis_judge_seed: int = 42
 
+    # PR 3 — policy/playbook RAG retrieval. Set to 0 to disable
+    # corpus retrieval globally (case-memory path is unaffected).
+    aegis_rag_enabled: bool = True
+    aegis_rag_top_k: int = 3
+    aegis_rag_max_chars: int = 1500
+
     aegis_signing_key_path: str = "./keys/ed25519.pem"
     aegis_public_key_path: str = "./keys/ed25519.pub"
 

@@ -230,24 +230,38 @@ def retrieve(
 def retrieve_block(
     query_text: str,
     *,
-    k: int = 3,
-    max_chars: int = 1500,
+    k: int | None = None,
+    max_chars: int | None = None,
     index: RagIndex | None = None,
     provider: EmbeddingProvider | None = None,
 ) -> str:
     """Retrieve top-k chunks and render them into a prompt block.
 
+    Defaults for ``k`` / ``max_chars`` come from
+    ``aegis.config.settings`` (``aegis_rag_top_k`` / ``aegis_rag_max_chars``).
+    When ``aegis_rag_enabled`` is False the function returns ``""``
+    without doing any work.
+
     Returns ``""`` if retrieval fails for any reason. The judge prompt
     builder relies on this fail-soft contract.
     """
     try:
-        hits = retrieve(query_text, k=k, index=index, provider=provider)
+        from aegis.config import settings
+        if not settings.aegis_rag_enabled:
+            return ""
+        effective_k = k if k is not None else settings.aegis_rag_top_k
+        effective_max = (
+            max_chars if max_chars is not None else settings.aegis_rag_max_chars
+        )
+        hits = retrieve(
+            query_text, k=effective_k, index=index, provider=provider,
+        )
     except Exception:  # noqa: BLE001 — RAG must never block the judge
         return ""
     if not hits:
         return ""
     chunks = [c for c, _score in hits]
-    return render_chunks_for_prompt(chunks, max_chars=max_chars)
+    return render_chunks_for_prompt(chunks, max_chars=effective_max)
 
 
 __all__: tuple[str, ...] = (
