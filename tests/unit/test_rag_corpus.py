@@ -429,3 +429,71 @@ class TestValidityWindows:
         n_before = len(corpus.chunks)
         view = corpus.valid_at()
         assert len(view.chunks) == n_before
+
+
+# ── TestCreatedAt (PR ③) ──────────────────────────────────────────────
+
+
+class TestCreatedAt:
+    def test_loader_accepts_created_at(self, tmp_path: Path) -> None:
+        chunk = {
+            "id": "rule-x", "category": "rule",
+            "title": "t", "content": "c",
+            "created_at": "2024-08-15T00:00:00Z",
+        }
+        (tmp_path / "rules.jsonl").write_text(
+            json.dumps(chunk), encoding="utf-8",
+        )
+        corpus = load_corpus(tmp_path)
+        assert corpus.chunks[0].created_at == "2024-08-15T00:00:00Z"
+
+    def test_loader_rejects_malformed_created_at(self, tmp_path: Path) -> None:
+        chunk = {
+            "id": "rule-x", "category": "rule",
+            "title": "t", "content": "c",
+            "created_at": "tomorrow",
+        }
+        (tmp_path / "rules.jsonl").write_text(
+            json.dumps(chunk), encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="not a valid ISO 8601"):
+            load_corpus(tmp_path)
+
+    def test_loader_rejects_non_string_created_at(self, tmp_path: Path) -> None:
+        chunk = {
+            "id": "rule-x", "category": "rule",
+            "title": "t", "content": "c",
+            "created_at": 1234567890,
+        }
+        (tmp_path / "rules.jsonl").write_text(
+            json.dumps(chunk), encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="created_at"):
+            load_corpus(tmp_path)
+
+    def test_shipped_playbooks_and_baselines_carry_created_at(self) -> None:
+        """The 6 playbooks + 1 baseline chunk shipped with PR ③ have
+        explicit created_at timestamps so the decay reranker has
+        something to chew on."""
+        reset_corpus_cache()
+        corpus = load_default_corpus()
+        for c in corpus.by_category("playbook"):
+            assert c.created_at is not None, (
+                f"playbook {c.id!r} missing created_at"
+            )
+        for c in corpus.by_category("baseline"):
+            assert c.created_at is not None, (
+                f"baseline {c.id!r} missing created_at"
+            )
+
+    def test_shipped_rules_have_no_created_at(self) -> None:
+        """Rules don't decay on a clock (half-life=0), so we don't
+        bother authoring created_at for them. PR ③ leaves them
+        unchanged."""
+        reset_corpus_cache()
+        corpus = load_default_corpus()
+        for c in corpus.by_category("rule"):
+            assert c.created_at is None, (
+                f"rule {c.id!r} has unexpected created_at; rules should "
+                "not need it"
+            )

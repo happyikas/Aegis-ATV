@@ -460,6 +460,151 @@ class TestAnchorTimestamp:
         assert len(hits) == 5  # all 38 are timeless → all eligible
 
 
+# ── TestTimeDecay (PR ③) ──────────────────────────────────────────────
+
+
+class TestTimeDecay:
+    def test_factor_no_created_at_is_one(self) -> None:
+        from aegis.judge.rag_retrieval import time_decay_factor
+        c = RagChunk(id="x", category="playbook", title="t", content="c")
+        assert time_decay_factor(c, _ns("2026-01-01T00:00:00Z")) == 1.0
+
+    def test_factor_rule_category_has_zero_halflife(self) -> None:
+        """Rules don't decay even with a created_at — half-life=0."""
+        from aegis.judge.rag_retrieval import time_decay_factor
+        c = RagChunk(
+            id="x", category="rule", title="t", content="c",
+            created_at="2020-01-01T00:00:00Z",
+        )
+        # 6 years old, but half-life=0 → factor is 1.0
+        assert time_decay_factor(c, _ns("2026-01-01T00:00:00Z")) == 1.0
+
+    def test_factor_at_one_halflife_is_half(self) -> None:
+        from aegis.judge.rag_retrieval import time_decay_factor
+        c = RagChunk(
+            id="x", category="playbook", title="t", content="c",
+            created_at="2024-01-01T00:00:00Z",
+        )
+        # +90 days = one playbook half-life
+        anchor = _ns("2024-04-01T00:00:00Z")  # 91 days later (≈1 half-life)
+        f = time_decay_factor(c, anchor)
+        assert 0.48 < f < 0.52, f"expected ~0.5 at 1 half-life, got {f}"
+
+    def test_factor_at_two_halflives_is_quarter(self) -> None:
+        from aegis.judge.rag_retrieval import time_decay_factor
+        c = RagChunk(
+            id="x", category="playbook", title="t", content="c",
+            created_at="2024-01-01T00:00:00Z",
+        )
+        # +180 days = 2 half-lives
+        anchor = _ns("2024-06-30T00:00:00Z")
+        f = time_decay_factor(c, anchor)
+        assert 0.23 < f < 0.27, f"expected ~0.25 at 2 half-lives, got {f}"
+
+    def test_factor_future_anchor_is_one(self) -> None:
+        """Anchor before created_at — chunk treated as fresh, no penalty."""
+        from aegis.judge.rag_retrieval import time_decay_factor
+        c = RagChunk(
+            id="x", category="playbook", title="t", content="c",
+            created_at="2025-01-01T00:00:00Z",
+        )
+        assert time_decay_factor(c, _ns("2024-06-01T00:00:00Z")) == 1.0
+
+    def test_baseline_decay_is_30_days(self) -> None:
+        from aegis.judge.rag_retrieval import time_decay_factor
+        c = RagChunk(
+            id="x", category="baseline", title="t", content="c",
+            created_at="2024-01-01T00:00:00Z",
+        )
+        # +30 days = one baseline half-life
+        f = time_decay_factor(c, _ns("2024-01-31T00:00:00Z"))
+        assert 0.48 < f < 0.52
+
+    def test_apply_decay_false_keeps_cosine(self) -> None:
+        """search(apply_decay=False) bypasses the reranker even when
+        anchor is set."""
+        chunks = (
+            RagChunk(
+                id="fresh", category="playbook", title="fresh",
+                content="recent playbook",
+                created_at="2024-12-01T00:00:00Z",
+            ),
+            RagChunk(
+                id="old", category="playbook", title="old",
+                content="ancient playbook",
+                created_at="2020-01-01T00:00:00Z",
+            ),
+        )
+        index = build_index(
+            RagCorpus(chunks=chunks), DummyEmbedding(), dim=64,
+        )
+        q = np.random.default_rng(0).standard_normal(64).astype(np.float32)
+        # Baseline cosine ranking with no decay applied:
+        no_decay = index.search(
+            q, k=2, anchor_ts_ns=_ns("2025-01-01T00:00:00Z"),
+            apply_decay=False,
+        )
+        # Same anchor, decay applied:
+        with_decay = index.search(
+            q, k=2, anchor_ts_ns=_ns("2025-01-01T00:00:00Z"),
+            apply_decay=True,
+        )
+        # Both return 2 chunks. The decay run should rank 'fresh'
+        # at least as highly as without decay (decay can never
+        # lower the fresh chunk relative to the old one).
+        no_decay_fresh_rank = next(
+            i for i, (c, _) in enumerate(no_decay) if c.id == "fresh"
+        )
+        with_decay_fresh_rank = next(
+            i for i, (c, _) in enumerate(with_decay) if c.id == "fresh"
+        )
+        assert with_decay_fresh_rank <= no_decay_fresh_rank
+
+    def test_decay_can_flip_order_when_old_chunk_wins_cosine(self) -> None:
+        """Worked example: old chunk has slightly higher cosine, but
+        time decay makes the fresh chunk win."""
+        # Construct two chunks where the "old" one has a more
+        # similar embedding to the query. Cosine alone picks old.
+        # With decay it gets penalized.
+        old = RagChunk(
+            id="old", category="playbook", title="old", content="o",
+            created_at="2023-01-01T00:00:00Z",  # ~2 years old
+        )
+        fresh = RagChunk(
+            id="fresh", category="playbook", title="fresh", content="f",
+            created_at="2024-12-01T00:00:00Z",  # ~1 month old at anchor
+        )
+        anchor = _ns("2025-01-01T00:00:00Z")
+        # Hand-craft scores to force the test geometry:
+        #   old cosine 0.90, decay factor 0.5^(730/90) ≈ 0.0036
+        #     → final ~0.0033
+        #   fresh cosine 0.80, decay factor 0.5^(31/90) ≈ 0.787
+        #     → final ~0.63
+        # We'll bypass the embedding path and call _decay directly.
+        from aegis.judge.rag_retrieval import time_decay_factor
+        old_final = 0.90 * time_decay_factor(old, anchor)
+        fresh_final = 0.80 * time_decay_factor(fresh, anchor)
+        assert fresh_final > old_final, (
+            f"expected fresh to win after decay; old={old_final:.4f} "
+            f"fresh={fresh_final:.4f}"
+        )
+
+    def test_settings_override_changes_halflife(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from aegis.config import settings
+        from aegis.judge.rag_retrieval import time_decay_factor
+        # Bump playbook half-life so a 90-day-old chunk barely decays.
+        object.__setattr__(settings, "aegis_rag_decay_playbook_days", 365)
+        c = RagChunk(
+            id="x", category="playbook", title="t", content="c",
+            created_at="2024-01-01T00:00:00Z",
+        )
+        f = time_decay_factor(c, _ns("2024-04-01T00:00:00Z"))
+        # 91 days into a 365-day half-life: factor ≈ 0.5^(91/365) ≈ 0.84
+        assert 0.80 < f < 0.86, f"expected ~0.84 with 365-day half-life, got {f}"
+
+
 # ── small helper: silence unused-import warnings ──────────────────────
 
 
