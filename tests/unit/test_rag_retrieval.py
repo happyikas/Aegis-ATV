@@ -257,6 +257,209 @@ class TestLocalPhiIntegration:
         assert isinstance(block, str)
 
 
+# ── TestAnchorTimestamp (PR ②) ────────────────────────────────────────
+
+
+def _ns(iso: str) -> int:
+    """ISO 8601 → nanoseconds (UTC)."""
+    from datetime import datetime
+    dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    return int(dt.timestamp() * 1_000_000_000)
+
+
+def _supersession_corpus() -> RagCorpus:
+    """Synthetic two-version pair: v0 valid 2024-01..2024-08, v1 valid
+    2024-08 onwards, plus a timeless fixture."""
+    return RagCorpus(chunks=(
+        RagChunk(
+            id="rule-x-v0", category="rule",
+            title="X v0", content="old version of rule X",
+            valid_from="2024-01-01T00:00:00Z",
+            valid_until="2024-08-01T00:00:00Z",
+        ),
+        RagChunk(
+            id="rule-x-v1", category="rule",
+            title="X v1", content="current version of rule X",
+            valid_from="2024-08-01T00:00:00Z",
+            supersedes="rule-x-v0",
+        ),
+        RagChunk(
+            id="rule-timeless", category="rule",
+            title="timeless", content="never expires",
+        ),
+    ))
+
+
+class TestAnchorTimestamp:
+    def test_search_no_anchor_returns_all(self) -> None:
+        index = build_index(
+            _supersession_corpus(), DummyEmbedding(), dim=64,
+        )
+        # Without anchor, search returns top-k across the full corpus
+        # regardless of validity (back-compat).
+        q = np.random.default_rng(0).standard_normal(64).astype(np.float32)
+        hits = index.search(q, k=3)
+        assert {c.id for c, _ in hits} == {"rule-x-v0", "rule-x-v1", "rule-timeless"}
+
+    def test_search_anchor_pre_v1_returns_v0(self) -> None:
+        index = build_index(
+            _supersession_corpus(), DummyEmbedding(), dim=64,
+        )
+        q = np.random.default_rng(0).standard_normal(64).astype(np.float32)
+        hits = index.search(
+            q, k=3, anchor_ts_ns=_ns("2024-06-01T00:00:00Z"),
+        )
+        ids = {c.id for c, _ in hits}
+        assert "rule-x-v0" in ids
+        assert "rule-x-v1" not in ids
+        assert "rule-timeless" in ids
+
+    def test_search_anchor_post_v1_returns_v1(self) -> None:
+        index = build_index(
+            _supersession_corpus(), DummyEmbedding(), dim=64,
+        )
+        q = np.random.default_rng(0).standard_normal(64).astype(np.float32)
+        hits = index.search(
+            q, k=3, anchor_ts_ns=_ns("2025-01-01T00:00:00Z"),
+        )
+        ids = {c.id for c, _ in hits}
+        assert "rule-x-v1" in ids
+        assert "rule-x-v0" not in ids
+        assert "rule-timeless" in ids
+
+    def test_search_walks_past_invalid_to_fill_k(self) -> None:
+        """If the highest-scoring chunk is invalid at the anchor, search
+        must continue down the score order to fill k valid hits."""
+        # Build a corpus where chunk 0 is "deprecated", chunks 1+ are live.
+        chunks = [
+            RagChunk(
+                id="dead", category="rule", title="dead", content="dead",
+                valid_until="2020-01-01T00:00:00Z",
+            ),
+        ] + [
+            RagChunk(
+                id=f"live-{i}", category="rule",
+                title=f"live{i}", content=f"alive{i}",
+            )
+            for i in range(5)
+        ]
+        index = build_index(
+            RagCorpus(chunks=tuple(chunks)),
+            DummyEmbedding(), dim=64,
+        )
+        q = np.random.default_rng(0).standard_normal(64).astype(np.float32)
+        hits = index.search(q, k=3, anchor_ts_ns=_ns("2024-06-01T00:00:00Z"))
+        assert len(hits) == 3
+        assert "dead" not in {c.id for c, _ in hits}
+
+    def test_retrieve_passes_anchor_through(self) -> None:
+        index = build_index(
+            _supersession_corpus(), DummyEmbedding(), dim=64,
+        )
+        from aegis.judge.rag_retrieval import retrieve
+        hits = retrieve(
+            "anything", k=3, index=index, provider=DummyEmbedding(),
+            anchor_ts_ns=_ns("2024-06-01T00:00:00Z"),
+        )
+        assert "rule-x-v1" not in {c.id for c, _ in hits}
+
+    def test_retrieve_block_default_anchor_is_now(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """retrieve_block with anchor_ts_ns=None should anchor at
+        time.time_ns() — i.e. expired chunks are filtered out
+        automatically in the live-judge path."""
+        from aegis.config import settings
+        from aegis.judge.rag_retrieval import retrieve_block
+        object.__setattr__(settings, "aegis_rag_enabled", True)
+        index = build_index(
+            _supersession_corpus(), DummyEmbedding(), dim=64,
+        )
+        block = retrieve_block(
+            "anything", k=3, index=index, provider=DummyEmbedding(),
+        )
+        # rule-x-v0 has expired (2024-08), so live anchor should not
+        # surface it. v1 (current) and timeless should appear.
+        assert "X v0" not in block
+        assert "X v1" in block or "timeless" in block
+
+    def test_retrieve_block_explicit_anchor_overrides_default(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from aegis.config import settings
+        from aegis.judge.rag_retrieval import retrieve_block
+        object.__setattr__(settings, "aegis_rag_enabled", True)
+        index = build_index(
+            _supersession_corpus(), DummyEmbedding(), dim=64,
+        )
+        # Replay anchor pre-v1 → v0 should surface, v1 should not.
+        block = retrieve_block(
+            "anything", k=3, index=index, provider=DummyEmbedding(),
+            anchor_ts_ns=_ns("2024-06-01T00:00:00Z"),
+        )
+        assert "X v0" in block
+        assert "X v1" not in block
+
+    def test_retrieve_for_audit_record_uses_record_ts(self) -> None:
+        from aegis.judge.rag_retrieval import retrieve_for_audit_record
+        index = build_index(
+            _supersession_corpus(), DummyEmbedding(), dim=64,
+        )
+        rec = {
+            "ts_ns": _ns("2024-06-01T00:00:00Z"),
+            "tool": "Bash",
+            "decision": "BLOCK",
+        }
+        hits = retrieve_for_audit_record(
+            rec, "anything", k=3, index=index, provider=DummyEmbedding(),
+        )
+        assert "rule-x-v1" not in {c.id for c, _ in hits}
+
+    def test_retrieve_for_audit_record_missing_ts_falls_back(self) -> None:
+        """Old audit lines without ts_ns: anchor is None → behaves like
+        retrieve() with no time filter (returns all)."""
+        from aegis.judge.rag_retrieval import retrieve_for_audit_record
+        index = build_index(
+            _supersession_corpus(), DummyEmbedding(), dim=64,
+        )
+        rec = {"tool": "Bash"}  # no ts_ns
+        hits = retrieve_for_audit_record(
+            rec, "anything", k=3, index=index, provider=DummyEmbedding(),
+        )
+        # Both v0 and v1 are visible because anchor=None disables the filter.
+        assert {c.id for c, _ in hits} == {
+            "rule-x-v0", "rule-x-v1", "rule-timeless",
+        }
+
+    def test_disabled_rag_short_circuits_anchor(self) -> None:
+        """When aegis_rag_enabled=False, retrieve_block returns "" even
+        if an anchor is supplied."""
+        from aegis.config import settings
+        from aegis.judge.rag_retrieval import retrieve_block
+        object.__setattr__(settings, "aegis_rag_enabled", False)
+        block = retrieve_block(
+            "anything", anchor_ts_ns=_ns("2024-06-01T00:00:00Z"),
+        )
+        assert block == ""
+
+    def test_search_anchor_with_no_validity_returns_all(self) -> None:
+        """Existing chunks (no validity fields) must remain visible
+        when an anchor is supplied — they are 'always valid'."""
+        # Use the shipped corpus. None of those 38 chunks have validity.
+        from aegis.judge.rag_corpus import (
+            load_default_corpus,
+            reset_corpus_cache,
+        )
+        reset_corpus_cache()
+        corpus = load_default_corpus()
+        index = build_index(corpus, DummyEmbedding(), dim=64)
+        q = np.random.default_rng(0).standard_normal(64).astype(np.float32)
+        hits = index.search(
+            q, k=5, anchor_ts_ns=_ns("2024-06-01T00:00:00Z"),
+        )
+        assert len(hits) == 5  # all 38 are timeless → all eligible
+
+
 # ── small helper: silence unused-import warnings ──────────────────────
 
 
