@@ -419,6 +419,393 @@ def _next_action_hint_for(
     return "; ".join(bullets)
 
 
+# v2.8 PR-δ — Layer A action_steps templates per advisor.
+# Each builder returns ``tuple[ActionStep, ...]`` populated with values
+# from the live signals + temporal_ctx. Dummy advisor (heuristic path)
+# emits these so users without ANTHROPIC_API_KEY still get concrete
+# advice; Tier 3 sLLM may produce richer steps but the schema is the
+# same.
+
+
+# Simple tool swaps for loop-breaker. Picks the most common alternative
+# without depending on the PR-κ embedding table (Layer A keeps imports
+# minimal). The advisor.py path can pass action_table for semantic
+# similarity-based swaps in v2.9.
+_LOOP_BREAKER_TOOL_SWAPS: dict[str, str] = {
+    "Read":   "Grep",
+    "Bash":   "Glob",
+    "Edit":   "Read",
+    "Glob":   "Grep",
+    "Grep":   "Glob",
+    "Write":  "Edit",
+}
+
+# Default cheaper-model suggestions per current model. Conservative —
+# only a few well-known pairs; sLLM has the broader knowledge.
+_CHEAPER_MODEL_MAP: dict[str, tuple[str, float]] = {
+    "claude-opus-4-7":          ("claude-haiku-4-5", 3.0),
+    "claude-opus-4-7[1m]":      ("claude-haiku-4-5", 3.0),
+    "claude-sonnet-4-6":        ("claude-haiku-4-5", 1.5),
+    "claude-haiku-4-5":         ("claude-haiku-4-7", 1.5),  # if available
+}
+
+
+def _identify_expensive_turns(
+    ctx: TemporalContext | None,
+    *,
+    top_k: int = 3,
+    min_tokens: int = 1000,
+) -> list[int]:
+    """Pick the ``top_k`` turn_index_rel values with highest combined
+    in+out tokens (above ``min_tokens``). Returns [] when temporal_ctx
+    is empty / no turn meets the threshold."""
+    if ctx is None or not ctx.history:
+        return []
+    candidates = [
+        (s.input_tokens + s.output_tokens, s.turn_index_rel)
+        for s in ctx.history
+        if (s.input_tokens + s.output_tokens) >= min_tokens
+    ]
+    candidates.sort(reverse=True)
+    return [t for _, t in candidates[:top_k]]
+
+
+def _identify_cache_break_turns(
+    ctx: TemporalContext | None,
+    *,
+    drop_threshold_pp: float = 0.20,
+) -> list[int]:
+    """Pick turn_index_rel values where cache_hit_rate dropped by
+    ``drop_threshold_pp`` from the previous turn."""
+    if ctx is None or len(ctx.history) < 2:
+        return []
+    out: list[int] = []
+    prev = ctx.history[0].cache_hit_rate
+    for s in ctx.history[1:]:
+        if prev - s.cache_hit_rate >= drop_threshold_pp:
+            out.append(s.turn_index_rel)
+        prev = s.cache_hit_rate
+    return out
+
+
+def _build_security_reviewer_steps(
+    sec: dict[str, Any], destructive_match: bool,
+) -> tuple[ActionStep, ...]:
+    if destructive_match:
+        rule = sec.get("policy_rule", "destructive")
+        blast = sec.get("blast_radius", "unknown")
+        return (
+            ActionStep(
+                verb="require-approval",
+                parameters={
+                    "approver_role": "security-reviewer",
+                    "reason": (
+                        f"destructive operation matched {rule}; "
+                        f"blast_radius={blast}"
+                    ),
+                    "artifacts": [str(rule), f"blast={blast}"],
+                },
+                expected_impact=(
+                    "blocks tool execution until human ACK"
+                ),
+                confidence=0.95,
+                cited_signals=("destructive_path_match",
+                               "policy_rule", "blast_radius"),
+            ),
+        )
+    # Non-match but high blast radius - notify only.
+    return (
+        ActionStep(
+            verb="notify-operator",
+            parameters={
+                "channel": "#aegis-security",
+                "urgency": "medium",
+                "summary": (
+                    f"high blast-radius op: "
+                    f"{sec.get('blast_radius', 'unknown')}"
+                ),
+            },
+            expected_impact="security operator informed",
+            confidence=0.7,
+            cited_signals=("blast_radius",),
+        ),
+    )
+
+
+def _build_cost_optimizer_steps(
+    cost: dict[str, Any],
+    ctx: TemporalContext | None,
+    current_model: str | None,
+) -> tuple[ActionStep, ...]:
+    steps: list[ActionStep] = []
+
+    # Pick expensive turns for prune-turns.
+    expensive = _identify_expensive_turns(ctx, top_k=3, min_tokens=1000)
+    used_ratio = cost.get("budget_used_ratio")
+    has_budget_pressure = (
+        (isinstance(used_ratio, (int, float)) and used_ratio >= 0.9)
+        or cost.get("budget_warn_flag")
+    )
+
+    if has_budget_pressure and expensive:
+        # Estimate savings: sum of token counts × rough $/token
+        # (using $0.000003 ≈ Haiku-4.5 input rate as a lower bound).
+        saved_tokens = 0
+        if ctx is not None:
+            for s in ctx.history:
+                if s.turn_index_rel in expensive:
+                    saved_tokens += s.input_tokens + s.output_tokens
+        saved_dollars = saved_tokens * 0.000003
+        steps.append(ActionStep(
+            verb="prune-turns",
+            parameters={
+                "turn_indices_rel": expensive,
+                "saved_tokens_estimate": int(saved_tokens),
+                "saved_dollars_estimate": round(saved_dollars, 4),
+            },
+            expected_impact=(
+                f"~{saved_tokens} tokens trimmed "
+                f"(~${saved_dollars:.3f} saved)"
+            ),
+            confidence=0.7,
+            cited_signals=("budget_used_ratio", "cumulative_tokens_after"),
+        ))
+
+    # Swap-model suggestion when model is known and a cheaper option exists.
+    if has_budget_pressure and current_model:
+        cheaper = _CHEAPER_MODEL_MAP.get(current_model)
+        if cheaper is not None:
+            to_model, ratio = cheaper
+            steps.append(ActionStep(
+                verb="swap-model",
+                parameters={
+                    "from_model": current_model,
+                    "to_model": to_model,
+                    "ratio_savings": ratio,
+                },
+                expected_impact=(
+                    f"~{ratio:.1f}x cheaper for the remaining session"
+                ),
+                confidence=0.5,
+                cited_signals=("budget_used_ratio",),
+            ))
+
+    # End-session at extreme over-budget.
+    if isinstance(used_ratio, (int, float)) and used_ratio >= 1.5:
+        steps.append(ActionStep(
+            verb="end-session",
+            parameters={
+                "reason": (
+                    f"budget {used_ratio*100:.0f}% over limit; "
+                    "cap exceeded"
+                ),
+            },
+            expected_impact="prevents further runaway cost",
+            confidence=0.4,
+            cited_signals=("budget_used_ratio",),
+        ))
+
+    # Divergence path - notify-operator + verify-state.
+    div_ratio = cost.get("hw_vs_sw_divergence_ratio")
+    if isinstance(div_ratio, (int, float)) and div_ratio >= 2.0:
+        steps.append(ActionStep(
+            verb="notify-operator",
+            parameters={
+                "channel": "#aegis-cost",
+                "urgency": "high",
+                "summary": (
+                    f"HW/SW divergence {div_ratio:.2f}x "
+                    "(M12 threshold 2.0)"
+                ),
+            },
+            expected_impact=(
+                "cost / security team aware of HW-vs-SW mismatch"
+            ),
+            confidence=0.85,
+            cited_signals=("hw_vs_sw_divergence_ratio",),
+        ))
+
+    return tuple(steps)
+
+
+def _build_kv_cache_optimizer_steps(
+    cache: dict[str, Any],
+    ctx: TemporalContext | None,
+) -> tuple[ActionStep, ...]:
+    steps: list[ActionStep] = []
+    drop = cache.get("cache_hit_rate_max_drop_pp")
+
+    cache_break_turns = _identify_cache_break_turns(ctx)
+    if isinstance(drop, (int, float)) and drop >= 30 and cache_break_turns:
+        # Estimate tokens saved by pruning the cache-break turns.
+        saved_tokens = 0
+        if ctx is not None:
+            for s in ctx.history:
+                if s.turn_index_rel in cache_break_turns:
+                    saved_tokens += s.input_tokens + s.output_tokens
+        steps.append(ActionStep(
+            verb="prune-turns",
+            parameters={
+                "turn_indices_rel": cache_break_turns,
+                "saved_tokens_estimate": int(saved_tokens),
+                "saved_dollars_estimate": round(
+                    saved_tokens * 0.000003, 4
+                ),
+            },
+            expected_impact=(
+                f"prune {len(cache_break_turns)} cache-breaking turns; "
+                "prefix re-stabilises"
+            ),
+            confidence=0.75,
+            cited_signals=("cache_hit_rate_max_drop_pp",
+                           "prefix_re_keys_in_window"),
+        ))
+
+    if cache.get("prefix_stability") == "unstable" and ctx is not None and ctx.history:
+        # Suggest summarising the prefix-unstable span.
+        first = ctx.history[0].turn_index_rel
+        last = ctx.history[-1].turn_index_rel
+        steps.append(ActionStep(
+            verb="summarize-window",
+            parameters={
+                "turn_range": [first, last],
+                "retain_categories": ["tool_calls", "decisions"],
+            },
+            expected_impact="collapse unstable prefix into a summary",
+            confidence=0.5,
+            cited_signals=("prefix_stability",),
+        ))
+
+    return tuple(steps)
+
+
+def _build_loop_breaker_steps(
+    current_tool: str,
+    ctx: TemporalContext | None,
+) -> tuple[ActionStep, ...]:
+    steps: list[ActionStep] = []
+    swap_to = _LOOP_BREAKER_TOOL_SWAPS.get(current_tool)
+    if swap_to:
+        steps.append(ActionStep(
+            verb="swap-tool",
+            parameters={
+                "from_tool": current_tool,
+                "to_tool": swap_to,
+                "similarity_score": 0.6,  # heuristic placeholder
+            },
+            expected_impact=(
+                f"break the loop by switching to {swap_to}"
+            ),
+            confidence=0.7,
+            cited_signals=("session_redundancy_ratio",),
+        ))
+    # Narrow-scope as a fallback / additional step.
+    if current_tool:
+        steps.append(ActionStep(
+            verb="narrow-scope",
+            parameters={
+                "original_args": "(current call args)",
+                "suggested_args": "narrower path / pattern",
+            },
+            expected_impact=(
+                "fewer matches per call → fewer redundant repeats"
+            ),
+            confidence=0.4,
+            cited_signals=("session_redundancy_ratio",),
+        ))
+    return tuple(steps)
+
+
+def _build_test_runner_steps(
+    ctx: TemporalContext | None,
+) -> tuple[ActionStep, ...]:
+    return (
+        ActionStep(
+            verb="run-diagnostic",
+            parameters={
+                "diagnostic_command": "pytest -x --maxfail=1",
+                "expected_signal": "all tests pass",
+            },
+            expected_impact=(
+                "isolates whether the recent error is reproducible"
+            ),
+            confidence=0.5,
+            cited_signals=("session_error_rate", "n_errors"),
+        ),
+    )
+
+
+def _build_human_clarifier_steps(
+    ctx: TemporalContext | None,
+) -> tuple[ActionStep, ...]:
+    backtrack_count = (
+        getattr(ctx, "n_backtracks", 0) if ctx is not None else 0
+    )
+    return (
+        ActionStep(
+            verb="clarify-intent",
+            parameters={
+                "clarifying_question": (
+                    f"You reverted {backtrack_count} recent edit(s). "
+                    "Which direction did you actually intend?"
+                ),
+            },
+            expected_impact=(
+                "user re-states intent → agent stops oscillating"
+            ),
+            confidence=0.65,
+            cited_signals=("session_backtrack_ratio", "n_backtracks"),
+        ),
+    )
+
+
+def _build_context_compactor_steps(
+    ctx: TemporalContext | None,
+) -> tuple[ActionStep, ...]:
+    if ctx is None or not ctx.history:
+        return ()
+    first = ctx.history[0].turn_index_rel
+    end = ctx.history[-1].turn_index_rel - 2  # leave last 2 turns
+    if first > end:
+        return ()
+    return (
+        ActionStep(
+            verb="summarize-window",
+            parameters={
+                "turn_range": [first, end],
+                "retain_categories": ["tool_calls", "decisions",
+                                       "user_messages"],
+            },
+            expected_impact=(
+                "compact the early window; recent 2 turns kept verbatim"
+            ),
+            confidence=0.5,
+            cited_signals=("window_token_velocity_per_turn",),
+        ),
+    )
+
+
+def _build_permission_escalator_steps(
+    decision: str,
+) -> tuple[ActionStep, ...]:
+    return (
+        ActionStep(
+            verb="notify-operator",
+            parameters={
+                "channel": "#aegis-approvals",
+                "urgency": "high" if decision == "BLOCK" else "medium",
+                "summary": (
+                    f"firewall verdict={decision} requires operator "
+                    "review"
+                ),
+            },
+            expected_impact="operator notified; awaits manual decision",
+            confidence=0.6,
+            cited_signals=("verdict_decision",),
+        ),
+    )
+
+
 def _heuristic_recommendations(
     *,
     cost_signals: dict[str, Any] | None,
@@ -427,6 +814,8 @@ def _heuristic_recommendations(
     anomalies: list[AnomalyTag],
     temporal_ctx: TemporalContext | None,
     step_traces: dict[str, Any] | None = None,
+    current_tool: str = "",
+    current_model: str | None = None,
 ) -> tuple[AdvisorRecommendation, ...]:
     """Map signal dicts to a tuple of :class:`AdvisorRecommendation`.
 
@@ -459,6 +848,9 @@ def _heuristic_recommendations(
                 f"blast radius {sec.get('blast_radius', 'unknown')}"
             ),
             cited_signals=tuple(cited),
+            action_steps=_build_security_reviewer_steps(
+                sec, destructive_match=True,
+            ),
         ))
     elif sec.get("blast_radius") == "high":
         recs.append(AdvisorRecommendation(
@@ -467,6 +859,9 @@ def _heuristic_recommendations(
             action="Confirm scope of the high-blast-radius operation.",
             reasoning="step320 reports blast_radius=high",
             cited_signals=("blast_radius",),
+            action_steps=_build_security_reviewer_steps(
+                sec, destructive_match=False,
+            ),
         ))
 
     # Cost — divergence ratio > 2× → cost-optimizer high.
@@ -484,6 +879,9 @@ def _heuristic_recommendations(
                 "(M12 escalation threshold is 2.0)"
             ),
             cited_signals=("hw_vs_sw_divergence_ratio",),
+            action_steps=_build_cost_optimizer_steps(
+                cost, temporal_ctx, current_model,
+            ),
         ))
 
     # Cost — budget pressure (proj > 90% limit OR step335 warn flag).
@@ -499,21 +897,29 @@ def _heuristic_recommendations(
         priority: Priority = "high" if (
             isinstance(used_ratio, (int, float)) and used_ratio >= 1.0
         ) else "medium"
-        recs.append(AdvisorRecommendation(
-            advisor="cost-optimizer",
-            priority=priority,
-            action=(
-                "Trim context or end the session before the budget "
-                "ceiling is hit."
-            ),
-            reasoning=(
-                f"projected session cost is "
-                f"{(used_ratio or 1.0)*100:.0f}% of budget"
-                if isinstance(used_ratio, (int, float))
-                else "step335 raised a budget warning"
-            ),
-            cited_signals=tuple(cited) or ("budget_warn_flag",),
-        ))
+        # Skip duplicate cost-optimizer if divergence already added one.
+        already_cost = any(
+            r.advisor == "cost-optimizer" for r in recs
+        )
+        if not already_cost:
+            recs.append(AdvisorRecommendation(
+                advisor="cost-optimizer",
+                priority=priority,
+                action=(
+                    "Trim context or end the session before the budget "
+                    "ceiling is hit."
+                ),
+                reasoning=(
+                    f"projected session cost is "
+                    f"{(used_ratio or 1.0)*100:.0f}% of budget"
+                    if isinstance(used_ratio, (int, float))
+                    else "step335 raised a budget warning"
+                ),
+                cited_signals=tuple(cited) or ("budget_warn_flag",),
+                action_steps=_build_cost_optimizer_steps(
+                    cost, temporal_ctx, current_model,
+                ),
+            ))
 
     # KV cache — significant hit-rate drop.
     drop = cache.get("cache_hit_rate_max_drop_pp")
@@ -540,6 +946,9 @@ def _heuristic_recommendations(
                     "prefix_re_keys_in_window",
                 ) if k in cache
             ),
+            action_steps=_build_kv_cache_optimizer_steps(
+                cache, temporal_ctx,
+            ),
         ))
     elif cache.get("prefix_stability") == "unstable":
         recs.append(AdvisorRecommendation(
@@ -551,6 +960,9 @@ def _heuristic_recommendations(
                 "re-keys in window"
             ),
             cited_signals=("prefix_stability",),
+            action_steps=_build_kv_cache_optimizer_steps(
+                cache, temporal_ctx,
+            ),
         ))
 
     # Trajectory — token-velocity anomaly → context-compactor.
@@ -567,6 +979,7 @@ def _heuristic_recommendations(
             ),
             reasoning="window_token_velocity_per_turn z-score elevated",
             cited_signals=("window_token_velocity_per_turn",),
+            action_steps=_build_context_compactor_steps(temporal_ctx),
         ))
 
     # Trajectory — repeated-call pattern → loop-breaker. Triggered by
@@ -606,6 +1019,9 @@ def _heuristic_recommendations(
                 + ("; step336 fired" if step336_loop else "")
             ),
             cited_signals=tuple(cited),
+            action_steps=_build_loop_breaker_steps(
+                current_tool, temporal_ctx,
+            ),
         ))
 
     # Trajectory — error pattern → test-runner.
@@ -625,6 +1041,7 @@ def _heuristic_recommendations(
                 "in window"
             ),
             cited_signals=("session_error_rate", "n_errors"),
+            action_steps=_build_test_runner_steps(temporal_ctx),
         ))
 
     # Trajectory — backtrack pattern → human-clarifier.
@@ -644,6 +1061,7 @@ def _heuristic_recommendations(
                 "in window"
             ),
             cited_signals=("session_backtrack_ratio", "n_backtracks"),
+            action_steps=_build_human_clarifier_steps(temporal_ctx),
         ))
 
     # Default escalation — REQUIRE_APPROVAL with no specific domain
@@ -663,6 +1081,7 @@ def _heuristic_recommendations(
                     "domain signal"
                 ),
                 cited_signals=("verdict_decision",),
+                action_steps=_build_permission_escalator_steps(decision),
             ))
 
     return tuple(recs)
@@ -679,6 +1098,7 @@ def compose_advice_heuristic(
     cache_signals: dict[str, Any] | None = None,
     security_signals: dict[str, Any] | None = None,
     step_traces: dict[str, Any] | None = None,
+    current_model: str | None = None,
 ) -> ActionAdvice:
     """Build an ActionAdvice from temporal context + anomaly tags.
 
@@ -738,6 +1158,8 @@ def compose_advice_heuristic(
         anomalies=tags,
         temporal_ctx=temporal_ctx,
         step_traces=step_traces,
+        current_tool=current_tool,
+        current_model=current_model,
     )
 
     return ActionAdvice(
