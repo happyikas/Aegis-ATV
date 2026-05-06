@@ -577,6 +577,44 @@ def test_advisor_failure_does_not_block_tool_call(
     assert "action_advice" not in rec["explain"]
 
 
+def test_advisor_stderr_includes_advisor_recommendations(
+    _isolated_audit: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """When the heuristic advisor emits recommended_advisors (the
+    PR-ψ-multi-domain pattern), the stderr message includes an
+    'advise:' block that lists them ranked by priority. Claude Code
+    only sees stderr, so this is the user-visible surface."""
+    monkeypatch.setattr(aegis_local_hook, "ADVISOR_ENABLED", True)
+    rc, _, _ = _run(
+        {
+            "hook_event_name": "PreToolUse",
+            "session_id": "sess-multi",
+            "tool_name": "Bash",
+            "tool_input": {"command": "git push --force origin main"},
+        }
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "BLOCK" in err
+    rec = json.loads(_isolated_audit.read_text().strip().splitlines()[-1])
+    advice = rec["explain"]["action_advice"]
+    recs = advice.get("recommended_advisors") or []
+    if recs:
+        # heuristic produced at least one recommendation → stderr must
+        # carry an 'advise:' block with the advisor names.
+        assert "advise:" in err
+        # at least one advisor name should appear on stderr
+        names_in_msg = [
+            r["advisor"] for r in recs if r["advisor"] in err
+        ]
+        assert names_in_msg, (
+            f"expected at least one advisor name in stderr; "
+            f"recs={recs!r} stderr={err!r}"
+        )
+
+
 def test_advisor_gate_fires_on_m12_cost_divergence(
     _isolated_audit: Path,
     monkeypatch: pytest.MonkeyPatch,

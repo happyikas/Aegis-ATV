@@ -33,13 +33,21 @@ import hashlib
 import json
 import os
 import time
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from aegis.judge.action_advice import (
     ActionAdvice,
     AdvisorKind,
+    AdvisorRecommendation,
     Decision,
+    DomainAdvisor,
+    Priority,
     compose_advice_heuristic,
+)
+from aegis.judge.advisor_signals import (
+    render_cache_signals,
+    render_cost_signals,
+    render_security_signals,
 )
 
 if TYPE_CHECKING:
@@ -51,43 +59,76 @@ if TYPE_CHECKING:
 
 
 # Bump on any prompt / model change so audit can pin advices to a
-# specific revision.
-_ADVISOR_PROMPT_VERSION = "advisor_v1"
+# specific revision. v2 = PR-ψ-multi-domain (cost/cache/security
+# narrative sections + recommended_advisors output).
+_ADVISOR_PROMPT_VERSION = "advisor_v2_multi_domain"
 _ADVISOR_MODEL = "claude-haiku-4-5-20251001"
 
 
 ADVISOR_SYSTEM_PROMPT = """\
-You are a deterministic security advisor for AI agent tool calls.
-You are given a CCTV-style narrative of the agent's recent activity built
-from these layers:
+You are a multi-domain advisor router for AI agent tool calls. You read
+a CCTV-style narrative of the agent's recent activity and route the
+situation to the right domain specialists.
+
+Narrative sections you may see (any may be absent):
 
   TEMPORAL TRAJECTORY      — last N tool calls with outcome / cache / token info
-  ANOMALIES vs BURN-IN     — z-score deviations from the agent's trained baseline
+  TRAJECTORY METRICS       — aggregate token / cache / velocity numbers
+  ANOMALIES vs BURN-IN     — z-score deviations from the trained baseline
   NEAREST BURN-IN CLUSTERS — semantically nearest k-means trajectory archetypes
   TASK INTENT PREDICTION   — softmax over {debug, explore, edit, test, refactor,
                               review, create, general}
+  COST METRICS             — cumulative/projected $, hw-vs-sw divergence ratio
+  KV CACHE METRICS         — hit rate, prefix stability, re-key count
+  SECURITY SIGNALS         — destructive path matches, blast radius, rule hits
   CANDIDATE ALTERNATIVES   — tools semantically similar to the proposed call
+  PROPOSED CALL            — tool the firewall is about to gate
+  BASE VERDICT             — what the deterministic firewall already decided
 
-Plus:
-  PROPOSED CALL  — the tool the firewall is about to gate
-  BASE VERDICT   — what the deterministic firewall already decided
+Closed catalog of domain advisors you may recommend:
 
-Respond with ONLY a JSON object, no prose, with this exact shape:
+  cost-optimizer        — cost divergence / budget pressure
+  kv-cache-optimizer    — cache hit collapse / prefix instability
+  security-reviewer     — destructive paths / privilege escalation
+  context-compactor     — token velocity / context saturation
+  test-runner           — error patterns
+  loop-breaker          — same call repeated >=3 times
+  permission-escalator  — high-impact ambiguous op needing human ACK
+  human-clarifier       — backtrack / agent appears confused
+
+Respond with ONLY a JSON object, no prose, exactly this shape:
 {
   "decision": "ALLOW|BLOCK|REQUIRE_APPROVAL|DEFER",
-  "reason": "string, <=200 chars; reference cited anomalies/turns when non-ALLOW",
+  "reason": "string <=200 chars; cite the signals that drove non-ALLOW",
   "confidence": 0.0-1.0,
-  "next_action_hint": "string or null - short imperative for what to do next",
+  "next_action_hint": "string or null - short imperative",
   "alternative_tool": "string or null - prefer one of CANDIDATE ALTERNATIVES",
   "cited_anomalies": ["metric_name", ...],
-  "cited_turns_rel": [-1, -2, ...]
+  "cited_turns_rel": [-1, -2, ...],
+  "recommended_advisors": [
+    {
+      "advisor": "<one of the 8 above>",
+      "priority": "high|medium|low",
+      "action": "one-sentence imperative",
+      "reasoning": "short why, citing signals",
+      "cited_signals": ["metric_name", ...]
+    },
+    ...
+  ]
 }
 
-Decide BLOCK only on clear malice or destructive scope.
-Decide REQUIRE_APPROVAL when alert-level anomalies cluster, or the trajectory
-shows confused / repeated / errored patterns.
-Decide DEFER when the agent should clarify with the user before continuing.
-Otherwise ALLOW. Be conservative: when in doubt, REQUIRE_APPROVAL.
+Rules:
+* Recommend ONE advisor per domain at most. Multiple domains may fire
+  simultaneously (cost + cache + security all at once is the canonical
+  pattern this exists for).
+* Every recommendation MUST cite at least one signal name from the
+  COST / KV CACHE / SECURITY / ANOMALIES / TRAJECTORY sections.
+* If no domain signals apply, recommended_advisors may be empty.
+* Decide BLOCK only on clear malice or destructive scope.
+* Decide REQUIRE_APPROVAL when alert-level anomalies cluster or the
+  trajectory shows confused / repeated / errored patterns.
+* Decide DEFER when the agent should clarify with the user.
+* Otherwise ALLOW. Be conservative: when in doubt, REQUIRE_APPROVAL.
 """
 
 
@@ -120,6 +161,9 @@ class Advisor(Protocol):
         base_decision: Decision = "ALLOW",
         base_reason: str = "",
         current_tool: str = "",
+        cost_signals: dict[str, Any] | None = None,
+        cache_signals: dict[str, Any] | None = None,
+        security_signals: dict[str, Any] | None = None,
     ) -> ActionAdvice: ...
 
 
@@ -130,7 +174,9 @@ class Advisor(Protocol):
 
 class DummyAdvisor:
     """Delegates to :func:`compose_advice_heuristic`. Used as the default
-    and as the parse-failure fallback for :class:`HaikuAdvisor`."""
+    and as the parse-failure fallback for :class:`HaikuAdvisor`. Passes
+    cost / cache / security signal dicts through so the heuristic
+    composer can map them to multi-domain recommendations."""
 
     def advise(
         self,
@@ -144,6 +190,9 @@ class DummyAdvisor:
         base_decision: Decision = "ALLOW",
         base_reason: str = "",
         current_tool: str = "",
+        cost_signals: dict[str, Any] | None = None,
+        cache_signals: dict[str, Any] | None = None,
+        security_signals: dict[str, Any] | None = None,
     ) -> ActionAdvice:
         return compose_advice_heuristic(
             temporal_ctx=temporal_ctx,
@@ -151,6 +200,9 @@ class DummyAdvisor:
             base_decision=base_decision,
             base_reason=base_reason,
             current_tool=current_tool,
+            cost_signals=cost_signals,
+            cache_signals=cache_signals,
+            security_signals=security_signals,
         )
 
 
@@ -170,10 +222,13 @@ def _build_user_message(
     base_decision: Decision,
     base_reason: str,
     current_tool: str,
+    cost_signals: dict[str, Any] | None = None,
+    cache_signals: dict[str, Any] | None = None,
+    security_signals: dict[str, Any] | None = None,
 ) -> str:
-    """Assemble the 4-layer narrative + alternative-tool section + proposed
-    call for the user message. Best-effort: if any layer's renderer fails,
-    that section is skipped rather than aborting the call."""
+    """Assemble the multi-layer narrative for the sLLM user message.
+    Best-effort: a failure in any single layer's renderer skips that
+    section rather than aborting the call."""
     sections: list[str] = []
 
     if temporal_ctx is not None:
@@ -191,6 +246,20 @@ def _build_user_message(
             sections.append("(temporal context render failed)")
     else:
         sections.append("(no temporal context available)")
+
+    # PR-ψ-multi-domain: cost / cache / security sections. Each renderer
+    # returns "" on empty dict so the section is omitted cleanly.
+    for renderer, payload in (
+        (render_cost_signals, cost_signals or {}),
+        (render_cache_signals, cache_signals or {}),
+        (render_security_signals, security_signals or {}),
+    ):
+        try:
+            text = renderer(payload)
+            if text:
+                sections.append(text)
+        except Exception:  # noqa: BLE001
+            pass
 
     if action_table is not None and current_tool:
         try:
@@ -214,6 +283,45 @@ def _build_user_message(
     )
 
     return "\n\n".join(sections)
+
+
+_ALLOWED_DOMAIN_ADVISORS: frozenset[str] = frozenset({
+    "cost-optimizer", "kv-cache-optimizer", "security-reviewer",
+    "context-compactor", "test-runner", "loop-breaker",
+    "permission-escalator", "human-clarifier",
+})
+_ALLOWED_PRIORITIES: frozenset[str] = frozenset({"high", "medium", "low"})
+
+
+def _parse_recommended_advisors(
+    raw: object,
+) -> tuple[AdvisorRecommendation, ...]:
+    """Best-effort parse of the model's ``recommended_advisors`` list.
+    Items with an unknown advisor name or priority are silently dropped
+    so a hallucinated advisor type can't poison the audit chain."""
+    if not isinstance(raw, list):
+        return ()
+    out: list[AdvisorRecommendation] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        advisor = item.get("advisor", "")
+        priority = item.get("priority", "")
+        if advisor not in _ALLOWED_DOMAIN_ADVISORS:
+            continue
+        if priority not in _ALLOWED_PRIORITIES:
+            continue
+        cited = item.get("cited_signals") or []
+        out.append(AdvisorRecommendation(
+            advisor=cast(DomainAdvisor, advisor),
+            priority=cast(Priority, priority),
+            action=str(item.get("action", ""))[:512],
+            reasoning=str(item.get("reasoning", ""))[:512],
+            cited_signals=tuple(
+                str(x) for x in cited if isinstance(x, str)
+            ),
+        ))
+    return tuple(out)
 
 
 def _parse_advice_json(
@@ -241,6 +349,9 @@ def _parse_advice_json(
 
     cited_a = data.get("cited_anomalies") or []
     cited_t = data.get("cited_turns_rel") or []
+    recs = _parse_recommended_advisors(
+        data.get("recommended_advisors"),
+    )
 
     hint = data.get("next_action_hint")
     alt = data.get("alternative_tool")
@@ -256,6 +367,7 @@ def _parse_advice_json(
         cited_turns_rel=tuple(
             int(x) for x in cited_t if isinstance(x, (int, float))
         ),
+        recommended_advisors=recs,
         advisor_kind=advisor_kind,
         advisor_hash=advisor_hash,
         produced_at_ns=time.time_ns(),
@@ -279,6 +391,7 @@ def _stamp_advisor_kind(
         alternative_tool=base.alternative_tool,
         cited_anomalies=base.cited_anomalies,
         cited_turns_rel=base.cited_turns_rel,
+        recommended_advisors=base.recommended_advisors,
         advisor_kind=advisor_kind,
         advisor_hash=advisor_hash,
         produced_at_ns=base.produced_at_ns,
@@ -314,6 +427,9 @@ class HaikuAdvisor:
         base_decision: Decision = "ALLOW",
         base_reason: str = "",
         current_tool: str = "",
+        cost_signals: dict[str, Any] | None = None,
+        cache_signals: dict[str, Any] | None = None,
+        security_signals: dict[str, Any] | None = None,
     ) -> ActionAdvice:
         user_msg = _build_user_message(
             temporal_ctx=temporal_ctx,
@@ -325,12 +441,15 @@ class HaikuAdvisor:
             base_decision=base_decision,
             base_reason=base_reason,
             current_tool=current_tool,
+            cost_signals=cost_signals,
+            cache_signals=cache_signals,
+            security_signals=security_signals,
         )
 
         try:
             resp = self.client.messages.create(
                 model=self.model,
-                max_tokens=600,
+                max_tokens=900,  # bumped for recommended_advisors list
                 temperature=self.temperature,
                 system=ADVISOR_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_msg}],
@@ -347,6 +466,9 @@ class HaikuAdvisor:
                 base_decision=base_decision,
                 base_reason=base_reason,
                 current_tool=current_tool,
+                cost_signals=cost_signals,
+                cache_signals=cache_signals,
+                security_signals=security_signals,
             )
 
         parsed = _parse_advice_json(
@@ -366,6 +488,9 @@ class HaikuAdvisor:
             base_decision="REQUIRE_APPROVAL",
             base_reason=f"sllm-haiku unparseable response: {text[:64]!r}",
             current_tool=current_tool,
+            cost_signals=cost_signals,
+            cache_signals=cache_signals,
+            security_signals=security_signals,
         )
         return _stamp_advisor_kind(
             fb,
@@ -409,15 +534,19 @@ def compose_advice_sllm(
     base_decision: Decision = "ALLOW",
     base_reason: str = "",
     current_tool: str = "",
+    cost_signals: dict[str, Any] | None = None,
+    cache_signals: dict[str, Any] | None = None,
+    security_signals: dict[str, Any] | None = None,
     advisor: Advisor | None = None,
 ) -> ActionAdvice:
     """Build an :class:`ActionAdvice` via the configured advisor backend.
 
     Drop-in superset of :func:`compose_advice_heuristic` — accepts the
     extra ``baseline`` / ``catalog`` / ``intent_classifier`` /
-    ``action_table`` context that an sLLM can leverage but the heuristic
-    ignores. Pass ``advisor=`` to inject a specific advisor instance
-    (useful for tests)."""
+    ``action_table`` context that an sLLM can leverage, plus the v2.5.2
+    ``cost_signals`` / ``cache_signals`` / ``security_signals`` dicts
+    that drive multi-domain advisor recommendations. Pass ``advisor=``
+    to inject a specific advisor instance (useful for tests)."""
     chosen: Advisor = advisor if advisor is not None else get_advisor()
     return chosen.advise(
         temporal_ctx=temporal_ctx,
@@ -429,6 +558,9 @@ def compose_advice_sllm(
         base_decision=base_decision,
         base_reason=base_reason,
         current_tool=current_tool,
+        cost_signals=cost_signals,
+        cache_signals=cache_signals,
+        security_signals=security_signals,
     )
 
 
