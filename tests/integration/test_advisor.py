@@ -463,3 +463,129 @@ class TestProtocolConformance:
     def test_dummy_satisfies_protocol(self) -> None:
         a: Advisor = DummyAdvisor()
         assert callable(a.advise)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# v2.5.2 PR-ψ-multi-domain — recommended_advisors round-trip via Haiku
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestMultiDomainHaiku:
+    @respx.mock
+    def test_haiku_emits_recommended_advisors(
+        self, _haiku_env: None
+    ) -> None:
+        body = json.dumps({
+            "decision": "REQUIRE_APPROVAL",
+            "confidence": 0.85,
+            "reason": "cost +30%, cache collapsed, destructive path",
+            "recommended_advisors": [
+                {
+                    "advisor": "cost-optimizer", "priority": "high",
+                    "action": "review HW/SW divergence",
+                    "reasoning": "ratio 3.1x",
+                    "cited_signals": ["hw_vs_sw_divergence_ratio"],
+                },
+                {
+                    "advisor": "kv-cache-optimizer", "priority": "high",
+                    "action": "stabilise prompt prefix",
+                    "cited_signals": ["cache_hit_rate_max_drop_pp"],
+                },
+                {
+                    "advisor": "security-reviewer", "priority": "high",
+                    "action": "block deletion until ACK",
+                    "cited_signals": ["destructive_path_match"],
+                },
+            ],
+        })
+        respx.post("https://api.anthropic.com/v1/messages").mock(
+            return_value=httpx.Response(
+                200, json=_anthropic_response(body)
+            )
+        )
+        advice = HaikuAdvisor().advise(
+            temporal_ctx=_mk_temporal(),
+            current_tool="Bash",
+            cost_signals={"hw_vs_sw_divergence_ratio": 3.1},
+            cache_signals={"cache_hit_rate_max_drop_pp": 51.0},
+            security_signals={
+                "verdict_decision": "REQUIRE_APPROVAL",
+                "destructive_path_match": True,
+                "policy_rule": "rule:backup_path_destructive",
+            },
+        )
+        assert advice.decision == "REQUIRE_APPROVAL"
+        names = [r.advisor for r in advice.recommended_advisors]
+        assert names == [
+            "cost-optimizer", "kv-cache-optimizer", "security-reviewer",
+        ]
+        assert all(r.priority == "high" for r in advice.recommended_advisors)
+
+    @respx.mock
+    def test_haiku_drops_unknown_advisor_names(
+        self, _haiku_env: None
+    ) -> None:
+        body = json.dumps({
+            "decision": "ALLOW", "confidence": 0.7, "reason": "ok",
+            "recommended_advisors": [
+                {"advisor": "cost-optimizer", "priority": "low",
+                 "action": "x"},
+                {"advisor": "i-am-hallucinated", "priority": "high",
+                 "action": "y"},
+            ],
+        })
+        respx.post("https://api.anthropic.com/v1/messages").mock(
+            return_value=httpx.Response(
+                200, json=_anthropic_response(body)
+            )
+        )
+        advice = HaikuAdvisor().advise(base_decision="ALLOW")
+        names = [r.advisor for r in advice.recommended_advisors]
+        assert names == ["cost-optimizer"]
+
+    @respx.mock
+    def test_user_message_includes_signal_sections(
+        self, _haiku_env: None
+    ) -> None:
+        captured: dict[str, str] = {}
+
+        def _capture(request: httpx.Request) -> httpx.Response:
+            payload = json.loads(request.content.decode("utf-8"))
+            captured["user_msg"] = payload["messages"][0]["content"]
+            return httpx.Response(
+                200,
+                json=_anthropic_response(
+                    json.dumps({
+                        "decision": "ALLOW", "confidence": 0.5,
+                        "reason": "ok", "recommended_advisors": [],
+                    })
+                ),
+            )
+
+        respx.post("https://api.anthropic.com/v1/messages").mock(
+            side_effect=_capture
+        )
+        HaikuAdvisor().advise(
+            temporal_ctx=_mk_temporal(),
+            current_tool="Bash",
+            cost_signals={"hw_vs_sw_divergence_ratio": 3.0},
+            cache_signals={"cache_hit_rate_max_drop_pp": 40.0},
+            security_signals={
+                "destructive_path_match": True,
+                "policy_rule": "rule:git_destructive",
+            },
+        )
+        msg = captured["user_msg"]
+        assert "COST METRICS" in msg
+        assert "KV CACHE METRICS" in msg
+        assert "SECURITY SIGNALS" in msg
+
+
+class TestDummyAdvisorMultiDomain:
+    def test_dummy_passes_signals_through_to_heuristic(self) -> None:
+        advice = DummyAdvisor().advise(
+            base_decision="REQUIRE_APPROVAL",
+            cost_signals={"hw_vs_sw_divergence_ratio": 3.0},
+        )
+        names = [r.advisor for r in advice.recommended_advisors]
+        assert "cost-optimizer" in names

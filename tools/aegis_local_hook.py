@@ -402,15 +402,17 @@ def _compute_action_advice(
     verdict: Any,
     tool_name: str,
     transcript_path: Path | None,
+    explain_block: dict[str, Any],
 ) -> dict[str, Any] | None:
     """Build the v2.5 ActionAdvice and return its dict form for the audit
     record. Returns ``None`` when the advisor is disabled or any sub-step
     fails — never raises so the firewall path is unaffected.
 
     Pulls the 4-layer narrative inputs (TemporalContext + burn-in baseline
-    + trajectory catalog + intent classifier + action-embedding table) and
-    routes them through :func:`compose_advice_sllm`. Provider selection
-    follows ``AEGIS_ADVISOR_PROVIDER`` (default ``dummy`` → heuristic).
+    + trajectory catalog + intent classifier + action-embedding table)
+    AND the v2.5.2 cost / cache / security signal dicts, then routes
+    them through :func:`compose_advice_sllm`. Provider selection follows
+    ``AEGIS_ADVISOR_PROVIDER`` (default ``dummy`` → heuristic).
     """
     if not ADVISOR_ENABLED:
         return None
@@ -426,6 +428,11 @@ def _compute_action_advice(
         )
         from aegis.burnin.trajectory_catalog import load_catalog_or_default
         from aegis.judge.advisor import compose_advice_sllm
+        from aegis.judge.advisor_signals import (
+            extract_cache_signals,
+            extract_cost_signals,
+            extract_security_signals,
+        )
 
         ctx = load_recent_history(
             transcript_path=transcript_path,
@@ -443,6 +450,12 @@ def _compute_action_advice(
             else []
         )
 
+        cost_signals = extract_cost_signals(inp=inp, verdict=verdict)
+        cache_signals = extract_cache_signals(temporal_ctx=ctx)
+        security_signals = extract_security_signals(
+            inp=inp, verdict=verdict, explain_block=explain_block,
+        )
+
         advice = compose_advice_sllm(
             temporal_ctx=ctx,
             anomalies=anomalies,
@@ -453,6 +466,9 @@ def _compute_action_advice(
             base_decision=verdict.decision,
             base_reason=verdict.reason or "",
             current_tool=tool_name,
+            cost_signals=cost_signals,
+            cache_signals=cache_signals,
+            security_signals=security_signals,
         )
         from aegis.judge.action_advice import advice_to_dict
 
@@ -614,6 +630,7 @@ def handle_pretool(stdin: Any, stdout: Any) -> int:
                 verdict=verdict,
                 tool_name=event.get("tool_name", "") or inp.tool_name,
                 transcript_path=transcript_path,
+                explain_block=explain_block,
             )
             if advice_dict is not None:
                 explain_block["action_advice"] = advice_dict
@@ -670,6 +687,24 @@ def handle_pretool(stdin: Any, stdout: Any) -> int:
             msg += f"\n           hint:   {hint}"
         if alt:
             msg += f"\n           alt:    try `{alt}` instead"
+        # PR-ψ-multi-domain — surface up to 3 advisor recommendations
+        # ranked by priority. Claude Code only sees stderr, so this is
+        # the user-visible "call cost-optimizer + kv-cache-optimizer +
+        # security-reviewer" pattern the design targets.
+        recs = advice_dict.get("recommended_advisors") or []
+        if isinstance(recs, list) and recs:
+            order = {"high": 0, "medium": 1, "low": 2}
+            ranked = sorted(
+                (r for r in recs if isinstance(r, dict)),
+                key=lambda r: order.get(r.get("priority", "low"), 9),
+            )[:3]
+            if ranked:
+                msg += "\n           advise:"
+                for r in ranked:
+                    pri = str(r.get("priority", "")).upper()
+                    name = str(r.get("advisor", ""))
+                    action = str(r.get("action", ""))
+                    msg += f"\n             [{pri}] {name} — {action}"
     _emit(msg)
     return 2
 
