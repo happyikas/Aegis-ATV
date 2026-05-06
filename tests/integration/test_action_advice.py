@@ -10,6 +10,7 @@ from aegis.atv.temporal import ATVSnapshot, TemporalContext
 from aegis.burnin.anomaly import AnomalyTag
 from aegis.judge.action_advice import (
     ActionAdvice,
+    AdvisorRecommendation,
     advice_from_dict,
     advice_to_audit_record,
     advice_to_dict,
@@ -380,3 +381,154 @@ class TestEndToEnd:
         assert "backtrack" in " ".join(advice.cited_anomalies).lower() \
             or "n_backtracks" in advice.cited_anomalies
         assert advice.cited_turns_rel == (-2,)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# v2.5.2 PR-ψ-multi-domain — recommended_advisors
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestRecommendationSchema:
+    def test_constructs_with_required_fields(self) -> None:
+        r = AdvisorRecommendation(
+            advisor="cost-optimizer",
+            priority="high",
+            action="trim context",
+        )
+        assert r.advisor == "cost-optimizer"
+        assert r.priority == "high"
+        assert r.cited_signals == ()
+
+    def test_frozen(self) -> None:
+        r = AdvisorRecommendation(
+            advisor="cost-optimizer", priority="high", action="x",
+        )
+        with pytest.raises((AttributeError, TypeError)):
+            r.priority = "low"  # type: ignore[misc]
+
+
+class TestHeuristicMultiDomainMapping:
+    def test_destructive_path_match_emits_security_high(self) -> None:
+        advice = compose_advice_heuristic(
+            base_decision="BLOCK", base_reason="rule:git_destructive",
+            current_tool="Bash",
+            security_signals={
+                "verdict_decision": "BLOCK",
+                "destructive_path_match": True,
+                "policy_rule": "rule:git_destructive",
+                "blast_radius": "high",
+            },
+        )
+        names = [r.advisor for r in advice.recommended_advisors]
+        assert "security-reviewer" in names
+        sec = next(r for r in advice.recommended_advisors
+                   if r.advisor == "security-reviewer")
+        assert sec.priority == "high"
+        assert "destructive_path_match" in sec.cited_signals
+
+    def test_cost_divergence_above_threshold_emits_cost_high(self) -> None:
+        advice = compose_advice_heuristic(
+            base_decision="REQUIRE_APPROVAL",
+            current_tool="Bash",
+            cost_signals={"hw_vs_sw_divergence_ratio": 3.15},
+        )
+        names = [r.advisor for r in advice.recommended_advisors]
+        assert "cost-optimizer" in names
+        co = next(r for r in advice.recommended_advisors
+                  if r.advisor == "cost-optimizer")
+        assert co.priority == "high"
+
+    def test_cache_drop_above_30pp_emits_cache_high(self) -> None:
+        advice = compose_advice_heuristic(
+            base_decision="ALLOW",
+            cache_signals={
+                "cache_hit_rate_max_drop_pp": 51.0,
+                "prefix_re_keys_in_window": 4,
+            },
+        )
+        names = [r.advisor for r in advice.recommended_advisors]
+        assert "kv-cache-optimizer" in names
+
+    def test_three_domains_simultaneously(self) -> None:
+        """The user's canonical example: cost +30%, KV cache 저하,
+        백업 파일 삭제 → 3 advisors at once."""
+        advice = compose_advice_heuristic(
+            base_decision="REQUIRE_APPROVAL", current_tool="Bash",
+            cost_signals={"hw_vs_sw_divergence_ratio": 3.0},
+            cache_signals={"cache_hit_rate_max_drop_pp": 51.0},
+            security_signals={
+                "verdict_decision": "REQUIRE_APPROVAL",
+                "destructive_path_match": True,
+                "policy_rule": "rule:backup_path_destructive",
+                "blast_radius": "high",
+            },
+        )
+        names = {r.advisor for r in advice.recommended_advisors}
+        assert {"cost-optimizer", "kv-cache-optimizer", "security-reviewer"} <= names
+
+    def test_no_signals_no_recommendations(self) -> None:
+        advice = compose_advice_heuristic(
+            base_decision="ALLOW", current_tool="Read",
+        )
+        assert advice.recommended_advisors == ()
+
+    def test_default_escalation_when_block_without_domain_signal(self) -> None:
+        advice = compose_advice_heuristic(
+            base_decision="BLOCK", base_reason="(no domain match)",
+            security_signals={"verdict_decision": "BLOCK"},
+        )
+        names = [r.advisor for r in advice.recommended_advisors]
+        assert names == ["permission-escalator"]
+
+
+class TestRecommendationJsonRoundtrip:
+    def test_round_trip_preserves_recommendations(self) -> None:
+        advice = compose_advice_heuristic(
+            base_decision="REQUIRE_APPROVAL",
+            cost_signals={"hw_vs_sw_divergence_ratio": 3.0},
+            security_signals={
+                "verdict_decision": "REQUIRE_APPROVAL",
+                "destructive_path_match": True,
+                "policy_rule": "rule:git_destructive",
+                "blast_radius": "high",
+            },
+        )
+        d = advice_to_dict(advice)
+        json.dumps(d)  # serialisable
+        restored = advice_from_dict(d)
+        assert len(restored.recommended_advisors) == len(advice.recommended_advisors)
+        for orig, back in zip(
+            advice.recommended_advisors,
+            restored.recommended_advisors,
+            strict=True,
+        ):
+            assert orig.advisor == back.advisor
+            assert orig.priority == back.priority
+            assert orig.action == back.action
+            assert orig.cited_signals == back.cited_signals
+
+    def test_unknown_advisor_dropped_on_load(self) -> None:
+        # Older / hallucinated advisor name — must not survive parse.
+        d = {
+            "decision": "ALLOW", "reason": "x", "confidence": 0.5,
+            "recommended_advisors": [
+                {"advisor": "cost-optimizer", "priority": "high",
+                 "action": "x"},
+                {"advisor": "made-up-advisor", "priority": "high",
+                 "action": "y"},
+                {"advisor": "kv-cache-optimizer", "priority": "bogus",
+                 "action": "z"},
+            ],
+        }
+        restored = advice_from_dict(d)
+        names = [r.advisor for r in restored.recommended_advisors]
+        assert names == ["cost-optimizer"]
+
+    def test_legacy_advice_without_recommendations_loads(self) -> None:
+        # Pre-v2.5.2 audit records have no ``recommended_advisors`` key.
+        d = {
+            "decision": "ALLOW", "reason": "x", "confidence": 0.5,
+            "advisor_kind": "heuristic",
+        }
+        restored = advice_from_dict(d)
+        assert restored.recommended_advisors == ()

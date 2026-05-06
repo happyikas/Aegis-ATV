@@ -1,9 +1,9 @@
-# AegisData v2.5 사용자 매뉴얼 — ActionAdvice (PR-ζ-head + PR-ψ-gating)
+# AegisData v2.5 사용자 매뉴얼 — ActionAdvice (PR-ζ-head + PR-ψ)
 
 **대상:** Claude Code (local 모드) 사용자
 **최종 갱신:** 2026-05-05
-**버전:** v2.5.1 — sLLM-backed Advisor + Critical-Moment Gating (Phase C)
-**한 줄:** "방화벽이 *중요한 순간에만* sLLM 을 불러서 *다음에 무엇을 해야 하는지*를 알려준다."
+**버전:** v2.5.2 — Multi-Domain Advisor Recommendations (Phase C)
+**한 줄:** "방화벽이 critical moment 에 sLLM 을 불러서 *cost / cache / security 도메인 advisor 를 동시에 추천*해 준다."
 
 이 문서는 v2.2 must-install 매뉴얼([MANUAL_v2.2.md](MANUAL_v2.2.md))을 이미 읽었거나
 설치를 완료한 사용자를 위한 **증분 매뉴얼**입니다. v2.5 는 v2.2 / v2.3 / v2.4 surface
@@ -18,12 +18,13 @@
 2. [Phase A → C 전체 그림](#phase-a--c-전체-그림)
 3. [ActionAdvice 가 무엇인가](#actionadvice-가-무엇인가)
 4. [Critical-Moment Gating (v2.5.1)](#critical-moment-gating-v251)
-5. [켜는 법 — 환경 변수 두 개](#켜는-법--환경-변수-두-개)
-6. [Claude Code 에서 직접 검증하기 — 7 가지 시나리오](#claude-code-에서-직접-검증하기--7-가지-시나리오)
-7. [출력 해석 — 감사 로그와 stderr](#출력-해석--감사-로그와-stderr)
-8. [내부 동작 — 4-layer narrative → sLLM](#내부-동작--4-layer-narrative--sllm)
-9. [트러블슈팅](#트러블슈팅)
-10. [FAQ](#faq)
+5. [Multi-Domain Recommendations (v2.5.2)](#multi-domain-recommendations-v252)
+6. [켜는 법 — 환경 변수 두 개](#켜는-법--환경-변수-두-개)
+7. [Claude Code 에서 직접 검증하기 — 7 가지 시나리오](#claude-code-에서-직접-검증하기--7-가지-시나리오)
+8. [출력 해석 — 감사 로그와 stderr](#출력-해석--감사-로그와-stderr)
+9. [내부 동작 — 4-layer narrative → sLLM](#내부-동작--4-layer-narrative--sllm)
+10. [트러블슈팅](#트러블슈팅)
+11. [FAQ](#faq)
 
 ---
 
@@ -36,25 +37,58 @@ AEGIS_ADVISOR_ENABLED=1 \              # sLLM 강화 (Anthropic Haiku 4.5)
 ```
 
 ALLOW / BLOCK / REQUIRE_APPROVAL 세 가지 동기 verdict 옆에,
-방화벽은 이제 **ActionAdvice** 라는 다음 행동 추천 블록을 추가로 만듭니다:
+방화벽은 이제 **ActionAdvice** 라는 다음 행동 추천 블록을 추가로 만듭니다.
+v2.5.2 부터는 **multi-domain `recommended_advisors`** 가 핵심 출력입니다 —
+"cost 최적화 + KV cache 최적화 + 파일 삭제 이상점 조치" 처럼 동시에
+여러 도메인 specialist 를 호출하라고 제안합니다:
 
 ```json
 {
   "decision": "REQUIRE_APPROVAL",
-  "reason": "1 burn-in alert(s); session_error_rate above baseline",
+  "reason": "cost +30%, cache hit collapsed, destructive backup deletion",
   "confidence": 0.85,
-  "next_action_hint": "agent appears confused (recent edit-revert) — ask the user to clarify",
-  "alternative_tool": "Read",
-  "cited_anomalies": ["session_error_rate"],
-  "cited_turns_rel": [-2, -1],
+  "recommended_advisors": [
+    {
+      "advisor": "cost-optimizer",
+      "priority": "high",
+      "action": "Investigate HW/SW cost divergence before continuing",
+      "reasoning": "hw_vs_sw_divergence_ratio=3.15× (M12 threshold 2.0)",
+      "cited_signals": ["hw_vs_sw_divergence_ratio"]
+    },
+    {
+      "advisor": "kv-cache-optimizer",
+      "priority": "high",
+      "action": "Audit recent prompt-prefix mutations",
+      "reasoning": "cache_hit_rate dropped 51pp",
+      "cited_signals": ["cache_hit_rate_max_drop_pp", "prefix_re_keys_in_window"]
+    },
+    {
+      "advisor": "security-reviewer",
+      "priority": "high",
+      "action": "Block until a human reviewer ACKs the destructive operation",
+      "reasoning": "rule:backup_path_destructive matched; blast_radius=high",
+      "cited_signals": ["destructive_path_match"]
+    }
+  ],
+  "next_action_hint": "ask the user to clarify the intended change before continuing",
   "advisor_kind": "sllm-haiku",
   "advisor_hash": "a1b2…",
   "produced_at_ns": 1746345600123456000
 }
 ```
 
-차단되었을 때 stderr 에 `hint:` / `alt:` 두 줄이 추가로 나타나
-사용자가 **무엇을** 해야 할지 즉시 알 수 있습니다.
+차단되었을 때 stderr 에 `hint:` / `alt:` / `advise:` 줄이 나타나
+사용자가 **어떤 도메인 advisor 를 동시에 호출해야 하는지** 즉시 알 수 있습니다:
+
+```
+[aegis-local] BLOCK  Bash  trace=fa825e17  (118.3ms)
+           reason: rule:backup_path_destructive
+           hint:   ask the user to clarify the intended change before continuing
+           advise:
+             [HIGH] cost-optimizer — Investigate HW/SW cost divergence
+             [HIGH] kv-cache-optimizer — Audit recent prompt-prefix mutations
+             [HIGH] security-reviewer — Block until a human reviewer ACKs
+```
 
 ---
 
@@ -168,6 +202,84 @@ AEGIS_ADVISOR_ALWAYS=1 \
 ### 왜 M13 confidence / session_drift 는 게이트에 없나?
 
 calibration 이슈입니다. M13 attribution head 의 confidence 는 routine ALLOW 에서도 자연스럽게 0.3-0.5 가 나오는 분포라, "낮으면 critical" 이라는 룰을 그대로 쓰면 false positive 가 너무 많습니다. session_drift 도 마찬가지로 burn-in 학습 전에는 임계값이 의미 없습니다. 두 신호는 burn-in 데이터로 임계값을 학습한 후 v2.6 에서 게이트에 추가될 예정입니다.
+
+---
+
+## Multi-Domain Recommendations (v2.5.2)
+
+게이트가 통과되면 advisor 가 **4-layer narrative + 3 도메인 신호 섹션**을 sLLM 에 전달하고, sLLM 은 **8 개 도메인 advisor 중 적용되는 것들**을 동시에 권고합니다.
+
+### 8 개 도메인 advisor 카탈로그
+
+| 이름 | 트리거 | 권고 메시지 예시 |
+|---|---|---|
+| `cost-optimizer` | hw/sw divergence ≥2× 또는 budget ≥90% | "HW/SW cost divergence 조사 후 진행" |
+| `kv-cache-optimizer` | cache hit drop ≥30pp 또는 prefix re-key ≥3 | "최근 prompt-prefix 변형 audit" |
+| `security-reviewer` | destructive_path_match 또는 blast_radius=high | "human reviewer ACK 받을 때까지 차단" |
+| `context-compactor` | token velocity z-score 이상치 | "최근 N turn 요약 후 새 세션" |
+| `test-runner` | error rate z-score 이상치 또는 n_errors ≥2 | "재시도 전 관련 테스트 실행" |
+| `loop-breaker` | redundancy z-score 이상치 또는 n_redundant ≥3 | "다른 도구 / 좁힌 범위 시도" |
+| `permission-escalator` | REQUIRE_APPROVAL/BLOCK 인데 도메인 신호 없음 | "verdict 를 사람에게 surface" |
+| `human-clarifier` | backtrack 신호 또는 n_backtracks ≥1 | "사용자에게 의도 재확인" |
+
+각 권고에는 `priority` (high/medium/low), `action` (한 문장 명령형), `reasoning` (트리거 근거), `cited_signals` (어떤 metric 이 기여했는지 audit) 가 들어갑니다.
+
+### sLLM 에 들어가는 narrative 의 새 섹션 3 개
+
+`AEGIS_ADVISOR_PROVIDER=haiku` 모드에서 Haiku 에게 보내는 사용자 메시지에 다음 섹션이 추가되었습니다 (각 섹션은 신호가 있을 때만 포함):
+
+```
+COST METRICS
+  cumulative_dollars:        $0.4200
+  projected_session_cost:    $1.3000  (65.0% of budget)
+  budget_limit:              $2.00
+  hw_vs_sw_divergence_ratio: 3.15×  (ESCALATED)
+  m12_trace:                 M12: hw_vs_sw_flops_ratio=3.150 > threshold 2.000
+
+KV CACHE METRICS
+  cache_hit_rate_recent:     0.30
+  cache_hit_rate_window_mean:0.45
+  cache_hit_rate_max_drop_pp:51pp ← significant drop
+  cache_creation_tokens:     2400
+  cache_read_tokens:         320
+  prefix_stability:          unstable  (4 prefix re-keys / window)
+
+SECURITY SIGNALS
+  verdict_decision:          BLOCK
+  destructive_path_match:    yes (rule:backup_path_destructive)
+  blast_radius:              high
+  pattern_match_steps:       step310, step311
+  m13_security_top:          tool_arg_inspection, action_blast_radius
+```
+
+이 신호들은 모두 PreToolUse 훅이 **이미** 계산한 `verdict.step_traces` / `temporal_ctx` / `inp.cost_estimate` 에서 파생됩니다. 별도 측정 / 외부 API 호출 없음.
+
+### Heuristic vs Haiku — 출력 동등성
+
+두 backend 가 **같은 ActionAdvice 스키마**를 만듭니다:
+
+* **Heuristic** (`compose_advice_heuristic`): 결정론적 룰. 위 표의 트리거 조건을 그대로 적용. sub-ms.
+* **Haiku** (`compose_advice_sllm` + `AEGIS_ADVISOR_PROVIDER=haiku`): 같은 8 advisor 카탈로그 + JSON 스키마를 프롬프트에 포함. ~150-300 ms. 동일 도메인 + 동일 priority 가 보통 나오지만, 의미 추론 (예: 두 신호가 결합되어 confidence 가 다름) 에서 더 풍부한 `reasoning` 을 작성.
+
+> **Hallucination 방어**: `_parse_recommended_advisors` 가 8 개 catalog 밖의 advisor 이름과 high/medium/low 밖의 priority 를 **소리 없이 drop** 합니다. 모델이 새로운 advisor 이름을 만들어도 audit 에 안 남습니다.
+
+### `jq` 로 multi-domain 권고 보기
+
+```bash
+# 마지막 advice 의 권고 advisor 목록만
+tail -1 ~/.aegis/audit.jsonl | jq '.explain.action_advice.recommended_advisors[] | {advisor, priority, action}'
+
+# 세션 통틀어 high-priority 권고만 (audit 시작부터)
+jq -c 'select(.explain.action_advice.recommended_advisors)
+       | .explain.action_advice.recommended_advisors[]
+       | select(.priority == "high")
+       | {tool: input_filename, advisor, action}' \
+   ~/.aegis/audit.jsonl
+
+# advisor 별 빈도
+jq -r '.explain.action_advice.recommended_advisors[]?.advisor' \
+   ~/.aegis/audit.jsonl | sort | uniq -c | sort -rn
+```
 
 ---
 

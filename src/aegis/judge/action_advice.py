@@ -44,7 +44,7 @@ from __future__ import annotations
 import hashlib
 import time
 from dataclasses import asdict, dataclass, field
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
     from aegis.atv.temporal import TemporalContext
@@ -57,16 +57,67 @@ AdvisorKind = Literal["heuristic", "sllm-phi3", "sllm-haiku", "learned-head"]
 
 Decision = Literal["ALLOW", "BLOCK", "REQUIRE_APPROVAL", "DEFER"]
 
+# v2.5.2 PR-ψ-multi-domain — domain advisor catalog. Each name is an
+# external advisor / specialist the agent (or operator) should consult.
+# Closed set; new advisors must land here so audit / dashboard rendering
+# stays stable.
+DomainAdvisor = Literal[
+    "cost-optimizer",         # cost-divergence / budget pressure
+    "kv-cache-optimizer",     # cache hit collapse / prefix instability
+    "security-reviewer",      # destructive paths / privilege escalation
+    "context-compactor",      # token velocity / context saturation
+    "test-runner",            # error patterns
+    "loop-breaker",           # ≥3 same-call repetitions
+    "permission-escalator",   # ambiguous high-impact, needs human ACK
+    "human-clarifier",        # backtrack / agent appears confused
+]
+
+Priority = Literal["high", "medium", "low"]
+
 
 # Heuristic version — bump on any rule change so audit can pin
 # advices to a specific composer revision.
-_HEURISTIC_VERSION = "compose_advice_heuristic_v1"
+_HEURISTIC_VERSION = "compose_advice_heuristic_v2_multi_domain"
 _HEURISTIC_HASH = hashlib.sha3_256(_HEURISTIC_VERSION.encode()).hexdigest()
 
 
 # ──────────────────────────────────────────────────────────────────────
 # The schema
 # ──────────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class AdvisorRecommendation:
+    """A single domain-advisor recommendation produced by the
+    sLLM / heuristic. Multiple of these may accompany one ActionAdvice
+    when several domains (cost, cache, security, …) are simultaneously
+    in scope — exactly the user's "Cost 최적화 advisor를 부르고, KV
+    Cache 최적화 advisor를 활용을 권하면서 파일 삭제 이상점에 대해
+    조치를 취하세요" pattern.
+
+    Fields
+    ------
+    advisor:
+        One of :data:`DomainAdvisor`. Closed catalog so dashboards /
+        replayers can rely on the set.
+    priority:
+        ``high`` / ``medium`` / ``low``. ``high`` means must address
+        before continuing; ``low`` is informational.
+    action:
+        One-sentence imperative — what the advisor should do.
+    reasoning:
+        Short explanation grounding the recommendation in cited
+        signals. Bounded to 256 chars in JSON I/O.
+    cited_signals:
+        Names of the COST / KV CACHE / SECURITY metrics (or anomaly
+        tags) that triggered this recommendation. Audit traceability.
+    """
+
+    advisor: DomainAdvisor
+    priority: Priority
+    action: str
+    reasoning: str = ""
+    cited_signals: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -125,6 +176,16 @@ class ActionAdvice:
 
     cited_anomalies: tuple[str, ...] = field(default_factory=tuple)
     cited_turns_rel: tuple[int, ...] = field(default_factory=tuple)
+
+    # v2.5.2 PR-ψ-multi-domain — multi-advisor recommendations. Closed
+    # set per :data:`DomainAdvisor`. Empty tuple when no recommendation
+    # applies (e.g. clean ALLOW). The decision/reason fields stay
+    # verdict-compatible; this field is the *value-added* surface that
+    # closes the patent's "sLLM understands the scene → routes to
+    # specialists" claim.
+    recommended_advisors: tuple[AdvisorRecommendation, ...] = field(
+        default_factory=tuple,
+    )
 
     advisor_kind: AdvisorKind = "heuristic"
     advisor_hash: str = ""
@@ -254,6 +315,234 @@ def _next_action_hint_for(
     return "; ".join(bullets)
 
 
+def _heuristic_recommendations(
+    *,
+    cost_signals: dict[str, Any] | None,
+    cache_signals: dict[str, Any] | None,
+    security_signals: dict[str, Any] | None,
+    anomalies: list[AnomalyTag],
+    temporal_ctx: TemporalContext | None,
+) -> tuple[AdvisorRecommendation, ...]:
+    """Map signal dicts to a tuple of :class:`AdvisorRecommendation`.
+
+    Rules are deterministic and conservative — each one cites the exact
+    metric(s) that triggered it. ``high`` priority means the
+    recommendation should be addressed before the tool runs;
+    ``medium`` / ``low`` are advisory.
+    """
+    recs: list[AdvisorRecommendation] = []
+    cost = cost_signals or {}
+    cache = cache_signals or {}
+    sec = security_signals or {}
+
+    # Security — destructive path match → high-priority security review.
+    if sec.get("destructive_path_match"):
+        cited = ["destructive_path_match"]
+        if "policy_rule" in sec:
+            cited.append(f"policy_rule={sec['policy_rule']}")
+        if "blast_radius" in sec:
+            cited.append(f"blast_radius={sec['blast_radius']}")
+        recs.append(AdvisorRecommendation(
+            advisor="security-reviewer",
+            priority="high",
+            action=(
+                "Block until a human reviewer ACKs the destructive "
+                "operation."
+            ),
+            reasoning=(
+                f"firewall matched {sec.get('policy_rule', 'a destructive rule')}; "
+                f"blast radius {sec.get('blast_radius', 'unknown')}"
+            ),
+            cited_signals=tuple(cited),
+        ))
+    elif sec.get("blast_radius") == "high":
+        recs.append(AdvisorRecommendation(
+            advisor="security-reviewer",
+            priority="medium",
+            action="Confirm scope of the high-blast-radius operation.",
+            reasoning="step320 reports blast_radius=high",
+            cited_signals=("blast_radius",),
+        ))
+
+    # Cost — divergence ratio > 2× → cost-optimizer high.
+    div_ratio = cost.get("hw_vs_sw_divergence_ratio")
+    if isinstance(div_ratio, (int, float)) and div_ratio >= 2.0:
+        recs.append(AdvisorRecommendation(
+            advisor="cost-optimizer",
+            priority="high",
+            action=(
+                "Investigate HW/SW cost divergence before continuing — "
+                "actual compute may be far exceeding billed."
+            ),
+            reasoning=(
+                f"hw_vs_sw_divergence_ratio={div_ratio:.2f}× "
+                "(M12 escalation threshold is 2.0)"
+            ),
+            cited_signals=("hw_vs_sw_divergence_ratio",),
+        ))
+
+    # Cost — budget pressure (proj > 90% limit OR step335 warn flag).
+    used_ratio = cost.get("budget_used_ratio")
+    if (
+        isinstance(used_ratio, (int, float)) and used_ratio >= 0.9
+    ) or cost.get("budget_warn_flag"):
+        cited = []
+        if isinstance(used_ratio, (int, float)):
+            cited.append("budget_used_ratio")
+        if cost.get("budget_warn_flag"):
+            cited.append("budget_warn_flag")
+        priority: Priority = "high" if (
+            isinstance(used_ratio, (int, float)) and used_ratio >= 1.0
+        ) else "medium"
+        recs.append(AdvisorRecommendation(
+            advisor="cost-optimizer",
+            priority=priority,
+            action=(
+                "Trim context or end the session before the budget "
+                "ceiling is hit."
+            ),
+            reasoning=(
+                f"projected session cost is "
+                f"{(used_ratio or 1.0)*100:.0f}% of budget"
+                if isinstance(used_ratio, (int, float))
+                else "step335 raised a budget warning"
+            ),
+            cited_signals=tuple(cited) or ("budget_warn_flag",),
+        ))
+
+    # KV cache — significant hit-rate drop.
+    drop = cache.get("cache_hit_rate_max_drop_pp")
+    if isinstance(drop, (int, float)) and drop >= 30:
+        priority = "high" if drop >= 50 else "medium"
+        recs.append(AdvisorRecommendation(
+            advisor="kv-cache-optimizer",
+            priority=priority,
+            action=(
+                "Audit recent prompt-prefix mutations; the cache is "
+                "being re-keyed on most turns."
+            ),
+            reasoning=(
+                f"cache_hit_rate_max_drop_pp={drop:.0f}pp"
+                + (
+                    f"; prefix re-keys={cache['prefix_re_keys_in_window']}"
+                    if "prefix_re_keys_in_window" in cache
+                    else ""
+                )
+            ),
+            cited_signals=tuple(
+                k for k in (
+                    "cache_hit_rate_max_drop_pp",
+                    "prefix_re_keys_in_window",
+                ) if k in cache
+            ),
+        ))
+    elif cache.get("prefix_stability") == "unstable":
+        recs.append(AdvisorRecommendation(
+            advisor="kv-cache-optimizer",
+            priority="low",
+            action="Stabilise the prompt prefix to recover cache hits.",
+            reasoning=(
+                f"{cache.get('prefix_re_keys_in_window', 0)} prefix "
+                "re-keys in window"
+            ),
+            cited_signals=("prefix_stability",),
+        ))
+
+    # Trajectory — token-velocity anomaly → context-compactor.
+    has_velocity = any(
+        "token_velocity" in t.metric for t in anomalies
+    )
+    if has_velocity:
+        recs.append(AdvisorRecommendation(
+            advisor="context-compactor",
+            priority="medium",
+            action=(
+                "Summarise the last N turns and start fresh to "
+                "control token velocity."
+            ),
+            reasoning="window_token_velocity_per_turn z-score elevated",
+            cited_signals=("window_token_velocity_per_turn",),
+        ))
+
+    # Trajectory — repeated-call pattern → loop-breaker.
+    has_redundant = any("redundant" in t.metric for t in anomalies)
+    if has_redundant or (
+        temporal_ctx is not None and temporal_ctx.n_redundant >= 3
+    ):
+        recs.append(AdvisorRecommendation(
+            advisor="loop-breaker",
+            priority="high",
+            action=(
+                "Switch tools or narrow the scope — the same call has "
+                "repeated within the window."
+            ),
+            reasoning=(
+                f"n_redundant={getattr(temporal_ctx, 'n_redundant', 0)} "
+                "in window"
+            ),
+            cited_signals=("session_redundancy_ratio", "n_redundant"),
+        ))
+
+    # Trajectory — error pattern → test-runner.
+    has_error = any("error" in t.metric for t in anomalies)
+    if has_error or (
+        temporal_ctx is not None and temporal_ctx.n_errors >= 2
+    ):
+        recs.append(AdvisorRecommendation(
+            advisor="test-runner",
+            priority="medium",
+            action=(
+                "Run the relevant tests / smoke check before retrying "
+                "the failing call."
+            ),
+            reasoning=(
+                f"n_errors={getattr(temporal_ctx, 'n_errors', 0)} "
+                "in window"
+            ),
+            cited_signals=("session_error_rate", "n_errors"),
+        ))
+
+    # Trajectory — backtrack pattern → human-clarifier.
+    has_backtrack = any("backtrack" in t.metric for t in anomalies)
+    if has_backtrack or (
+        temporal_ctx is not None and temporal_ctx.n_backtracks >= 1
+    ):
+        recs.append(AdvisorRecommendation(
+            advisor="human-clarifier",
+            priority="medium",
+            action=(
+                "Ask the user to confirm the intended change — recent "
+                "edit was reverted."
+            ),
+            reasoning=(
+                f"n_backtracks={getattr(temporal_ctx, 'n_backtracks', 0)} "
+                "in window"
+            ),
+            cited_signals=("session_backtrack_ratio", "n_backtracks"),
+        ))
+
+    # Default escalation — REQUIRE_APPROVAL with no specific domain
+    # signal → permission-escalator (so the operator sees something).
+    if not recs:
+        decision = sec.get("verdict_decision", "ALLOW")
+        if decision in ("REQUIRE_APPROVAL", "BLOCK"):
+            recs.append(AdvisorRecommendation(
+                advisor="permission-escalator",
+                priority="medium",
+                action=(
+                    "Surface the verdict to the human operator before "
+                    "proceeding."
+                ),
+                reasoning=(
+                    f"firewall verdict={decision} without a recognised "
+                    "domain signal"
+                ),
+                cited_signals=("verdict_decision",),
+            ))
+
+    return tuple(recs)
+
+
 def compose_advice_heuristic(
     *,
     temporal_ctx: TemporalContext | None = None,
@@ -261,6 +550,9 @@ def compose_advice_heuristic(
     base_decision: Decision = "ALLOW",
     base_reason: str = "",
     current_tool: str = "",
+    cost_signals: dict[str, Any] | None = None,
+    cache_signals: dict[str, Any] | None = None,
+    security_signals: dict[str, Any] | None = None,
 ) -> ActionAdvice:
     """Build an ActionAdvice from temporal context + anomaly tags.
 
@@ -311,6 +603,16 @@ def compose_advice_heuristic(
             if s.backtrack or s.redundant or s.is_error
         )
 
+    # PR-ψ-multi-domain: route signal dicts through the
+    # heuristic mapper for multi-advisor recommendations.
+    recommendations = _heuristic_recommendations(
+        cost_signals=cost_signals,
+        cache_signals=cache_signals,
+        security_signals=security_signals,
+        anomalies=tags,
+        temporal_ctx=temporal_ctx,
+    )
+
     return ActionAdvice(
         decision=decision,
         reason=reason,
@@ -319,6 +621,7 @@ def compose_advice_heuristic(
         alternative_tool=alt,
         cited_anomalies=cited_metrics,
         cited_turns_rel=cited_turns,
+        recommended_advisors=recommendations,
         advisor_kind="heuristic",
         advisor_hash=_HEURISTIC_HASH,
         produced_at_ns=time.time_ns(),
@@ -343,6 +646,19 @@ def render_advice(advice: ActionAdvice) -> str:
         lines.append(f"  hint:        {advice.next_action_hint}")
     if advice.alternative_tool:
         lines.append(f"  alt_tool:    {advice.alternative_tool}")
+    if advice.recommended_advisors:
+        lines.append("  recommended advisors:")
+        for r in advice.recommended_advisors:
+            lines.append(
+                f"    [{r.priority:<6}] {r.advisor:<22} {r.action}"
+            )
+            if r.reasoning:
+                lines.append(f"               · why: {r.reasoning}")
+            if r.cited_signals:
+                lines.append(
+                    f"               · signals: "
+                    f"{', '.join(r.cited_signals)}"
+                )
     if advice.cited_anomalies:
         lines.append(
             f"  cited (anomalies): {', '.join(advice.cited_anomalies)}"
@@ -356,16 +672,68 @@ def render_advice(advice: ActionAdvice) -> str:
 
 
 def advice_to_dict(advice: ActionAdvice) -> dict[str, Any]:
-    """JSON-serialisable form. ``cited_*`` tuples become lists."""
+    """JSON-serialisable form. ``cited_*`` tuples become lists, and
+    each :class:`AdvisorRecommendation` is normalised to a plain dict."""
     d = asdict(advice)
     d["cited_anomalies"] = list(advice.cited_anomalies)
     d["cited_turns_rel"] = list(advice.cited_turns_rel)
+    d["recommended_advisors"] = [
+        {
+            "advisor": r.advisor,
+            "priority": r.priority,
+            "action": r.action,
+            "reasoning": r.reasoning,
+            "cited_signals": list(r.cited_signals),
+        }
+        for r in advice.recommended_advisors
+    ]
     return d
+
+
+_ALLOWED_DOMAIN_ADVISORS: frozenset[str] = frozenset({
+    "cost-optimizer", "kv-cache-optimizer", "security-reviewer",
+    "context-compactor", "test-runner", "loop-breaker",
+    "permission-escalator", "human-clarifier",
+})
+_ALLOWED_PRIORITIES: frozenset[str] = frozenset({"high", "medium", "low"})
+
+
+def _recommendation_from_dict(d: dict[str, Any]) -> AdvisorRecommendation | None:
+    """Defensive parse of a single recommendation dict — returns
+    ``None`` when the advisor name or priority is outside the closed
+    catalog (so older or malformed records can't poison replay)."""
+    advisor = d.get("advisor", "")
+    priority = d.get("priority", "")
+    if advisor not in _ALLOWED_DOMAIN_ADVISORS:
+        return None
+    if priority not in _ALLOWED_PRIORITIES:
+        return None
+    cited = d.get("cited_signals") or []
+    return AdvisorRecommendation(
+        advisor=cast(DomainAdvisor, advisor),
+        priority=cast(Priority, priority),
+        action=str(d.get("action", ""))[:512],
+        reasoning=str(d.get("reasoning", ""))[:512],
+        cited_signals=tuple(
+            str(x) for x in cited if isinstance(x, str)
+        ),
+    )
 
 
 def advice_from_dict(d: dict[str, Any]) -> ActionAdvice:
     """Inverse of :func:`advice_to_dict`. Tolerant of missing fields
-    so older audit records keep loading."""
+    so older audit records (pre-v2.5.2) keep loading without
+    ``recommended_advisors``."""
+    raw_recs = d.get("recommended_advisors") or []
+    recs: tuple[AdvisorRecommendation, ...] = tuple(
+        r
+        for r in (
+            _recommendation_from_dict(item)
+            for item in raw_recs
+            if isinstance(item, dict)
+        )
+        if r is not None
+    )
     return ActionAdvice(
         decision=d.get("decision", "ALLOW"),
         reason=str(d.get("reason", "")),
@@ -374,6 +742,7 @@ def advice_from_dict(d: dict[str, Any]) -> ActionAdvice:
         alternative_tool=d.get("alternative_tool"),
         cited_anomalies=tuple(d.get("cited_anomalies") or ()),
         cited_turns_rel=tuple(d.get("cited_turns_rel") or ()),
+        recommended_advisors=recs,
         advisor_kind=d.get("advisor_kind", "heuristic"),
         advisor_hash=str(d.get("advisor_hash", "")),
         produced_at_ns=int(d.get("produced_at_ns", 0)),
@@ -404,7 +773,10 @@ def advice_to_audit_record(
 __all__ = [
     "ActionAdvice",
     "AdvisorKind",
+    "AdvisorRecommendation",
     "Decision",
+    "DomainAdvisor",
+    "Priority",
     "advice_from_dict",
     "advice_to_audit_record",
     "advice_to_dict",
