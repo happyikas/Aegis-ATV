@@ -28,8 +28,10 @@ Behavioural contract:
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -48,6 +50,38 @@ _FILES: tuple[tuple[str, ChunkCategory], ...] = (
 )
 
 
+def _parse_iso_to_ns(value: str | None, *, field_name: str) -> int | None:
+    """Parse an ISO 8601 UTC timestamp (``YYYY-MM-DDTHH:MM:SSZ``) into
+    nanoseconds. Returns None for None input. Raises ``ValueError`` on
+    malformed strings (with field name for error message)."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(
+            f"{field_name} must be ISO 8601 UTC string or null; got {type(value).__name__}"
+        )
+    try:
+        # Accept Z-suffix or explicit +00:00. Reject fractional seconds for now.
+        normalized = value.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError(
+            f"{field_name}={value!r} is not a valid ISO 8601 UTC timestamp"
+        ) from exc
+    if dt.tzinfo is None:
+        raise ValueError(
+            f"{field_name}={value!r} must include timezone (use Z or +00:00)"
+        )
+    if dt.utcoffset() != dt.tzinfo.utcoffset(dt):
+        # consistency check — already validated by fromisoformat
+        pass
+    if dt.tzinfo != UTC and dt.utcoffset() and dt.utcoffset().total_seconds() != 0:  # type: ignore[union-attr]
+        raise ValueError(
+            f"{field_name}={value!r} must be UTC (offset 0); got {dt.tzinfo}"
+        )
+    return int(dt.timestamp() * 1_000_000_000)
+
+
 @dataclass(frozen=True)
 class RagChunk:
     id: str
@@ -57,6 +91,12 @@ class RagChunk:
     tags: tuple[str, ...] = ()
     policy_rule: str | None = None
     decision: ChunkDecision | None = None
+    # ── PR ① validity windows ───────────────────────────────────────
+    # ISO 8601 UTC strings (``YYYY-MM-DDTHH:MM:SSZ``). All optional;
+    # absent → "always valid" (back-compat with chunks pre-PR-#94).
+    valid_from: str | None = None       # inclusive
+    valid_until: str | None = None      # exclusive
+    supersedes: str | None = None       # chunk id this entry replaces
 
     def render_for_prompt(self) -> str:
         """Return the chunk in the form the model sees in-context."""
@@ -66,6 +106,22 @@ class RagChunk:
         if self.decision:
             head += f"  → {self.decision}"
         return f"{head}\n{self.content}"
+
+    def is_valid_at(self, ts_ns: int) -> bool:
+        """True iff this chunk's validity window covers ``ts_ns``.
+
+        A chunk with no ``valid_from`` / ``valid_until`` is always
+        valid. ``valid_from`` is inclusive; ``valid_until`` exclusive.
+        """
+        if self.valid_from is not None:
+            from_ns = _parse_iso_to_ns(self.valid_from, field_name="valid_from")
+            if from_ns is not None and ts_ns < from_ns:
+                return False
+        if self.valid_until is not None:
+            until_ns = _parse_iso_to_ns(self.valid_until, field_name="valid_until")
+            if until_ns is not None and ts_ns >= until_ns:
+                return False
+        return True
 
 
 @dataclass(frozen=True)
@@ -88,6 +144,28 @@ class RagCorpus:
 
     def by_tag(self, tag: str) -> tuple[RagChunk, ...]:
         return tuple(c for c in self.chunks if tag in c.tags)
+
+    def valid_at(self, ts_ns: int | None = None) -> RagCorpus:
+        """Return a new ``RagCorpus`` containing only chunks valid at
+        ``ts_ns`` (default: now). Chunks with no validity window are
+        always retained."""
+        anchor = int(time.time_ns()) if ts_ns is None else ts_ns
+        return RagCorpus(
+            chunks=tuple(c for c in self.chunks if c.is_valid_at(anchor)),
+            source_dir=self.source_dir,
+        )
+
+
+def chunks_valid_at(
+    chunks: Iterable[RagChunk], ts_ns: int | None = None,
+) -> tuple[RagChunk, ...]:
+    """Filter ``chunks`` to those valid at the given anchor timestamp.
+
+    Module-level convenience wrapper for :py:meth:`RagCorpus.valid_at`
+    when the caller has only a chunk sequence (e.g. an in-memory
+    fixture, not a full corpus)."""
+    anchor = int(time.time_ns()) if ts_ns is None else ts_ns
+    return tuple(c for c in chunks if c.is_valid_at(anchor))
 
 
 def _validate_chunk(raw: dict[str, object], src: Path) -> RagChunk:
@@ -122,6 +200,56 @@ def _validate_chunk(raw: dict[str, object], src: Path) -> RagChunk:
         raise ValueError(
             f"{src}: chunk {cid!r} policy_rule must be a string or null"
         )
+
+    # ── PR ① validity-window fields (all optional, back-compat) ────
+    valid_from_raw = raw.get("valid_from")
+    valid_until_raw = raw.get("valid_until")
+    supersedes_raw = raw.get("supersedes")
+    valid_from: str | None = (
+        valid_from_raw if isinstance(valid_from_raw, str) else None
+    )
+    valid_until: str | None = (
+        valid_until_raw if isinstance(valid_until_raw, str) else None
+    )
+    if valid_from_raw is not None and valid_from is None:
+        raise ValueError(
+            f"{src}: chunk {cid!r} valid_from must be ISO 8601 UTC string or null"
+        )
+    if valid_until_raw is not None and valid_until is None:
+        raise ValueError(
+            f"{src}: chunk {cid!r} valid_until must be ISO 8601 UTC string or null"
+        )
+    for fname, fvalue in (
+        ("valid_from", valid_from),
+        ("valid_until", valid_until),
+    ):
+        if fvalue is not None:
+            # Round-trip parse so loader rejects malformed timestamps early.
+            try:
+                _parse_iso_to_ns(fvalue, field_name=fname)
+            except ValueError as exc:
+                raise ValueError(
+                    f"{src}: chunk {cid!r} {exc}"
+                ) from exc
+    if supersedes_raw is not None and not isinstance(supersedes_raw, str):
+        raise ValueError(
+            f"{src}: chunk {cid!r} supersedes must be a string or null"
+        )
+    supersedes: str | None = (
+        supersedes_raw if isinstance(supersedes_raw, str) else None
+    )
+    if valid_from is not None and valid_until is not None:
+        from_ns = _parse_iso_to_ns(valid_from, field_name="valid_from")
+        until_ns = _parse_iso_to_ns(valid_until, field_name="valid_until")
+        if (
+            from_ns is not None and until_ns is not None
+            and until_ns <= from_ns
+        ):
+            raise ValueError(
+                f"{src}: chunk {cid!r} valid_until ({valid_until}) "
+                f"must be strictly after valid_from ({valid_from})"
+            )
+
     return RagChunk(
         id=cid,
         category=category,  # type: ignore[arg-type]
@@ -130,6 +258,9 @@ def _validate_chunk(raw: dict[str, object], src: Path) -> RagChunk:
         tags=tuple(tags_field),
         policy_rule=policy_rule,
         decision=decision,  # type: ignore[arg-type]
+        valid_from=valid_from,
+        valid_until=valid_until,
+        supersedes=supersedes,
     )
 
 
@@ -243,6 +374,7 @@ __all__: tuple[str, ...] = (
     "reset_corpus_cache",
     "render_chunks_for_prompt",
     "categories_summary",
+    "chunks_valid_at",
 )
 
 

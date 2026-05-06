@@ -18,7 +18,9 @@ import pytest
 
 from aegis.judge.rag_corpus import (
     RagChunk,
+    RagCorpus,
     categories_summary,
+    chunks_valid_at,
     default_corpus_dir,
     load_corpus,
     load_default_corpus,
@@ -255,3 +257,175 @@ class TestRender:
         assert "[playbook] Plain" in out
         assert "→" not in out
         assert "(rule:" not in out
+
+
+# ── TestValidityWindows (PR #94) ──────────────────────────────────────
+
+
+def _ns(iso: str) -> int:
+    """Test helper: ISO → nanoseconds."""
+    from datetime import datetime
+    dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    return int(dt.timestamp() * 1_000_000_000)
+
+
+class TestValidityWindows:
+    def test_chunk_with_no_window_is_always_valid(self) -> None:
+        c = RagChunk(id="x", category="rule", title="t", content="c")
+        assert c.is_valid_at(_ns("2020-01-01T00:00:00Z"))
+        assert c.is_valid_at(_ns("2030-01-01T00:00:00Z"))
+
+    def test_valid_from_is_inclusive(self) -> None:
+        c = RagChunk(
+            id="x", category="rule", title="t", content="c",
+            valid_from="2024-08-01T00:00:00Z",
+        )
+        assert not c.is_valid_at(_ns("2024-07-31T23:59:59Z"))
+        assert c.is_valid_at(_ns("2024-08-01T00:00:00Z"))      # inclusive
+        assert c.is_valid_at(_ns("2024-09-01T00:00:00Z"))
+
+    def test_valid_until_is_exclusive(self) -> None:
+        c = RagChunk(
+            id="x", category="rule", title="t", content="c",
+            valid_until="2024-08-01T00:00:00Z",
+        )
+        assert c.is_valid_at(_ns("2024-07-31T23:59:59Z"))
+        assert not c.is_valid_at(_ns("2024-08-01T00:00:00Z"))   # exclusive
+        assert not c.is_valid_at(_ns("2024-09-01T00:00:00Z"))
+
+    def test_window_both_bounds(self) -> None:
+        c = RagChunk(
+            id="x", category="rule", title="t", content="c",
+            valid_from="2024-01-01T00:00:00Z",
+            valid_until="2024-12-31T00:00:00Z",
+        )
+        assert not c.is_valid_at(_ns("2023-12-31T23:59:59Z"))
+        assert c.is_valid_at(_ns("2024-06-15T00:00:00Z"))
+        assert not c.is_valid_at(_ns("2024-12-31T00:00:00Z"))
+
+    def test_corpus_valid_at_filters_chunks(self) -> None:
+        old = RagChunk(
+            id="rule-v0", category="rule", title="v0", content="old",
+            valid_from="2024-01-01T00:00:00Z",
+            valid_until="2024-08-01T00:00:00Z",
+        )
+        new = RagChunk(
+            id="rule-v1", category="rule", title="v1", content="new",
+            valid_from="2024-08-01T00:00:00Z",
+            supersedes="rule-v0",
+        )
+        timeless = RagChunk(
+            id="rule-t", category="rule", title="t", content="timeless",
+        )
+        corpus = RagCorpus(chunks=(old, new, timeless))
+
+        # 2024-06: old + timeless are valid, new isn't yet.
+        view = corpus.valid_at(_ns("2024-06-01T00:00:00Z"))
+        assert {c.id for c in view.chunks} == {"rule-v0", "rule-t"}
+
+        # 2025-01: new + timeless are valid; old has expired.
+        view = corpus.valid_at(_ns("2025-01-01T00:00:00Z"))
+        assert {c.id for c in view.chunks} == {"rule-v1", "rule-t"}
+
+        # 2023-12: only timeless (old not in effect yet).
+        view = corpus.valid_at(_ns("2023-12-31T00:00:00Z"))
+        assert {c.id for c in view.chunks} == {"rule-t"}
+
+    def test_chunks_valid_at_module_helper(self) -> None:
+        old = RagChunk(
+            id="a", category="rule", title="t", content="c",
+            valid_until="2024-01-01T00:00:00Z",
+        )
+        live = RagChunk(id="b", category="rule", title="t", content="c")
+        out = chunks_valid_at(
+            (old, live), ts_ns=_ns("2024-06-01T00:00:00Z"),
+        )
+        assert [c.id for c in out] == ["b"]
+
+    def test_corpus_valid_at_default_now_uses_current_time(self) -> None:
+        # Future-only chunk: shouldn't show up at "now".
+        future = RagChunk(
+            id="future", category="rule", title="f", content="f",
+            valid_from="2999-01-01T00:00:00Z",
+        )
+        timeless = RagChunk(
+            id="timeless", category="rule", title="t", content="t",
+        )
+        corpus = RagCorpus(chunks=(future, timeless))
+        view = corpus.valid_at()  # default → now()
+        assert {c.id for c in view.chunks} == {"timeless"}
+
+    def test_loader_accepts_valid_window_fields(self, tmp_path: Path) -> None:
+        chunk = {
+            "id": "rule-x", "category": "rule",
+            "title": "t", "content": "c",
+            "valid_from": "2024-08-01T00:00:00Z",
+            "valid_until": "2025-08-01T00:00:00Z",
+            "supersedes": "rule-x-v0",
+        }
+        (tmp_path / "rules.jsonl").write_text(
+            json.dumps(chunk), encoding="utf-8",
+        )
+        corpus = load_corpus(tmp_path)
+        c = corpus.chunks[0]
+        assert c.valid_from == "2024-08-01T00:00:00Z"
+        assert c.valid_until == "2025-08-01T00:00:00Z"
+        assert c.supersedes == "rule-x-v0"
+
+    def test_loader_rejects_malformed_timestamp(self, tmp_path: Path) -> None:
+        chunk = {
+            "id": "rule-x", "category": "rule",
+            "title": "t", "content": "c",
+            "valid_from": "yesterday",  # not ISO 8601
+        }
+        (tmp_path / "rules.jsonl").write_text(
+            json.dumps(chunk), encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="not a valid ISO 8601"):
+            load_corpus(tmp_path)
+
+    def test_loader_rejects_naive_timestamp(self, tmp_path: Path) -> None:
+        chunk = {
+            "id": "rule-x", "category": "rule",
+            "title": "t", "content": "c",
+            "valid_from": "2024-08-01T00:00:00",   # missing tz
+        }
+        (tmp_path / "rules.jsonl").write_text(
+            json.dumps(chunk), encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="must include timezone"):
+            load_corpus(tmp_path)
+
+    def test_loader_rejects_inverted_window(self, tmp_path: Path) -> None:
+        chunk = {
+            "id": "rule-x", "category": "rule",
+            "title": "t", "content": "c",
+            "valid_from": "2024-08-01T00:00:00Z",
+            "valid_until": "2024-01-01T00:00:00Z",  # before valid_from
+        }
+        (tmp_path / "rules.jsonl").write_text(
+            json.dumps(chunk), encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="must be strictly after"):
+            load_corpus(tmp_path)
+
+    def test_loader_rejects_non_string_supersedes(self, tmp_path: Path) -> None:
+        chunk = {
+            "id": "rule-x", "category": "rule",
+            "title": "t", "content": "c",
+            "supersedes": 42,
+        }
+        (tmp_path / "rules.jsonl").write_text(
+            json.dumps(chunk), encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="supersedes"):
+            load_corpus(tmp_path)
+
+    def test_shipped_corpus_loads_under_validity_filter(self) -> None:
+        """The 38 shipped chunks have no validity windows yet — they
+        must remain visible under valid_at(now)."""
+        reset_corpus_cache()
+        corpus = load_default_corpus()
+        n_before = len(corpus.chunks)
+        view = corpus.valid_at()
+        assert len(view.chunks) == n_before
