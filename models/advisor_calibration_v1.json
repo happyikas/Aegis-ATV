@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "n_sessions": 50,
+  "extracted_at_ns": 0,
+  "extracted_from": "synthetic-default",
+  "m13_score_n": 200,
+  "m13_score_p10": 0.15,
+  "m13_score_p25": 0.25,
+  "m13_score_p50": 0.4,
+  "topic_drift_n": 200,
+  "topic_drift_p50": 0.05,
+  "topic_drift_p75": 0.2,
+  "topic_drift_p90": 0.45,
+  "topic_drift_p95": 0.7,
+  "notes": "Conservative defaults \u2014 retrain with `extract_calibration_from_audit(~/.aegis/audit.jsonl)` after the agent has accumulated >=20 sessions of audit history for personalised thresholds."
+}
