@@ -337,6 +337,34 @@ def _atmu_finalize_intent(record_id: str | None, decision: str, reason: str) -> 
             _emit(f"ATMU finalize_intent failed: {e}")
 
 
+_CALIBRATION_SINGLETON: Any = None
+
+
+def _get_calibration() -> Any:
+    """Per-process advisor-calibration singleton (v2.6 PR-ψ-calibration).
+
+    Returns ``None`` when the calibration module isn't importable, so
+    the gate can short-circuit signals 6 & 7 safely. Loaded once and
+    cached — no per-call file I/O on the hot path.
+    """
+    global _CALIBRATION_SINGLETON
+    if _CALIBRATION_SINGLETON is False:
+        return None
+    if _CALIBRATION_SINGLETON is not None:
+        return _CALIBRATION_SINGLETON
+    try:
+        from aegis.burnin.advisor_calibration import (
+            load_calibration_or_default,
+        )
+
+        c = load_calibration_or_default()
+        _CALIBRATION_SINGLETON = c if c.is_usable() else False
+        return c if c.is_usable() else None
+    except Exception:  # noqa: BLE001 — gate must never break the hook
+        _CALIBRATION_SINGLETON = False
+        return None
+
+
 def _should_invoke_advisor(
     verdict: Any, explain_block: dict[str, Any]
 ) -> tuple[bool, str]:
@@ -344,11 +372,12 @@ def _should_invoke_advisor(
 
     Uses ONLY signals already present in ``verdict`` / ``explain_block``
     (sub-microsecond cost), so the 90%+ ALLOW path skips the advisor
-    entirely. The signals are deliberately conservative: any one of them
-    means a Tier-1 / Tier-2 firewall step *already* flagged the call as
-    non-routine. Calibration-dependent signals (M13 confidence threshold,
-    session drift threshold) are left out of v1 — they need burn-in
-    calibration first.
+    entirely.
+
+    Signals 1-5 are deterministic firewall flags. Signals 6-7 are
+    calibration-driven (v2.6) — they consult the burn-in derived
+    percentile thresholds in :class:`AdvisorCalibration` and only fire
+    when the calibration is usable.
 
     Returns ``(invoked, reason)``. ``reason`` is a short tag stamped
     into ``explain.advisor_gate`` for audit / replay.
@@ -392,6 +421,32 @@ def _should_invoke_advisor(
         and "t2 default" not in low337
     ):
         return True, "HW anomaly"
+
+    # 6 + 7. Calibrated-percentile signals. Only consulted when burn-in
+    #        calibration has at least MIN_SAMPLES_FOR_CALIBRATION samples
+    #        for both metrics (otherwise thresholds are noise).
+    cal = _get_calibration()
+    if cal is not None:
+        # 6. M13 attribution-head confidence in the bottom decile of
+        #    historical baseline → "model itself flagging unusual".
+        m13_score = explain_block.get("m13_score")
+        if isinstance(m13_score, (int, float)) and m13_score < cal.m13_score_p10:
+            return (
+                True,
+                f"M13 score {float(m13_score):.2f} < burn-in p10 "
+                f"{cal.m13_score_p10:.2f}",
+            )
+
+        # 7. Session topic drift in the top 5% of historical baseline.
+        drift = explain_block.get("session_drift")
+        if isinstance(drift, dict):
+            t = drift.get("topic_drift")
+            if isinstance(t, (int, float)) and t > cal.topic_drift_p95:
+                return (
+                    True,
+                    f"session drift {float(t):.2f} > burn-in p95 "
+                    f"{cal.topic_drift_p95:.2f}",
+                )
 
     return False, "no critical signals"
 
