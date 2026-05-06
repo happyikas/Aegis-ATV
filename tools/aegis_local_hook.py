@@ -83,6 +83,55 @@ def _emit(msg: str) -> None:
     print(f"[aegis-local] {msg}", file=sys.stderr, flush=True)
 
 
+def _stderr_format_params(params: dict[str, Any]) -> str:
+    """Compact rendering of an ActionStep.parameters dict for stderr.
+    Picks the 2 most useful keys per common verb so the operator sees
+    'prune-turns indices=[-3,-2,-1] save~$0.42' not the full JSON."""
+    if not params:
+        return ""
+    # Per-verb key priority (stderr is line-bounded; show what matters).
+    keys_to_show: list[str] = []
+    if "turn_indices_rel" in params:
+        keys_to_show.append("turn_indices_rel")
+        if "saved_dollars_estimate" in params:
+            keys_to_show.append("saved_dollars_estimate")
+    elif "from_model" in params:
+        keys_to_show.extend(["from_model", "to_model"])
+    elif "from_tool" in params:
+        keys_to_show.extend(["from_tool", "to_tool"])
+    elif "turn_range" in params:
+        keys_to_show.append("turn_range")
+    elif "diagnostic_command" in params:
+        keys_to_show.append("diagnostic_command")
+    elif "clarifying_question" in params:
+        keys_to_show.append("clarifying_question")
+    elif "channel" in params:
+        keys_to_show.extend(["channel", "summary"])
+    elif "reason" in params:
+        keys_to_show.append("reason")
+    else:
+        # Fallback: show first 2 keys.
+        keys_to_show = list(params.keys())[:2]
+
+    parts: list[str] = []
+    for k in keys_to_show:
+        if k not in params:
+            continue
+        v = params[k]
+        if isinstance(v, list):
+            if len(v) <= 4:
+                rendered = "[" + ",".join(str(x) for x in v) + "]"
+            else:
+                head = ",".join(str(x) for x in v[:3])
+                rendered = f"[{head},…+{len(v) - 3}]"
+        elif isinstance(v, str):
+            rendered = v if len(v) <= 32 else v[:31] + "…"
+        else:
+            rendered = str(v)
+        parts.append(f"{k}={rendered}")
+    return " ".join(parts)
+
+
 def _build_explain_block(atv: Any, inp: Any, verdict: Any) -> dict[str, Any]:
     """Per-decision diagnostic block written into each audit record.
 
@@ -759,6 +808,10 @@ def handle_pretool(stdin: Any, stdout: Any) -> int:
         # ranked by priority. Claude Code only sees stderr, so this is
         # the user-visible "call cost-optimizer + kv-cache-optimizer +
         # security-reviewer" pattern the design targets.
+        # PR-ε (v2.8) — for each recommendation also render up to 2
+        # ActionStep verbs with their key parameters so the operator
+        # can see WHAT to do (e.g. "prune-turns indices=[-3,-2,-1]")
+        # not just WHO to call.
         recs = advice_dict.get("recommended_advisors") or []
         if isinstance(recs, list) and recs:
             order = {"high": 0, "medium": 1, "low": 2}
@@ -773,6 +826,25 @@ def handle_pretool(stdin: Any, stdout: Any) -> int:
                     name = str(r.get("advisor", ""))
                     action = str(r.get("action", ""))
                     msg += f"\n             [{pri}] {name} — {action}"
+                    steps = r.get("action_steps") or []
+                    if isinstance(steps, list):
+                        for step in steps[:2]:
+                            if not isinstance(step, dict):
+                                continue
+                            verb = str(step.get("verb", ""))
+                            params = step.get("parameters") or {}
+                            params_str = (
+                                _stderr_format_params(params)
+                                if isinstance(params, dict)
+                                else ""
+                            )
+                            impact = str(step.get("expected_impact", ""))
+                            line = f"\n               • {verb}"
+                            if params_str:
+                                line += f" {params_str}"
+                            if impact:
+                                line += f" → {impact[:80]}"
+                            msg += line
     _emit(msg)
     return 2
 

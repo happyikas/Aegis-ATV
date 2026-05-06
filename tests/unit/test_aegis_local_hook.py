@@ -577,6 +577,34 @@ def test_advisor_failure_does_not_block_tool_call(
     assert "action_advice" not in rec["explain"]
 
 
+def test_advisor_stderr_includes_action_step_verbs(
+    _isolated_audit: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """PR-ε (v2.8) — stderr must include the action_step verb + a key
+    parameter under each recommendation, so the operator sees WHAT to
+    do (e.g. 'require-approval reason=...') not just WHO to call."""
+    monkeypatch.setattr(aegis_local_hook, "ADVISOR_ENABLED", True)
+    rc, _, _ = _run(
+        {
+            "hook_event_name": "PreToolUse",
+            "session_id": "sess-stderr-steps",
+            "tool_name": "Bash",
+            "tool_input": {"command": "git push --force origin main"},
+        }
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    # The destructive BLOCK should produce a security-reviewer
+    # recommendation whose action_step is `require-approval`.
+    assert "advise:" in err
+    assert "security-reviewer" in err
+    assert "require-approval" in err  # PR-δ heuristic step
+    # The step parameters should also surface.
+    assert "reason=" in err
+
+
 def test_advisor_stderr_includes_advisor_recommendations(
     _isolated_audit: Path,
     monkeypatch: pytest.MonkeyPatch,
