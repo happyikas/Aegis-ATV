@@ -30,7 +30,7 @@ from .runner import _build_cases, run_case, setup_environment
 _REPO = Path(__file__).resolve().parents[2]
 _DEFAULT_REPORT = _REPO / "docs" / "MACMINI_VALIDATION_REPORT.md"
 
-_VALID = ("cost", "performance", "security", "all")
+_VALID = ("cost", "performance", "security", "rag", "all")
 
 
 def _parse(argv: list[str]) -> argparse.Namespace:

@@ -182,11 +182,57 @@ def _run_unit(case: TestCase) -> dict[str, Any]:
     }
 
 
+def _run_rag(case: TestCase) -> dict[str, Any]:
+    """Drive a RAG retrieval case. Honours case.rag_enabled to test
+    the off-path. Always uses dummy embedding for determinism — the
+    cases assert structural invariants, not semantic ranking."""
+    from aegis.atv.embeddings import DummyEmbedding
+    from aegis.config import settings
+    from aegis.judge.rag_corpus import reset_corpus_cache
+    from aegis.judge.rag_retrieval import (
+        build_default_index,
+        reset_index_cache,
+        retrieve,
+    )
+
+    object.__setattr__(settings, "aegis_rag_enabled", case.rag_enabled)
+    reset_corpus_cache()
+    reset_index_cache()
+
+    if not case.rag_enabled:
+        return {
+            "n_retrieved": 0,
+            "chunk_ids": [],
+            "categories": [],
+            "rendered": "",
+            "decision": None,
+            "advisors": [],
+        }
+
+    index = build_default_index()
+    hits = retrieve(
+        case.rag_query, k=case.rag_top_k, index=index,
+        provider=DummyEmbedding(),
+    )
+    chunks = [c for c, _ in hits]
+    return {
+        "n_retrieved": len(chunks),
+        "chunk_ids": [c.id for c in chunks],
+        "categories": [c.category for c in chunks],
+        "rendered": "\n\n".join(c.render_for_prompt() for c in chunks),
+        "decision": None,
+        "advisors": [],
+    }
+
+
 def run_case(case: TestCase) -> TestResult:
     t0 = time.perf_counter()
-    observed = (
-        _run_e2e(case) if case.test_type == "e2e" else _run_unit(case)
-    )
+    if case.test_type == "rag":
+        observed = _run_rag(case)
+    elif case.test_type == "e2e":
+        observed = _run_e2e(case)
+    else:
+        observed = _run_unit(case)
     duration_ms = (time.perf_counter() - t0) * 1000.0
     passed, miss = check(case, observed)
     return TestResult(
@@ -212,14 +258,18 @@ def _build_cases(category: str) -> list[TestCase]:
     if category == "security":
         from .security import cases
         return cases()
+    if category == "rag":
+        from .rag import cases
+        return cases()
     if category == "all":
         from .cost import cases as cc
         from .performance import cases as pc
+        from .rag import cases as rc
         from .security import cases as sc
-        return [*cc(), *pc(), *sc()]
+        return [*cc(), *pc(), *sc(), *rc()]
     raise ValueError(
         f"unknown category {category!r}; expected "
-        "cost / performance / security / all"
+        "cost / performance / security / rag / all"
     )
 
 
