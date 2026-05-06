@@ -54,6 +54,11 @@ VERBOSE = os.environ.get("AEGIS_HOOK_VERBOSE", "0") == "1"
 # (with ANTHROPIC_API_KEY) or leave default for the deterministic
 # heuristic advisor.
 ADVISOR_ENABLED = os.environ.get("AEGIS_ADVISOR_ENABLED", "0") == "1"
+# v2.5.1 PR-ψ-gating — advisor only fires on "critical moments" so the
+# expensive 4-layer pipeline + (optional) sLLM call doesn't run on every
+# innocuous Read. ``AEGIS_ADVISOR_ALWAYS=1`` bypasses the gate (useful
+# for burn-in collection or debugging).
+ADVISOR_ALWAYS = os.environ.get("AEGIS_ADVISOR_ALWAYS", "0") == "1"
 # Model the host is actually serving — feeds the cost FLOPS table so
 # CostEfficiencyMetrics.cumulative_dollars and step335 budget gate
 # evaluate against the right $/token. Override per-deployment.
@@ -332,6 +337,65 @@ def _atmu_finalize_intent(record_id: str | None, decision: str, reason: str) -> 
             _emit(f"ATMU finalize_intent failed: {e}")
 
 
+def _should_invoke_advisor(
+    verdict: Any, explain_block: dict[str, Any]
+) -> tuple[bool, str]:
+    """Tier-3 gate — decide whether the advisor pipeline should run.
+
+    Uses ONLY signals already present in ``verdict`` / ``explain_block``
+    (sub-microsecond cost), so the 90%+ ALLOW path skips the advisor
+    entirely. The signals are deliberately conservative: any one of them
+    means a Tier-1 / Tier-2 firewall step *already* flagged the call as
+    non-routine. Calibration-dependent signals (M13 confidence threshold,
+    session drift threshold) are left out of v1 — they need burn-in
+    calibration first.
+
+    Returns ``(invoked, reason)``. ``reason`` is a short tag stamped
+    into ``explain.advisor_gate`` for audit / replay.
+    """
+    if ADVISOR_ALWAYS:
+        return True, "AEGIS_ADVISOR_ALWAYS=1"
+
+    # 1. Non-ALLOW verdict — most common gate trigger. Catches M12
+    #    escalation (which rewrites verdict.decision to REQUIRE_APPROVAL),
+    #    step336 loop detector REQUIRE_APPROVAL, all step310/311 BLOCKs.
+    decision = getattr(verdict, "decision", "ALLOW")
+    if decision != "ALLOW":
+        return True, f"verdict={decision}"
+
+    traces = explain_block.get("step_traces") or {}
+    if not isinstance(traces, dict):
+        traces = {}
+
+    # 2. M12 cost-divergence escalation trace present (defensive — should
+    #    have flipped verdict, but we cover the case where it didn't).
+    if "aegis.cost.escalation" in traces:
+        return True, "cost-divergence escalation"
+
+    # 3. step336 loop / redundancy hint (even when not yet REQUIRE_APPROVAL).
+    s336 = str(traces.get("aegis.firewall.step336_loop_detector.run", ""))
+    low336 = s336.lower()
+    if "loop" in low336 or "redundant" in low336:
+        return True, "loop/redundancy signal"
+
+    # 4. step335 budget warning (cumulative dollars approaching limit).
+    s335 = str(traces.get("aegis.firewall.step335_cost.run", ""))
+    if "warn" in s335.lower():
+        return True, "cost approaching limit"
+
+    # 5. step337 HW anomaly with populated band (skip the "T2 default"
+    #    zero-fill case so we don't fire when AEGIS_HW_PROVIDER is unset).
+    s337 = str(traces.get("aegis.firewall.step337_hw_anomaly.run", ""))
+    low337 = s337.lower()
+    if (
+        ("anomaly" in low337 or "alert" in low337)
+        and "t2 default" not in low337
+    ):
+        return True, "HW anomaly"
+
+    return False, "no critical signals"
+
+
 def _compute_action_advice(
     *,
     inp: Any,
@@ -530,21 +594,29 @@ def handle_pretool(stdin: Any, stdout: Any) -> int:
         explain_block["intent_record_id"] = intent_record_id
 
     # v2.5 PR-ζ-head — opt-in ActionAdvice (heuristic by default; haiku
-    # with AEGIS_ADVISOR_PROVIDER=haiku). Stamped into the audit record
-    # so `aegis report` / replay tooling can surface the advisor's
-    # next-action hint alongside the firewall verdict.
-    transcript_path_raw = event.get("transcript_path") or ""
-    transcript_path = (
-        Path(transcript_path_raw) if transcript_path_raw else None
-    )
-    advice_dict = _compute_action_advice(
-        inp=inp,
-        verdict=verdict,
-        tool_name=event.get("tool_name", "") or inp.tool_name,
-        transcript_path=transcript_path,
-    )
-    if advice_dict is not None:
-        explain_block["action_advice"] = advice_dict
+    # with AEGIS_ADVISOR_PROVIDER=haiku). v2.5.1 PR-ψ-gating ensures the
+    # advisor only fires on "critical moments" so the 4-layer pipeline
+    # and (optional) sLLM call don't run on every innocuous ALLOW.
+    advice_dict: dict[str, Any] | None = None
+    if ADVISOR_ENABLED:
+        invoked, gate_reason = _should_invoke_advisor(verdict, explain_block)
+        explain_block["advisor_gate"] = {
+            "invoked": invoked,
+            "reason": gate_reason,
+        }
+        if invoked:
+            transcript_path_raw = event.get("transcript_path") or ""
+            transcript_path = (
+                Path(transcript_path_raw) if transcript_path_raw else None
+            )
+            advice_dict = _compute_action_advice(
+                inp=inp,
+                verdict=verdict,
+                tool_name=event.get("tool_name", "") or inp.tool_name,
+                transcript_path=transcript_path,
+            )
+            if advice_dict is not None:
+                explain_block["action_advice"] = advice_dict
 
     _append_audit(
         {

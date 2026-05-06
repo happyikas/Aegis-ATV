@@ -1,9 +1,9 @@
-# AegisData v2.5 사용자 매뉴얼 — ActionAdvice (PR-ζ-head)
+# AegisData v2.5 사용자 매뉴얼 — ActionAdvice (PR-ζ-head + PR-ψ-gating)
 
 **대상:** Claude Code (local 모드) 사용자
 **최종 갱신:** 2026-05-05
-**버전:** v2.5 — sLLM-backed Advisor (Phase C)
-**한 줄:** "방화벽이 *왜* 막았는지뿐 아니라 *다음에 무엇을 해야 하는지*까지 추천해 준다."
+**버전:** v2.5.1 — sLLM-backed Advisor + Critical-Moment Gating (Phase C)
+**한 줄:** "방화벽이 *중요한 순간에만* sLLM 을 불러서 *다음에 무엇을 해야 하는지*를 알려준다."
 
 이 문서는 v2.2 must-install 매뉴얼([MANUAL_v2.2.md](MANUAL_v2.2.md))을 이미 읽었거나
 설치를 완료한 사용자를 위한 **증분 매뉴얼**입니다. v2.5 는 v2.2 / v2.3 / v2.4 surface
@@ -17,12 +17,13 @@
 1. [한 줄 요약](#한-줄-요약)
 2. [Phase A → C 전체 그림](#phase-a--c-전체-그림)
 3. [ActionAdvice 가 무엇인가](#actionadvice-가-무엇인가)
-4. [켜는 법 — 환경 변수 두 개](#켜는-법--환경-변수-두-개)
-5. [Claude Code 에서 직접 검증하기 — 7 가지 시나리오](#claude-code-에서-직접-검증하기--7-가지-시나리오)
-6. [출력 해석 — 감사 로그와 stderr](#출력-해석--감사-로그와-stderr)
-7. [내부 동작 — 4-layer narrative → sLLM](#내부-동작--4-layer-narrative--sllm)
-8. [트러블슈팅](#트러블슈팅)
-9. [FAQ](#faq)
+4. [Critical-Moment Gating (v2.5.1)](#critical-moment-gating-v251)
+5. [켜는 법 — 환경 변수 두 개](#켜는-법--환경-변수-두-개)
+6. [Claude Code 에서 직접 검증하기 — 7 가지 시나리오](#claude-code-에서-직접-검증하기--7-가지-시나리오)
+7. [출력 해석 — 감사 로그와 stderr](#출력-해석--감사-로그와-stderr)
+8. [내부 동작 — 4-layer narrative → sLLM](#내부-동작--4-layer-narrative--sllm)
+9. [트러블슈팅](#트러블슈팅)
+10. [FAQ](#faq)
 
 ---
 
@@ -95,6 +96,78 @@ ALLOW / BLOCK / REQUIRE_APPROVAL 세 가지 동기 verdict 옆에,
 - verdict 는 "막았다 / 통과시켰다" 의 이진 출력입니다.
 - 사용자(또는 Claude 본인)는 *왜* 막혔는지뿐 아니라 *지금 다음 무엇을 해야 하는지*도 필요합니다.
 - ActionAdvice 는 두 번째 질문에 답합니다.
+
+---
+
+## Critical-Moment Gating (v2.5.1)
+
+**왜 게이팅이 있나?** sLLM 의 강점은 "여러 신호를 종합" 이지 "매번 ALLOW/BLOCK 도장 찍기" 가 아닙니다. routine ALLOW 마다 4-layer 파이프라인 + (선택적으로) Haiku 호출을 돌리면 비용·latency 만 올라가고 모델은 deterministic 룰과 같은 verdict 만 반복합니다. 그래서 v2.5.1 부터는 advisor 가 **"critical moment"** 에서만 발동하도록 게이트가 들어갔습니다.
+
+### 게이트 동작 — 5 가지 신호 중 하나라도 켜지면 advisor 호출
+
+게이트는 PreToolUse 훅이 *이미* 계산한 신호만 봅니다 (sub-microsecond). 추가 파이프라인 작업 없음.
+
+| 번호 | 신호 | 트리거 조건 |
+|---|---|---|
+| 1 | `verdict.decision != "ALLOW"` | BLOCK / REQUIRE_APPROVAL / DEFER. M12 escalation 도 여기서 잡힘 |
+| 2 | `aegis.cost.escalation` trace 존재 | M12 cost-divergence (defensive — 1번이 못 잡았을 때) |
+| 3 | step336 trace 에 `loop` / `redundant` | 동일 호출 ≥3회 또는 read-only 중복 |
+| 4 | step335 trace 에 `warn` | 누적 비용이 한도 근접 |
+| 5 | step337 trace 에 `anomaly` 또는 `alert` (T2 default 제외) | HW 이상치 (`AEGIS_HW_PROVIDER=sim` / `real` 일 때만) |
+
+이 중 어느 하나가 만족되면 **invoked: true**, 만족 안 되면 **invoked: false** 로 audit 에 기록됩니다.
+
+### 게이트 출력 — `explain.advisor_gate`
+
+advisor 가 **켜져 있으면**, audit 의 모든 PreToolUse 라인에 다음 블록이 추가됩니다:
+
+```jsonc
+"explain": {
+  "advisor_gate": {
+    "invoked": false,
+    "reason": "no critical signals"        // routine ALLOW
+  }
+  // ↑ action_advice 키는 invoked: true 일 때만 추가됨
+}
+```
+
+호출된 경우:
+
+```jsonc
+"explain": {
+  "advisor_gate": {
+    "invoked": true,
+    "reason": "verdict=REQUIRE_APPROVAL"   // 또는 "loop/redundancy signal" 등
+  },
+  "action_advice": { ... }                  // 4-layer narrative 통과한 결과
+}
+```
+
+### 비용·latency 영향
+
+| 시나리오 | v2.5.0 (gate 없음) | v2.5.1 (gate) |
+|---|---|---|
+| Routine ALLOW (대부분) | advisor 풀 실행 ~5 ms (heuristic) / ~150 ms (haiku) | gate 평가만 ~0.01 ms |
+| Critical moment (~5-10%) | 동일 | 동일 (gate 통과 후 풀 실행) |
+| **시간당 호출 100 회 가정 Haiku 모드 비용** | **$0.03** | **~$0.003** (1/10) |
+
+게이트 통과한 호출만 4-layer 파이프라인을 도므로 transcript / audit JSONL I/O 도 그만큼 줄어듭니다.
+
+### 게이트 끄기 — `AEGIS_ADVISOR_ALWAYS=1`
+
+burn-in 데이터 수집이나 디버깅 시 게이트를 우회하고 매 호출마다 advisor 를 돌리고 싶다면:
+
+```bash
+AEGIS_ADVISOR_ENABLED=1 \
+AEGIS_ADVISOR_ALWAYS=1 \
+... (기존 환경) ...
+```
+
+이 경우 `advisor_gate.reason == "AEGIS_ADVISOR_ALWAYS=1"` 로 audit 에 기록되어 나중에 gate-bypass 로 수집된 advice 를 식별할 수 있습니다.
+
+### 왜 M13 confidence / session_drift 는 게이트에 없나?
+
+calibration 이슈입니다. M13 attribution head 의 confidence 는 routine ALLOW 에서도 자연스럽게 0.3-0.5 가 나오는 분포라, "낮으면 critical" 이라는 룰을 그대로 쓰면 false positive 가 너무 많습니다. session_drift 도 마찬가지로 burn-in 학습 전에는 임계값이 의미 없습니다. 두 신호는 burn-in 데이터로 임계값을 학습한 후 v2.6 에서 게이트에 추가될 예정입니다.
 
 ---
 
@@ -172,20 +245,26 @@ uv run aegis install --mode local
 각 시나리오는 (1) Claude Code 안에서 어떤 요청을 하는지, (2) 어떤 verdict
 와 advice 를 기대하는지, (3) 어디서 확인할 수 있는지를 알려줍니다.
 
-### 시나리오 1 — 무해한 Read (ALLOW + 추천 없음)
+### 시나리오 1 — 무해한 Read (게이트 skip → advice 없음)
 
 **Claude 에 요청:**
 > "현재 디렉터리의 README.md 첫 30줄만 읽어줘"
 
-**기대:**
+**기대 (v2.5.1 gate 후):**
 - exit 0 (ALLOW)
-- `~/.aegis/audit.jsonl` 마지막 줄의 `explain.action_advice.decision == "ALLOW"`
-- `next_action_hint == null` (이상이 없으므로 hint 없음)
+- 게이트 신호 0개 → `explain.advisor_gate.invoked == false`, `reason == "no critical signals"`
+- `explain.action_advice` 키는 **없음** — 4-layer 파이프라인 자체가 안 돌았음
 
 **확인:**
 ```bash
-tail -1 ~/.aegis/audit.jsonl | jq '.explain.action_advice'
+tail -1 ~/.aegis/audit.jsonl | jq '.explain | {gate: .advisor_gate, advice_present: (.action_advice != null)}'
+# {
+#   "gate": { "invoked": false, "reason": "no critical signals" },
+#   "advice_present": false
+# }
 ```
+
+advisor 동작을 강제로 보고 싶으면 `AEGIS_ADVISOR_ALWAYS=1` 로 게이트 우회.
 
 ### 시나리오 2 — 차단된 destructive Bash (BLOCK + reason)
 
@@ -515,8 +594,9 @@ A. ALLOW 시에는 hint/alt 가 stderr 에 나가지 않습니다. REQUIRE_APPRO
 
 | 변수 | 기본값 | 의미 |
 |---|---|---|
-| `AEGIS_ADVISOR_ENABLED` | (미설정 / 0) | `1` 로 설정 시 advisor 활성. `explain.action_advice` 가 audit 에 추가 |
+| `AEGIS_ADVISOR_ENABLED` | (미설정 / 0) | `1` 로 설정 시 advisor 활성. `explain.advisor_gate` + (게이트 통과 시) `explain.action_advice` 가 audit 에 추가 |
 | `AEGIS_ADVISOR_PROVIDER` | `dummy` | `dummy` (heuristic) 또는 `haiku` (sLLM) |
+| `AEGIS_ADVISOR_ALWAYS` | (미설정 / 0) | `1` → critical-moment 게이트 우회. 매 호출마다 advisor 실행 (burn-in / 디버그용) |
 | `ANTHROPIC_API_KEY` | (미설정) | `haiku` 모드에서 필수. 없으면 자동 dummy fallback |
 | `AEGIS_HOOK_VERBOSE` | `0` | `1` → ALLOW 도 stderr 출력 + advisor 실패 사유 출력 |
 
