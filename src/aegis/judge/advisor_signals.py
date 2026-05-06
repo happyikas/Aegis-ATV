@@ -266,6 +266,16 @@ def extract_security_signals(
             out["destructive_path_match"] = True
             out["policy_rule"] = rule
             break
+    else:
+        # step310 emits "dangerous pattern: <regex>" for the
+        # destructive shell-pattern matcher. These are destructive
+        # even without a `rule:` prefix, so flag them so the
+        # security-reviewer recommendation fires.
+        if "dangerous pattern" in reason.lower():
+            out["destructive_path_match"] = True
+            after = reason.lower().split("dangerous pattern", 1)[1]
+            tag = after.lstrip(": ").split()[0] if after else "shell"
+            out["policy_rule"] = f"dangerous_pattern:{tag[:40]}"
 
     s320 = str(traces.get("aegis.firewall.step320_blast.run", ""))
     if "high" in s320.lower():
