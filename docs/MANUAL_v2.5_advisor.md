@@ -702,6 +702,94 @@ A. ALLOW 시에는 hint/alt 가 stderr 에 나가지 않습니다. REQUIRE_APPRO
 
 ---
 
+## Calibration Feedback Loop (v2.7.2 Phase D)
+
+v2.7.2 부터 advisor 의 calibration 임계값을 **누적된 retrospective 데이터로 자동 재학습**할 수 있습니다.
+
+### 흐름
+
+```
+사용 (수일~수주)
+  ↓
+~/.aegis/audit.jsonl 에 PreToolUse + PostToolUse 누적
+  ↓
+aegis advisor-calibration analyse        ← per-signal 정확도 출력
+aegis advisor-calibration recommend      ← 새 임계값 제안 (dry-run)
+aegis advisor-calibration apply          ← models/advisor_calibration_v1.json 갱신
+```
+
+### 동작
+
+1. **Per-signal accuracy 집계**: 각 PostToolUse retrospective 의 `accuracy` 를 PreToolUse 의 `advisor_gate.reason` 과 매칭하여 signal 별로 집계.
+   - `verdict_non_allow` (BLOCK/REQUIRE_APPROVAL/DEFER)
+   - `m12_cost_divergence`, `step336_loop`, `step335_budget`, `step337_hw_anomaly`
+   - `m13_low_calibrated`, `drift_high_calibrated` (Phase D 가 추적 핵심)
+   - 각 signal 에 대해 `n_fired / n_accurate / n_false_alarm / precision` 계산.
+
+2. **Percentile 재추출**: 같은 audit 에서 `m13_score` / `topic_drift` 분포를 다시 뽑아 새 percentile 을 계산. 사용자의 실제 traffic 에 맞춰 자연 적응.
+
+3. **Apply**: `models/advisor_calibration_v1.json` 을 새 percentile 로 덮어씀. 다음 advisor 호출부터 이 임계값 적용.
+
+### 출력 예시
+
+```
+$ aegis advisor-calibration analyse --audit ~/.aegis/audit.jsonl
+
+AdvisorCalibration Feedback Report
+  audit:                 ~/.aegis/audit.jsonl
+  PreToolUse records:    1450
+  PostToolUse records:   1448
+  with retrospective:    1428
+
+Overall accuracy:
+  accurate           320
+  missed_signal       12
+  false_alarm         48
+  not_applicable    1048
+
+Per-signal accuracy:
+  signal                   fired  acc  fa  missed  na  precision
+  m12_cost_divergence          7    7   0       0   0  1.00
+  m13_low_calibrated          82   58  20       4   0  0.74  ← 정확도 양호
+  drift_high_calibrated       18    8   9       1   0  0.47  ← false alarm 비율 높음
+  step336_loop                42   38   2       2   0  0.95
+  step337_hw_anomaly           3    2   1       0   0  0.67
+  verdict_non_allow          228  207  16       5   0  0.93
+
+Calibration status:
+  current:     m13_p10=0.150  drift_p95=0.700  (extracted_from=synthetic-default)
+  recommended: m13_p10=0.087  drift_p95=0.823  (n_sessions=87)  ← CHANGED
+
+Notes:
+  (none — calibration usable, recommendation ready to apply)
+```
+
+위 예시에서 `drift_high_calibrated` 의 precision 이 0.47 (false alarm 너무 많음) 이므로, percentile 을 재추출해 0.700 → 0.823 으로 조정. `apply` 하면 다음 호출부터 임계값이 더 보수적이 되어 false alarm 이 줄어듭니다.
+
+### v2.8 예정
+
+현재 Phase D 는 percentile 자체를 재추출만 합니다. v2.8 에서는 **어느 percentile 을 trigger 로 쓸지** 도 자동 조정 (예: false alarm 이 많은 signal 은 p10 대신 p5 사용). 현재는 사용자가 결과를 보고 수동으로 `apply` 하는 인간-루프 모드가 default — 잘못된 자동 조정으로 advisor 가 무력화되는 위험을 막습니다.
+
+### 환경 변수
+
+이 기능은 별도 env 가 필요 없습니다. CLI 만으로 작동:
+
+```bash
+# 분석만
+aegis advisor-calibration analyse
+
+# 새 임계값 미리 보기
+aegis advisor-calibration recommend
+
+# 적용
+aegis advisor-calibration apply
+
+# 다른 audit 파일 분석
+aegis advisor-calibration analyse --audit /path/to/team-audit.jsonl
+```
+
+---
+
 ## 부록 — 환경 변수 한 줄 요약
 
 | 변수 | 기본값 | 의미 |

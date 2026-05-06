@@ -2507,6 +2507,66 @@ def _print_pull_next_steps(target: Path, spec: object | None = None) -> None:
         print("       ./scripts/dogfood_check.sh --judge local-phi")
 
 
+def cmd_advisor_calibration(args: argparse.Namespace) -> int:
+    """v2.7.2 Phase D — feedback-driven advisor-gate retraining.
+
+    Reads ``audit.jsonl``, computes per-signal accuracy from accumulated
+    PostToolUse retrospectives, and optionally writes an updated
+    calibration JSON. Three actions:
+
+    * ``analyse``   — print accuracy stats only.
+    * ``recommend`` — also print proposed new thresholds (dry-run).
+    * ``apply``     — persist the new thresholds to disk.
+    """
+    from pathlib import Path as PathT
+
+    from aegis.burnin.calibration_feedback import (
+        analyse_audit,
+        apply_recommended_calibration,
+        render_feedback_report,
+    )
+
+    audit_path = PathT(
+        args.audit
+        or os.environ.get(
+            "AEGIS_LOCAL_AUDIT", str(PathT.home() / ".aegis" / "audit.jsonl")
+        )
+    )
+    if not audit_path.is_file():
+        print(f"audit not found: {audit_path}", file=sys.stderr)
+        return 1
+
+    report = analyse_audit(audit_path)
+    print(render_feedback_report(report))
+
+    if args.action == "analyse":
+        return 0
+
+    if args.action == "recommend":
+        if report.recommended_calibration is None:
+            print(
+                "\nNo recommendation — see Notes above.", file=sys.stderr
+            )
+            return 0
+        if not report.calibration_changed:
+            print("\nRecommended calibration is identical to current.")
+            return 0
+        print("\n→ run `aegis advisor-calibration apply` to persist.")
+        return 0
+
+    # action == "apply"
+    if report.recommended_calibration is None:
+        print("\nNothing to apply — see Notes above.", file=sys.stderr)
+        return 1
+    output = PathT(args.output) if args.output else None
+    written = apply_recommended_calibration(report, output_path=output)
+    if written is None:
+        print("\nNothing to apply.", file=sys.stderr)
+        return 1
+    print(f"\n✓ wrote new calibration to {written}")
+    return 0
+
+
 def cmd_burnin(args: argparse.Namespace) -> int:
     # train-m13 / compare-m13 / shadow-status have zero dependency on the
     # legacy burnin.retrain module (which is a sidecar-only port).
@@ -3715,6 +3775,44 @@ def build_parser() -> argparse.ArgumentParser:
         help="(shadow-status) shadow JSONL path (default: $AEGIS_SHADOW_LOG or ~/.aegis/shadow.jsonl)",
     )
     bn.set_defaults(fn=cmd_burnin)
+
+    # v2.7.2 Phase D — calibration feedback loop. Walks the local
+    # audit.jsonl, reports per-signal accuracy from accumulated
+    # PostToolUse retrospectives, and (with --apply) recomputes the
+    # M13 / session-drift percentile thresholds for the gate.
+    ac = sub.add_parser(
+        "advisor-calibration",
+        help=(
+            "Inspect / retrain the advisor-gate calibration "
+            "(M13 confidence + session_drift percentile thresholds) "
+            "from accumulated audit retrospectives (Phase D)."
+        ),
+    )
+    ac.add_argument(
+        "action",
+        choices=["analyse", "recommend", "apply"],
+        help=(
+            "analyse: print per-signal accuracy from audit. "
+            "recommend: also print proposed new thresholds (dry-run). "
+            "apply: persist the recommended calibration to "
+            "models/advisor_calibration_v1.json."
+        ),
+    )
+    ac.add_argument(
+        "--audit", default=None,
+        help=(
+            "audit.jsonl path "
+            "(default: $AEGIS_LOCAL_AUDIT or ~/.aegis/audit.jsonl)"
+        ),
+    )
+    ac.add_argument(
+        "--output", default=None,
+        help=(
+            "(apply) where to write the new calibration JSON "
+            "(default: models/advisor_calibration_v1.json)"
+        ),
+    )
+    ac.set_defaults(fn=cmd_advisor_calibration)
 
     cm = sub.add_parser(
         "case-memory",
