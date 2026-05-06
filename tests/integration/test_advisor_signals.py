@@ -217,6 +217,21 @@ class TestCacheRender:
 
 
 class TestSecurityExtract:
+    def test_dangerous_pattern_in_reason_flags_match(self) -> None:
+        """v2.7.3 — step310 emits ``dangerous pattern: <regex>`` for
+        the destructive shell-pattern matcher (rm -rf, sql destructive,
+        etc.). These are destructive even though they don't carry a
+        ``rule:`` prefix."""
+        v = _FakeVerdict(
+            decision="BLOCK",
+            reason=r"dangerous pattern: \brm\s+-rf\s+/",
+        )
+        d = extract_security_signals(
+            inp=_FakeInp(cost_estimate=_FakeCostEstimate()), verdict=v,
+        )
+        assert d["destructive_path_match"] is True
+        assert d["policy_rule"].startswith("dangerous_pattern:")
+
     def test_destructive_rule_in_reason_flags_match(self) -> None:
         v = _FakeVerdict(
             decision="BLOCK",
