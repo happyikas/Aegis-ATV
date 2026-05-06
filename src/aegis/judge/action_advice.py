@@ -75,15 +75,111 @@ DomainAdvisor = Literal[
 Priority = Literal["high", "medium", "low"]
 
 
+# v2.8 PR-α — closed catalog of executable verbs for ``ActionStep``.
+# Each verb is a structured action the operator (or downstream
+# automation) can actually perform. Adding a new verb is a deliberate
+# schema change: extend this Literal AND update _VERB_PARAM_KEYS so
+# defensive parsing accepts it.
+ActionVerb = Literal[
+    # Cost / context shaping
+    "prune-turns",          # drop specific past turns to recover budget / cache
+    "summarize-window",     # collapse a span of turns into a summary
+    "swap-model",           # switch to a cheaper model for the remainder
+    "end-session",          # graceful session termination
+    # Tool / flow shaping
+    "swap-tool",            # use a different tool with semantic similarity
+    "narrow-scope",         # tighten the args of the current call
+    "clarify-intent",       # ask the user a clarifying question
+    # Diagnostic / verification
+    "run-diagnostic",       # execute a diagnostic command (e.g. pytest)
+    "verify-state",         # check an invariant before continuing
+    # Human-in-the-loop
+    "notify-operator",      # ping a channel; non-blocking
+    "require-approval",     # blocking — wait for human ACK
+]
+
+
+# Per-verb required parameter keys. Defensive parser drops any step
+# whose ``parameters`` dict is missing required keys, so a sLLM
+# hallucinating "swap-model with no model name" can't pollute the
+# audit chain. Lists here are required-keys-only; extra keys are
+# allowed (forward compat).
+_VERB_PARAM_KEYS: dict[str, frozenset[str]] = {
+    "prune-turns": frozenset({"turn_indices_rel"}),
+    "summarize-window": frozenset({"turn_range"}),
+    "swap-model": frozenset({"from_model", "to_model"}),
+    "end-session": frozenset(),
+    "swap-tool": frozenset({"from_tool", "to_tool"}),
+    "narrow-scope": frozenset({"original_args", "suggested_args"}),
+    "clarify-intent": frozenset({"clarifying_question"}),
+    "run-diagnostic": frozenset({"diagnostic_command"}),
+    "verify-state": frozenset({"check"}),
+    "notify-operator": frozenset({"channel", "summary"}),
+    "require-approval": frozenset({"reason"}),
+}
+
+_ALLOWED_VERBS: frozenset[str] = frozenset(_VERB_PARAM_KEYS)
+
+
 # Heuristic version — bump on any rule change so audit can pin
-# advices to a specific composer revision.
-_HEURISTIC_VERSION = "compose_advice_heuristic_v2_multi_domain"
+# advices to a specific composer revision. v3 adds action_steps.
+_HEURISTIC_VERSION = "compose_advice_heuristic_v3_action_steps"
 _HEURISTIC_HASH = hashlib.sha3_256(_HEURISTIC_VERSION.encode()).hexdigest()
 
 
 # ──────────────────────────────────────────────────────────────────────
 # The schema
 # ──────────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ActionStep:
+    """One executable step the operator (or downstream automation) can
+    perform. Introduced in v2.8 PR-α to give Tier 3 sLLM-driven advice
+    a structured, machine-readable surface beyond the free-text
+    ``action`` field.
+
+    Fields
+    ------
+    verb:
+        One of :data:`ActionVerb` — closed catalog so the operator UI,
+        downstream automation, and audit replay can depend on the set.
+    parameters:
+        verb-specific dict of concrete values (turn indices, model
+        names, file paths, tokens-saved estimates, etc.). Required
+        keys are enforced by ``_VERB_PARAM_KEYS``; extra keys allowed.
+    expected_impact:
+        Quantitative outcome string (e.g. "saves ~$0.42; reduces
+        ratio 1.50 → 1.18"). Bounded to 256 chars in JSON I/O.
+    confidence:
+        Self-reported in [0, 1]. The operator UI may show different
+        affordances for low-confidence steps.
+    cited_signals:
+        Names of the COST / CACHE / SECURITY / TEMPORAL signals that
+        directly support this step. Audit traceability + dashboard
+        drill-through.
+
+    Why a closed verb catalog
+    -------------------------
+    sLLM hallucinations like "do-magic-fix" would otherwise pollute
+    the audit chain. The defensive parser drops any step whose verb
+    isn't in the catalog. This makes Tier 3 advisors usable with raw
+    Haiku 4.5 (no fine-tuning) — the schema constrains the freedom.
+    """
+
+    verb: ActionVerb
+    parameters: dict[str, Any]
+    expected_impact: str = ""
+    confidence: float = 0.5
+    cited_signals: tuple[str, ...] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        if self.confidence < 0.0 or self.confidence > 1.0:
+            object.__setattr__(
+                self,
+                "confidence",
+                float(min(1.0, max(0.0, self.confidence))),
+            )
 
 
 @dataclass(frozen=True)
@@ -104,13 +200,20 @@ class AdvisorRecommendation:
         ``high`` / ``medium`` / ``low``. ``high`` means must address
         before continuing; ``low`` is informational.
     action:
-        One-sentence imperative — what the advisor should do.
+        One-sentence imperative — what the advisor should do (legacy
+        free-text surface; kept for stderr / dashboards).
     reasoning:
         Short explanation grounding the recommendation in cited
         signals. Bounded to 256 chars in JSON I/O.
     cited_signals:
         Names of the COST / KV CACHE / SECURITY metrics (or anomaly
         tags) that triggered this recommendation. Audit traceability.
+    action_steps:
+        v2.8 PR-α — structured executable steps. Empty tuple when the
+        advisor has nothing to suggest beyond ``action`` (e.g. older
+        records or heuristic-only paths that haven't yet been extended
+        to emit steps). Tier 3 sLLM advice typically populates this
+        with 1-3 steps.
     """
 
     advisor: DomainAdvisor
@@ -118,6 +221,7 @@ class AdvisorRecommendation:
     action: str
     reasoning: str = ""
     cited_signals: tuple[str, ...] = field(default_factory=tuple)
+    action_steps: tuple[ActionStep, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -656,6 +760,19 @@ def compose_advice_heuristic(
 # ──────────────────────────────────────────────────────────────────────
 
 
+def _truncate_repr(value: Any, max_len: int = 40) -> str:
+    """Compact, terminal-safe value representation for rendering
+    ``ActionStep.parameters``. Long lists / strings get cut with `…`."""
+    if isinstance(value, str):
+        return value if len(value) <= max_len else value[:max_len - 1] + "…"
+    if isinstance(value, list):
+        if len(value) <= 6:
+            return "[" + ", ".join(repr(x) for x in value) + "]"
+        head = ", ".join(repr(x) for x in value[:5])
+        return f"[{head}, …+{len(value) - 5} more]"
+    return repr(value)
+
+
 def render_advice(advice: ActionAdvice) -> str:
     """Operator-readable rendering for audit / debug."""
     lines = [
@@ -682,6 +799,33 @@ def render_advice(advice: ActionAdvice) -> str:
                     f"               · signals: "
                     f"{', '.join(r.cited_signals)}"
                 )
+            if r.action_steps:
+                lines.append("               · steps:")
+                for i, step in enumerate(r.action_steps, 1):
+                    lines.append(
+                        f"                  {i}. {step.verb} "
+                        f"(conf={step.confidence:.2f})"
+                    )
+                    if step.parameters:
+                        # Render parameters compactly; long values
+                        # truncated for terminal readability.
+                        params_str = ", ".join(
+                            f"{k}={_truncate_repr(v)}"
+                            for k, v in step.parameters.items()
+                        )
+                        lines.append(
+                            f"                     params: {params_str}"
+                        )
+                    if step.expected_impact:
+                        lines.append(
+                            f"                     impact: "
+                            f"{step.expected_impact}"
+                        )
+                    if step.cited_signals:
+                        lines.append(
+                            f"                     signals: "
+                            f"{', '.join(step.cited_signals)}"
+                        )
     if advice.cited_anomalies:
         lines.append(
             f"  cited (anomalies): {', '.join(advice.cited_anomalies)}"
@@ -694,9 +838,20 @@ def render_advice(advice: ActionAdvice) -> str:
     return "\n".join(lines)
 
 
+def _action_step_to_dict(step: ActionStep) -> dict[str, Any]:
+    return {
+        "verb": step.verb,
+        "parameters": dict(step.parameters),
+        "expected_impact": step.expected_impact,
+        "confidence": step.confidence,
+        "cited_signals": list(step.cited_signals),
+    }
+
+
 def advice_to_dict(advice: ActionAdvice) -> dict[str, Any]:
     """JSON-serialisable form. ``cited_*`` tuples become lists, and
-    each :class:`AdvisorRecommendation` is normalised to a plain dict."""
+    each :class:`AdvisorRecommendation` is normalised to a plain dict.
+    v2.8 PR-α — also serialises nested :class:`ActionStep` items."""
     d = asdict(advice)
     d["cited_anomalies"] = list(advice.cited_anomalies)
     d["cited_turns_rel"] = list(advice.cited_turns_rel)
@@ -707,6 +862,9 @@ def advice_to_dict(advice: ActionAdvice) -> dict[str, Any]:
             "action": r.action,
             "reasoning": r.reasoning,
             "cited_signals": list(r.cited_signals),
+            "action_steps": [
+                _action_step_to_dict(s) for s in r.action_steps
+            ],
         }
         for r in advice.recommended_advisors
     ]
@@ -721,10 +879,43 @@ _ALLOWED_DOMAIN_ADVISORS: frozenset[str] = frozenset({
 _ALLOWED_PRIORITIES: frozenset[str] = frozenset({"high", "medium", "low"})
 
 
+def _action_step_from_dict(d: dict[str, Any]) -> ActionStep | None:
+    """Defensive parse of one ActionStep. Returns ``None`` when:
+
+    * verb is outside :data:`_ALLOWED_VERBS` (sLLM hallucinated a verb)
+    * parameters dict is missing any required key for the verb
+    * parameters is not a dict / structurally invalid
+
+    Bounds string fields and clamps confidence to [0,1] via
+    :meth:`ActionStep.__post_init__`.
+    """
+    verb = d.get("verb", "")
+    if verb not in _ALLOWED_VERBS:
+        return None
+    raw_params = d.get("parameters")
+    if not isinstance(raw_params, dict):
+        return None
+    required = _VERB_PARAM_KEYS.get(verb, frozenset())
+    if not required.issubset(raw_params.keys()):
+        return None
+    cited = d.get("cited_signals") or []
+    return ActionStep(
+        verb=cast(ActionVerb, verb),
+        parameters=dict(raw_params),  # shallow copy — values pass through
+        expected_impact=str(d.get("expected_impact", ""))[:256],
+        confidence=float(d.get("confidence", 0.5)),
+        cited_signals=tuple(
+            str(x) for x in cited if isinstance(x, str)
+        ),
+    )
+
+
 def _recommendation_from_dict(d: dict[str, Any]) -> AdvisorRecommendation | None:
     """Defensive parse of a single recommendation dict — returns
     ``None`` when the advisor name or priority is outside the closed
-    catalog (so older or malformed records can't poison replay)."""
+    catalog (so older or malformed records can't poison replay).
+    v2.8 PR-α — also parses nested ``action_steps`` with the same
+    defensive contract; unknown verbs are silently dropped."""
     advisor = d.get("advisor", "")
     priority = d.get("priority", "")
     if advisor not in _ALLOWED_DOMAIN_ADVISORS:
@@ -732,6 +923,19 @@ def _recommendation_from_dict(d: dict[str, Any]) -> AdvisorRecommendation | None
     if priority not in _ALLOWED_PRIORITIES:
         return None
     cited = d.get("cited_signals") or []
+
+    raw_steps = d.get("action_steps") or []
+    steps: tuple[ActionStep, ...] = ()
+    if isinstance(raw_steps, list):
+        steps = tuple(
+            s for s in (
+                _action_step_from_dict(item)
+                for item in raw_steps
+                if isinstance(item, dict)
+            )
+            if s is not None
+        )
+
     return AdvisorRecommendation(
         advisor=cast(DomainAdvisor, advisor),
         priority=cast(Priority, priority),
@@ -740,6 +944,7 @@ def _recommendation_from_dict(d: dict[str, Any]) -> AdvisorRecommendation | None
         cited_signals=tuple(
             str(x) for x in cited if isinstance(x, str)
         ),
+        action_steps=steps,
     )
 
 
@@ -795,6 +1000,8 @@ def advice_to_audit_record(
 
 __all__ = [
     "ActionAdvice",
+    "ActionStep",
+    "ActionVerb",
     "AdvisorKind",
     "AdvisorRecommendation",
     "Decision",
