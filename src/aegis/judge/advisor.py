@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from aegis.judge.action_advice import (
     ActionAdvice,
+    ActionStep,
     AdvisorKind,
     AdvisorRecommendation,
     Decision,
@@ -59,16 +60,18 @@ if TYPE_CHECKING:
 
 
 # Bump on any prompt / model change so audit can pin advices to a
-# specific revision. v2 = PR-ψ-multi-domain (cost/cache/security
-# narrative sections + recommended_advisors output).
-_ADVISOR_PROMPT_VERSION = "advisor_v2_multi_domain"
+# specific revision. v3 = PR-α + PR-β: action_steps[] with closed
+# verb catalog. The schema (PR-α) is in aegis.judge.action_advice;
+# this prompt instructs Haiku to emit it.
+_ADVISOR_PROMPT_VERSION = "advisor_v3_action_steps"
 _ADVISOR_MODEL = "claude-haiku-4-5-20251001"
 
 
 ADVISOR_SYSTEM_PROMPT = """\
 You are a multi-domain advisor router for AI agent tool calls. You read
 a CCTV-style narrative of the agent's recent activity and route the
-situation to the right domain specialists.
+situation to the right domain specialists with CONCRETE, EXECUTABLE
+recommendations.
 
 Narrative sections you may see (any may be absent):
 
@@ -82,6 +85,9 @@ Narrative sections you may see (any may be absent):
   KV CACHE METRICS         — hit rate, prefix stability, re-key count
   SECURITY SIGNALS         — destructive path matches, blast radius, rule hits
   CANDIDATE ALTERNATIVES   — tools semantically similar to the proposed call
+  AVAILABLE ACTIONS        — verbs you may use in action_steps (closed catalog)
+  CONSTRAINTS              — current model, budget, window size — used to ground
+                              quantitative impact estimates
   PROPOSED CALL            — tool the firewall is about to gate
   BASE VERDICT             — what the deterministic firewall already decided
 
@@ -95,6 +101,38 @@ Closed catalog of domain advisors you may recommend:
   loop-breaker          — same call repeated >=3 times
   permission-escalator  — high-impact ambiguous op needing human ACK
   human-clarifier       — backtrack / agent appears confused
+
+Closed catalog of action verbs (action_steps[].verb MUST be one of these):
+
+  prune-turns        — drop specific past turns to recover budget / cache
+                       params: {turn_indices_rel: [int...],
+                                saved_tokens_estimate: int,
+                                saved_dollars_estimate: float}
+  summarize-window   — collapse a span of turns into a summary
+                       params: {turn_range: [int, int],
+                                retain_categories: [str...]}
+  swap-model         — switch to a cheaper model for the remainder
+                       params: {from_model: str, to_model: str,
+                                ratio_savings: float}
+  end-session        — graceful session termination
+                       params: {reason: str}
+  swap-tool          — use a different tool with semantic similarity
+                       params: {from_tool: str, to_tool: str,
+                                similarity_score: float}
+  narrow-scope       — tighten the args of the current call
+                       params: {original_args: str, suggested_args: str}
+  clarify-intent     — ask the user a clarifying question
+                       params: {clarifying_question: str}
+  run-diagnostic     — execute a diagnostic command (e.g. pytest path)
+                       params: {diagnostic_command: str,
+                                expected_signal: str}
+  verify-state       — check an invariant before continuing
+                       params: {check: str, expected: str}
+  notify-operator    — ping a channel; non-blocking
+                       params: {channel: str, urgency: str, summary: str}
+  require-approval   — blocking — wait for human ACK
+                       params: {approver_role: str, reason: str,
+                                artifacts: [str...]}
 
 Respond with ONLY a JSON object, no prose, exactly this shape:
 {
@@ -111,9 +149,17 @@ Respond with ONLY a JSON object, no prose, exactly this shape:
       "priority": "high|medium|low",
       "action": "one-sentence imperative",
       "reasoning": "short why, citing signals",
-      "cited_signals": ["metric_name", ...]
-    },
-    ...
+      "cited_signals": ["metric_name", ...],
+      "action_steps": [
+        {
+          "verb": "<one of the verbs above>",
+          "parameters": {<verb-specific keys per the catalog>},
+          "expected_impact": "QUANTITATIVE outcome (e.g. 'saves $0.42, ratio 1.50→1.18')",
+          "confidence": 0.0-1.0,
+          "cited_signals": ["signal_name", ...]
+        }
+      ]
+    }
   ]
 }
 
@@ -123,12 +169,53 @@ Rules:
   pattern this exists for).
 * Every recommendation MUST cite at least one signal name from the
   COST / KV CACHE / SECURITY / ANOMALIES / TRAJECTORY sections.
+* Every action_steps[] item MUST:
+  - use a verb from the closed catalog (unknown verbs will be dropped)
+  - reference SPECIFIC turn_indices_rel from TEMPORAL TRAJECTORY when
+    applicable (don't invent turn numbers)
+  - quantify expected_impact (use numbers from CONSTRAINTS / metrics)
+  - cite at least one signal that supports this step
+* Confidence in [0.0, 1.0]; will be clamped if outside.
+* Prefer 1-3 action_steps per recommendation. Quality over quantity.
 * If no domain signals apply, recommended_advisors may be empty.
 * Decide BLOCK only on clear malice or destructive scope.
 * Decide REQUIRE_APPROVAL when alert-level anomalies cluster or the
   trajectory shows confused / repeated / errored patterns.
 * Decide DEFER when the agent should clarify with the user.
 * Otherwise ALLOW. Be conservative: when in doubt, REQUIRE_APPROVAL.
+
+Example for a cost+cache+security combination at REQUIRE_APPROVAL:
+
+  {
+    "advisor": "cost-optimizer", "priority": "high",
+    "action": "Prune expensive turns or swap to cheaper model.",
+    "reasoning": "projected cost 1.50× of budget; cache broke at turn -6",
+    "cited_signals": ["budget_used_ratio", "cache_hit_rate_max_drop_pp"],
+    "action_steps": [
+      {
+        "verb": "prune-turns",
+        "parameters": {
+          "turn_indices_rel": [-6, -5, -4],
+          "saved_tokens_estimate": 14000,
+          "saved_dollars_estimate": 0.32
+        },
+        "expected_impact": "ratio 1.50 → 1.18; cache prefix re-stabilises",
+        "confidence": 0.85,
+        "cited_signals": ["cache_hit_rate_max_drop_pp", "cumulative_tokens_after"]
+      },
+      {
+        "verb": "swap-model",
+        "parameters": {
+          "from_model": "claude-opus-4-7",
+          "to_model": "claude-haiku-4-5",
+          "ratio_savings": 3.0
+        },
+        "expected_impact": "remainder of session ~3× cheaper",
+        "confidence": 0.6,
+        "cited_signals": ["budget_used_ratio"]
+      }
+    ]
+  }
 """
 
 
@@ -301,9 +388,17 @@ def _parse_recommended_advisors(
 ) -> tuple[AdvisorRecommendation, ...]:
     """Best-effort parse of the model's ``recommended_advisors`` list.
     Items with an unknown advisor name or priority are silently dropped
-    so a hallucinated advisor type can't poison the audit chain."""
+    so a hallucinated advisor type can't poison the audit chain.
+
+    v2.8 PR-β — also parses each item's ``action_steps`` list via the
+    schema's defensive parser (drops unknown verbs / steps missing
+    required parameters)."""
     if not isinstance(raw, list):
         return ()
+    # PR-α schema's defensive step parser. Imported lazily to keep the
+    # module-level import surface small.
+    from aegis.judge.action_advice import _action_step_from_dict
+
     out: list[AdvisorRecommendation] = []
     for item in raw:
         if not isinstance(item, dict):
@@ -315,6 +410,19 @@ def _parse_recommended_advisors(
         if priority not in _ALLOWED_PRIORITIES:
             continue
         cited = item.get("cited_signals") or []
+
+        raw_steps = item.get("action_steps") or []
+        steps_parsed: tuple[ActionStep, ...] = ()
+        if isinstance(raw_steps, list):
+            steps_parsed = tuple(
+                s for s in (
+                    _action_step_from_dict(x)
+                    for x in raw_steps
+                    if isinstance(x, dict)
+                )
+                if s is not None
+            )
+
         out.append(AdvisorRecommendation(
             advisor=cast(DomainAdvisor, advisor),
             priority=cast(Priority, priority),
@@ -323,6 +431,7 @@ def _parse_recommended_advisors(
             cited_signals=tuple(
                 str(x) for x in cited if isinstance(x, str)
             ),
+            action_steps=steps_parsed,
         ))
     return tuple(out)
 
@@ -453,7 +562,11 @@ class HaikuAdvisor:
         try:
             resp = self.client.messages.create(
                 model=self.model,
-                max_tokens=900,  # bumped for recommended_advisors list
+                # v2.8 PR-β — bumped 900 → 1500 to fit action_steps[]
+                # arrays. Tier 3 cost is acceptable: gate restricts
+                # this path to ~5-10% of calls; richer advice is the
+                # whole point of the Tier 3 sLLM call.
+                max_tokens=1500,
                 temperature=self.temperature,
                 system=ADVISOR_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_msg}],
