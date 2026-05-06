@@ -695,6 +695,10 @@ def handle_pretool(stdin: Any, stdout: Any) -> int:
             "ts_ns": time.time_ns(),
             "tool": tool_name,
             "aid": inp.header.aid,
+            # v2.7 PR-ψ-retrospective — stamp invocation_id so the
+            # PostToolUse hook can locate the matching PreToolUse
+            # advice and compare predicted vs actual outcome.
+            "invocation_id": event.get("invocation_id", "") or "",
             "decision": decision,
             "reason": reason,
             "trace_id": inp.header.trace_id,

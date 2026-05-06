@@ -236,12 +236,46 @@ def handle_posttool(stdin: Any, stdout: Any) -> int:
         "tool_input_keys": sorted(tool_input.keys()) if isinstance(tool_input, dict) else [],
         "mode": "local",
     }
+    explain_block: dict[str, Any] = {}
     if post_analysis_block is not None:
         # Live next to step traces in the explain block so `aegis report
         # --explain` can render it; sits in `explain.post_analysis` so
         # downstream tools that already walk `explain` see it without
         # changes.
-        record["explain"] = {"post_analysis": post_analysis_block}
+        explain_block["post_analysis"] = post_analysis_block
+
+    # v2.7 PR-ψ-retrospective — compare PreToolUse advice (predicted)
+    # vs the actual tool outcome (observed here). Best-effort: if the
+    # PreToolUse advice can't be located, the block is omitted. Never
+    # raises — PostToolUse is forensic-only.
+    try:
+        from aegis.judge.retrospective import (
+            evaluate_retrospective,
+            retrospective_to_dict,
+        )
+
+        retrospective = evaluate_retrospective(
+            invocation_id=invocation_id or "",
+            tool_name=tool_name,
+            actual_status=status,  # type: ignore[arg-type]
+            audit_path=LOCAL_AUDIT_PATH,
+        )
+        if retrospective is not None:
+            explain_block["retrospective_advice"] = (
+                retrospective_to_dict(retrospective)
+            )
+            # Surface notable mismatches on stderr so the operator sees
+            # them in real time (Claude Code only shows stderr).
+            if retrospective.accuracy in ("missed_signal", "false_alarm"):
+                _emit(
+                    f"retrospective: {retrospective.accuracy} — "
+                    f"{retrospective.notes}"
+                )
+    except Exception:  # noqa: BLE001 — forensic-only, never crash
+        pass
+
+    if explain_block:
+        record["explain"] = explain_block
     _append_audit(record)
 
     # M10 ATMU phase 2 — attach the tool_outcome to the intent record
