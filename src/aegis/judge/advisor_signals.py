@@ -234,6 +234,11 @@ _DESTRUCTIVE_RULES: frozenset[str] = frozenset({
     "rule:git_destructive", "rule:sandbox_escape", "rule:payment_overflow",
     "rule:sql_unbounded", "rule:rm_rf", "rule:fs_destructive",
     "rule:backup_path_destructive", "rule:credential_exfil",
+    # v2.7.4 — cloud_destructive covers kubectl delete / aws terminate
+    # / terraform destroy / helm uninstall. The 100-case validation
+    # surfaced this gap; cloud-destructive verdicts were falling
+    # through to permission-escalator instead of security-reviewer.
+    "rule:cloud_destructive",
 })
 
 
@@ -268,14 +273,24 @@ def extract_security_signals(
             break
     else:
         # step310 emits "dangerous pattern: <regex>" for the
-        # destructive shell-pattern matcher. These are destructive
-        # even without a `rule:` prefix, so flag them so the
-        # security-reviewer recommendation fires.
-        if "dangerous pattern" in reason.lower():
+        # destructive shell-pattern matcher, and a similar
+        # "sensitive-path block:" prefix for the sensitive-path
+        # matcher. Both are destructive even without a `rule:`
+        # prefix; flag them so security-reviewer fires.
+        low = reason.lower()
+        if "dangerous pattern" in low:
             out["destructive_path_match"] = True
-            after = reason.lower().split("dangerous pattern", 1)[1]
+            after = low.split("dangerous pattern", 1)[1]
             tag = after.lstrip(": ").split()[0] if after else "shell"
             out["policy_rule"] = f"dangerous_pattern:{tag[:40]}"
+        elif "sensitive-path" in low or "sensitive path" in low:
+            # v2.7.4 — sensitive-path matcher. Surfaced by the
+            # 100-case validation; was falling through to
+            # permission-escalator before.
+            out["destructive_path_match"] = True
+            after = low.split("sensitive", 1)[1]
+            tag = after.lstrip("- :path").split()[0] if after else "path"
+            out["policy_rule"] = f"sensitive_path:{tag[:40] if tag else 'path'}"
 
     s320 = str(traces.get("aegis.firewall.step320_blast.run", ""))
     if "high" in s320.lower():
