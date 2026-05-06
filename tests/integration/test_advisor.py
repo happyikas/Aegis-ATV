@@ -727,6 +727,118 @@ class TestHaikuActionSteps:
         assert steps[0].parameters["to_model"] == "haiku"
 
 
+class TestUserMessageRichSections:
+    """v2.8 PR-γ — user message gains COST BREAKDOWN PER TURN /
+    AVAILABLE ACTIONS / CONSTRAINTS sections so sLLM has the
+    grounding to emit quantitative action_steps."""
+
+    @respx.mock
+    def test_user_message_has_per_turn_cost_breakdown(
+        self, _haiku_env: None
+    ) -> None:
+        captured: dict[str, str] = {}
+
+        def _capture(request: httpx.Request) -> httpx.Response:
+            payload = json.loads(request.content.decode("utf-8"))
+            captured["user_msg"] = payload["messages"][0]["content"]
+            return httpx.Response(
+                200,
+                json=_anthropic_response(
+                    json.dumps({
+                        "decision": "ALLOW", "confidence": 0.5,
+                        "reason": "ok", "recommended_advisors": [],
+                    })
+                ),
+            )
+
+        respx.post("https://api.anthropic.com/v1/messages").mock(
+            side_effect=_capture
+        )
+        HaikuAdvisor().advise(
+            temporal_ctx=_mk_temporal(n_history=4),
+            base_decision="ALLOW",
+            current_tool="Bash",
+        )
+        msg = captured["user_msg"]
+        assert "COST BREAKDOWN PER TURN" in msg
+        # Per-turn rows visible
+        assert "cum_tokens" in msg
+        assert "cache_hit" in msg
+
+    @respx.mock
+    def test_user_message_has_available_actions(
+        self, _haiku_env: None
+    ) -> None:
+        captured: dict[str, str] = {}
+
+        def _capture(request: httpx.Request) -> httpx.Response:
+            payload = json.loads(request.content.decode("utf-8"))
+            captured["user_msg"] = payload["messages"][0]["content"]
+            return httpx.Response(
+                200,
+                json=_anthropic_response(
+                    json.dumps({
+                        "decision": "ALLOW", "confidence": 0.5,
+                        "reason": "ok", "recommended_advisors": [],
+                    })
+                ),
+            )
+
+        respx.post("https://api.anthropic.com/v1/messages").mock(
+            side_effect=_capture
+        )
+        HaikuAdvisor().advise(
+            temporal_ctx=_mk_temporal(),
+            current_tool="Bash",
+        )
+        msg = captured["user_msg"]
+        assert "AVAILABLE ACTIONS" in msg
+        # All 11 verbs surface to the model
+        for verb in (
+            "prune-turns", "swap-model", "swap-tool", "end-session",
+            "summarize-window", "narrow-scope", "clarify-intent",
+            "run-diagnostic", "verify-state",
+            "notify-operator", "require-approval",
+        ):
+            assert verb in msg, f"verb {verb} missing from user message"
+
+    @respx.mock
+    def test_user_message_has_constraints_with_model(
+        self, _haiku_env: None
+    ) -> None:
+        captured: dict[str, str] = {}
+
+        def _capture(request: httpx.Request) -> httpx.Response:
+            payload = json.loads(request.content.decode("utf-8"))
+            captured["user_msg"] = payload["messages"][0]["content"]
+            return httpx.Response(
+                200,
+                json=_anthropic_response(
+                    json.dumps({
+                        "decision": "ALLOW", "confidence": 0.5,
+                        "reason": "ok", "recommended_advisors": [],
+                    })
+                ),
+            )
+
+        respx.post("https://api.anthropic.com/v1/messages").mock(
+            side_effect=_capture
+        )
+        HaikuAdvisor().advise(
+            temporal_ctx=_mk_temporal(),
+            current_tool="Bash",
+            cost_signals={
+                "budget_used_ratio": 1.5,
+                "projected_session_cost": 1.50,
+                "budget_limit": 1.00,
+            },
+        )
+        msg = captured["user_msg"]
+        assert "CONSTRAINTS" in msg
+        assert "current_model:" in msg
+        assert "budget_used_ratio" in msg
+
+
 class TestPromptVersion:
     def test_prompt_hash_changed_for_v3(self) -> None:
         """ADVISOR_PROMPT_HASH must change when the prompt is

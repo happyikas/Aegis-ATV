@@ -252,6 +252,7 @@ class Advisor(Protocol):
         cache_signals: dict[str, Any] | None = None,
         security_signals: dict[str, Any] | None = None,
         step_traces: dict[str, Any] | None = None,
+        current_model: str | None = None,
     ) -> ActionAdvice: ...
 
 
@@ -282,6 +283,7 @@ class DummyAdvisor:
         cache_signals: dict[str, Any] | None = None,
         security_signals: dict[str, Any] | None = None,
         step_traces: dict[str, Any] | None = None,
+        current_model: str | None = None,
     ) -> ActionAdvice:
         return compose_advice_heuristic(
             temporal_ctx=temporal_ctx,
@@ -301,6 +303,107 @@ class DummyAdvisor:
 # ──────────────────────────────────────────────────────────────────────
 
 
+def _render_cost_breakdown_per_turn(
+    temporal_ctx: TemporalContext | None,
+    cost_per_token_usd: float | None = None,
+) -> str:
+    """v2.8 PR-γ — per-turn cost / cache view that grounds prune-turns
+    decisions with concrete turn indices. Each row carries
+    cumulative_dollars and cache_hit_rate so the sLLM can identify
+    *which* turns to prune.
+
+    Returns "" when temporal_ctx is empty (caller skips the section).
+    """
+    if temporal_ctx is None or not temporal_ctx.history:
+        return ""
+    lines = [
+        "COST BREAKDOWN PER TURN",
+        "  turn  tool          in    out  cum_tokens  cache_hit  ann.",
+    ]
+    cum_tokens = 0
+    prev_hit: float | None = None
+    for snap in temporal_ctx.history:
+        cum_tokens += snap.input_tokens + snap.output_tokens
+        rel = snap.turn_index_rel
+        ann = ""
+        if prev_hit is not None and prev_hit - snap.cache_hit_rate > 0.20:
+            ann = " ← cache broke"
+        elif (snap.input_tokens + snap.output_tokens) >= 4000:
+            ann = " ← high tokens"
+        lines.append(
+            f"  {rel:>4}  {snap.tool_name[:12]:<12}  "
+            f"{snap.input_tokens:>5}  {snap.output_tokens:>4}  "
+            f"{cum_tokens:>10}  {snap.cache_hit_rate:>9.2f}{ann}"
+        )
+        prev_hit = snap.cache_hit_rate
+    if cost_per_token_usd is not None and cost_per_token_usd > 0:
+        lines.append(
+            f"  (rate: ~${cost_per_token_usd * 1_000_000:.2f} per M tokens)"
+        )
+    return "\n".join(lines)
+
+
+def _render_available_actions(current_model: str | None = None) -> str:
+    """v2.8 PR-γ — closed verb catalog presented as 'AVAILABLE ACTIONS'
+    so the sLLM knows what to put in action_steps[].verb. Mirrors the
+    contract in the system prompt; user-message restatement helps the
+    model ground each step in the current call's context."""
+    lines = [
+        "AVAILABLE ACTIONS (use these verbs in action_steps[].verb)",
+    ]
+    rows = [
+        ("prune-turns",      "drop specific turns to recover budget / cache"),
+        ("summarize-window", "collapse a span of turns"),
+        ("swap-model",       "switch to a cheaper model for the remainder"),
+        ("end-session",      "graceful session termination"),
+        ("swap-tool",        "use a semantically similar tool"),
+        ("narrow-scope",     "tighten the args of the current call"),
+        ("clarify-intent",   "ask the user a clarifying question"),
+        ("run-diagnostic",   "execute a diagnostic command"),
+        ("verify-state",     "check an invariant"),
+        ("notify-operator",  "non-blocking ping a channel"),
+        ("require-approval", "blocking — wait for human ACK"),
+    ]
+    for verb, descr in rows:
+        lines.append(f"  {verb:<18}  — {descr}")
+    if current_model:
+        lines.append(f"  (current model: {current_model})")
+    return "\n".join(lines)
+
+
+def _render_constraints(
+    temporal_ctx: TemporalContext | None,
+    cost_signals: dict[str, Any] | None,
+    current_model: str | None,
+) -> str:
+    """v2.8 PR-γ — explicit numerical constraints the sLLM should
+    quote in expected_impact. Putting them in their own section makes
+    them harder to miss vs scattered across narrative."""
+    lines = ["CONSTRAINTS"]
+    if current_model:
+        lines.append(f"  current_model:        {current_model}")
+    if temporal_ctx is not None:
+        lines.append(f"  window_size:          {temporal_ctx.window_size}")
+        lines.append(
+            f"  history_len:          {len(temporal_ctx.history)} turns"
+        )
+    if cost_signals:
+        for key in (
+            "cumulative_dollars", "projected_session_cost",
+            "budget_limit", "budget_used_ratio",
+            "hw_vs_sw_divergence_ratio",
+        ):
+            if key in cost_signals:
+                v = cost_signals[key]
+                if isinstance(v, (int, float)):
+                    lines.append(f"  {key:<22}{v:.4f}")
+                else:
+                    lines.append(f"  {key:<22}{v}")
+    if len(lines) == 1:
+        return ""
+    return "\n".join(lines)
+
+
 def _build_user_message(
     *,
     temporal_ctx: TemporalContext | None,
@@ -315,10 +418,18 @@ def _build_user_message(
     cost_signals: dict[str, Any] | None = None,
     cache_signals: dict[str, Any] | None = None,
     security_signals: dict[str, Any] | None = None,
+    current_model: str | None = None,
 ) -> str:
     """Assemble the multi-layer narrative for the sLLM user message.
     Best-effort: a failure in any single layer's renderer skips that
-    section rather than aborting the call."""
+    section rather than aborting the call.
+
+    v2.8 PR-γ adds three sections that ground action_steps[]
+    quantitatively:
+      - COST BREAKDOWN PER TURN (per-turn cum_tokens + cache_hit + annotation)
+      - AVAILABLE ACTIONS (verb catalog)
+      - CONSTRAINTS (current model, window, budget numbers)
+    """
     sections: list[str] = []
 
     if temporal_ctx is not None:
@@ -351,6 +462,14 @@ def _build_user_message(
         except Exception:  # noqa: BLE001
             pass
 
+    # PR-γ: per-turn cost view (used by prune-turns / summarize-window).
+    try:
+        breakdown = _render_cost_breakdown_per_turn(temporal_ctx)
+        if breakdown:
+            sections.append(breakdown)
+    except Exception:  # noqa: BLE001
+        pass
+
     if action_table is not None and current_tool:
         try:
             from aegis.burnin.action_embeddings import nearest_actions
@@ -363,6 +482,16 @@ def _build_user_message(
                 sections.append("\n".join(lines))
         except Exception:  # noqa: BLE001
             pass
+
+    # PR-γ: AVAILABLE ACTIONS + CONSTRAINTS.
+    sections.append(_render_available_actions(current_model=current_model))
+    constraints = _render_constraints(
+        temporal_ctx=temporal_ctx,
+        cost_signals=cost_signals,
+        current_model=current_model,
+    )
+    if constraints:
+        sections.append(constraints)
 
     sections.append(
         "PROPOSED CALL\n"
@@ -543,6 +672,7 @@ class HaikuAdvisor:
         cache_signals: dict[str, Any] | None = None,
         security_signals: dict[str, Any] | None = None,
         step_traces: dict[str, Any] | None = None,
+        current_model: str | None = None,
     ) -> ActionAdvice:
         user_msg = _build_user_message(
             temporal_ctx=temporal_ctx,
@@ -557,6 +687,7 @@ class HaikuAdvisor:
             cost_signals=cost_signals,
             cache_signals=cache_signals,
             security_signals=security_signals,
+            current_model=current_model or self.model,
         )
 
         try:
@@ -656,6 +787,7 @@ def compose_advice_sllm(
     cache_signals: dict[str, Any] | None = None,
     security_signals: dict[str, Any] | None = None,
     step_traces: dict[str, Any] | None = None,
+    current_model: str | None = None,
     advisor: Advisor | None = None,
 ) -> ActionAdvice:
     """Build an :class:`ActionAdvice` via the configured advisor backend.
@@ -684,6 +816,7 @@ def compose_advice_sllm(
         cache_signals=cache_signals,
         security_signals=security_signals,
         step_traces=step_traces,
+        current_model=current_model,
     )
 
 
