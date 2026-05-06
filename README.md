@@ -67,6 +67,7 @@ uv run aegis report                    # 5-line Agent Risk Report
   per line; `aegis verify-audit` catches mutations and re-orderings.
 
 📖 **[v2.2 사용자 매뉴얼 (한국어)](docs/MANUAL_v2.2.md)** — 설치, CLI 레퍼런스, 시나리오, 트러블슈팅 14개 섹션.
+🧪 **[Mac mini 90-case 검증 매뉴얼 (한국어)](docs/MANUAL_macmini_validation.md)** — `python -m demo.macmini` 으로 8 advisor / 11 verb 결정적 검증.
 🎯 10분 라이브 데모: [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 📋 변경 내역: [`CHANGELOG.md`](CHANGELOG.md).
 
