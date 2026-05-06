@@ -2577,6 +2577,8 @@ def cmd_burnin(args: argparse.Namespace) -> int:
         return _cmd_burnin_compare_m13(args)
     if args.action == "shadow-status":
         return _cmd_burnin_shadow_status(args)
+    if args.action == "export-baseline":
+        return _cmd_burnin_export_baseline(args)
 
     from burnin.retrain import retrain, revert  # type: ignore[import-not-found]
 
@@ -2802,6 +2804,32 @@ def _cmd_burnin_shadow_status(args: argparse.Namespace) -> int:
             )
         )
     return 0
+
+
+def _cmd_burnin_export_baseline(args: argparse.Namespace) -> int:
+    """Walk the local audit JSONL and write a per-tenant RAG baseline chunk.
+
+    Replaces ``policies/rag_corpus/baselines.jsonl`` with a single chunk
+    summarising the tenant's typical traffic at the metadata level
+    (which tools, which keys, decision distribution). Tool input
+    *values* are never logged so the chunk cannot leak content.
+    """
+    from pathlib import Path as _Path
+
+    from aegis.burnin.baseline_export import (
+        export_to_corpus,
+        render_export_report,
+    )
+
+    audit_path: _Path | None = None
+    if args.audit:
+        audit_path = _Path(args.audit).expanduser()
+    out_path, summary = export_to_corpus(
+        audit_path=audit_path,
+        tenant=args.tenant,
+    )
+    print(render_export_report(summary, out_path))
+    return 0 if summary.is_useful else 1
 
 
 def cmd_case_memory(args: argparse.Namespace) -> int:
@@ -3721,13 +3749,19 @@ def build_parser() -> argparse.ArgumentParser:
     bn = sub.add_parser("burnin")
     bn.add_argument(
         "action",
-        choices=["retrain", "revert", "train-m13", "compare-m13", "shadow-status"],
+        choices=[
+            "retrain", "revert", "train-m13", "compare-m13",
+            "shadow-status", "export-baseline",
+        ],
         help=(
             "retrain: Burn-in Shadow phase (M11) iforest baseline. "
             "revert: roll back to previous baseline. "
             "train-m13: learn M13 attribution-head v2 weights. "
             "compare-m13: side-by-side v1 vs v2 evaluation. "
-            "shadow-status: summarise the Burn-in Shadow log."
+            "shadow-status: summarise the Burn-in Shadow log. "
+            "export-baseline: write a per-tenant baseline RAG chunk "
+            "to policies/rag_corpus/baselines.jsonl from the local "
+            "audit log."
         ),
     )
     bn.add_argument(
@@ -3773,6 +3807,21 @@ def build_parser() -> argparse.ArgumentParser:
     bn.add_argument(
         "--shadow-log", default=None,
         help="(shadow-status) shadow JSONL path (default: $AEGIS_SHADOW_LOG or ~/.aegis/shadow.jsonl)",
+    )
+    # export-baseline specific:
+    bn.add_argument(
+        "--audit", default=None,
+        help=(
+            "(export-baseline) audit JSONL path "
+            "(default: ~/.aegis/audit.jsonl)"
+        ),
+    )
+    bn.add_argument(
+        "--tenant", default="local",
+        help=(
+            "(export-baseline) tenant identifier embedded in the "
+            "RAG baseline chunk (default: local)"
+        ),
     )
     bn.set_defaults(fn=cmd_burnin)
 
