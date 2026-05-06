@@ -200,6 +200,8 @@ Claude Code  ─── PreToolUse JSON ──▶  python3 aegis_hook.py
 
 ## 핵심 개념 — 10-step Action Firewall
 
+> 시각 자료가 필요하면 **[ATV-2080-v1 구조 다이어그램](diagrams/atv_2080_v1.png)** 을 먼저 보세요 — 30 subfields × 2,080 float32 layout + 16-step firewall pipeline + Ed25519/SHA3 footer 가 한 장에 정리돼 있습니다 (renderer: [`docs/diagrams/draw_atv_2080_v1.py`](diagrams/draw_atv_2080_v1.py)).
+
 매 도구 호출 (PreToolUse) 마다 다음 10개 단계가 순서대로 실행:
 
 ```
