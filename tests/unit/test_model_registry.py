@@ -96,3 +96,65 @@ def test_default_model_url_targets_q4_gguf() -> None:
     """The default GGUF must be Q4_K_M quantization — smallest CPU-viable."""
     url = default_model().url.lower()
     assert "q4" in url
+
+
+# ── PR 5: aliases + recommendations ───────────────────────────────────
+
+
+def test_phi35_mini_has_phi3_aliases() -> None:
+    """phi3-mini and phi-3-mini are short aliases for phi-3.5-mini —
+    matches the slug users may try when copy-pasting from Phi-3 docs."""
+    spec = get_model("phi-3.5-mini")
+    assert "phi3-mini" in spec.aliases
+    assert "phi-3-mini" in spec.aliases
+
+
+def test_get_model_resolves_alias() -> None:
+    canonical = get_model("phi-3.5-mini")
+    assert get_model("phi3-mini") is canonical
+    assert get_model("phi-3-mini") is canonical
+
+
+def test_get_model_unknown_alias_raises_with_hint() -> None:
+    with pytest.raises(KeyError, match="alias"):
+        get_model("does-not-exist")
+
+
+def test_list_aliases_round_trips() -> None:
+    from aegis.judge.model_registry import list_aliases
+    aliases = list_aliases()
+    # Every model's canonical name maps to itself.
+    for m in list_models():
+        assert aliases[m.name] == m.name
+    # Every alias maps to a canonical name.
+    for m in list_models():
+        for a in m.aliases:
+            assert aliases[a] == m.name
+
+
+def test_recommendations_include_use_case_for_each_judge() -> None:
+    from aegis.judge.model_registry import render_recommendations
+    out = render_recommendations()
+    assert "llama-3.2-1b" in out
+    assert "phi-3.5-mini" in out
+    assert "RAG is ON" in out  # phi recommendation
+    assert "RAG is OFF" in out  # llama recommendation
+    # No embedding models in recommendations (judge-only output).
+    assert "bge-base-en" not in out
+
+
+def test_phi_recommended_for_rag() -> None:
+    """The RAG-grounded judge stack must point at phi-3.5-mini."""
+    spec = get_model("phi-3.5-mini")
+    assert "RAG is ON" in spec.recommended_for
+    assert "★" in spec.recommended_for
+
+
+def test_recommended_for_present_for_all_judges() -> None:
+    """Every judge must carry a use-case hint so --recommend produces
+    useful output for the entire registry."""
+    from aegis.judge.model_registry import list_models_by_kind
+    for m in list_models_by_kind("judge"):
+        assert m.recommended_for, (
+            f"judge {m.name!r} missing recommended_for"
+        )
