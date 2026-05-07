@@ -206,3 +206,61 @@ def test_cmd_verify_audit_no_log_returns_one(
     out = capsys.readouterr().out
     assert "no local audit log" in out
     assert "/forensic/replay" in out  # sidecar pointer
+
+
+# ── Concurrency: cross-process appends must not fork the chain ───────
+
+
+def _concurrent_append_worker(
+    audit_path: str, count: int, worker_id: int,
+) -> None:
+    """Top-level so it's picklable under multiprocessing's spawn start
+    method (default on macOS Python 3.14)."""
+    from pathlib import Path as _Path
+
+    from aegis.audit.local_chain import append as _append
+
+    for i in range(count):
+        _append(
+            _Path(audit_path),
+            {"tool": "Bash", "decision": "ALLOW", "worker": worker_id, "i": i},
+        )
+
+
+def test_concurrent_append_does_not_fork_chain(tmp_path: Path) -> None:
+    """Cross-process appends to the same audit file must serialize
+    through the fcntl.flock in append(). Every record's prev_hash
+    must chain to the previous record's this_hash, with no gaps and
+    no forks. Without the lock, both writers can observe the same
+    prev_hash and produce a fork.
+    """
+    import multiprocessing as mp
+
+    audit = tmp_path / "audit.jsonl"
+    n_per_process = 50
+    n_processes = 4
+    target_total = n_per_process * n_processes
+
+    procs = [
+        mp.Process(
+            target=_concurrent_append_worker,
+            args=(str(audit), n_per_process, w),
+        )
+        for w in range(n_processes)
+    ]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join()
+
+    for p in procs:
+        assert p.exitcode == 0, f"worker {p.pid} exit={p.exitcode}"
+
+    ok, broken_at, total = verify_chain(audit)
+    assert ok, (
+        f"chain forked under concurrent append: "
+        f"broken_at={broken_at}, total={total}"
+    )
+    assert total == target_total, (
+        f"some appends were lost: total={total}, expected={target_total}"
+    )
