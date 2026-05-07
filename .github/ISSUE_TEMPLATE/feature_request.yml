@@ -1,0 +1,58 @@
+name: Feature request
+description: Suggest a new capability, rule, or ergonomics improvement.
+title: "[feat] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Open-ended discussion ("would it make sense to ...") is better
+        suited to [Discussions](https://github.com/happyikas/Aegis-ATV/discussions).
+        Use this template when you have a concrete proposal.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user-facing problem does this solve? Who hits it and how often?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+      description: |
+        What should the user-visible behaviour look like? Command names,
+        flags, output format. Implementation can come later.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds, prior art in other tools, configuration knobs that already partially address this.
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - "New detection rule (policies/)"
+        - "New firewall step (src/aegis/firewall/)"
+        - "CLI ergonomics (tools/aegis_cli.py)"
+        - "Sidecar / dashboard"
+        - "Documentation"
+        - "Packaging / distribution"
+        - "Other"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I'd like to implement this myself if accepted.
+        - label: I'm reporting it but cannot contribute the code.
