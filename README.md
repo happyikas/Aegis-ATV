@@ -4,7 +4,7 @@
 [![tests](https://img.shields.io/badge/tests-2369%20passed-brightgreen)](https://github.com/happyikas/Aegis-ATV/actions/workflows/ci.yml)
 [![macmini](https://img.shields.io/badge/macmini%20suite-100%2F100-brightgreen)](docs/MANUAL_macmini_validation.md)
 
-![demo](demo/recording/demo.gif)
+![demo](demo/recording/quickstart.gif)
 
 > **In-process firewall that intercepts every Claude Code tool call, scores it through a 16-step ATV-2080-v1 pipeline, and BLOCKs / requires approval / ALLOWs before the tool runs. Solo Free contract: 0 cloud calls, all processing on-device, ~5-minute install.**
 
