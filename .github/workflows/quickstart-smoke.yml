@@ -8,15 +8,10 @@ name: quickstart smoke
 # Triggers:
 #   * pushes to main (sanity check before tagging a release)
 #   * PRs that touch the install surface (CLI, hook, smoke script,
-#     README, quickstart docs, lockfile)
+#     installer, brew formula, README, quickstart docs, lockfile)
 #   * weekly schedule — picks up uv / Python ecosystem drift even when
 #     the repo has been quiet
 #   * workflow_dispatch — manual re-run from the Actions tab
-#
-# Note: a follow-up PR will extend this workflow with two more jobs
-# once Formula/aegis.rb and scripts/install.sh land:
-#   * curlsh-smoke         — runs scripts/install.sh end-to-end
-#   * brew-formula-syntax  — `ruby -c Formula/aegis.rb` + DSL grep
 
 on:
   push:
@@ -25,7 +20,9 @@ on:
       - tools/aegis_cli.py
       - tools/aegis_local_hook.py
       - tools/hooks/**
+      - scripts/install.sh
       - scripts/quickstart_smoke.sh
+      - Formula/aegis.rb
       - .github/workflows/quickstart-smoke.yml
       - README.md
       - docs/PERSONAL_QUICKSTART.md
@@ -37,7 +34,9 @@ on:
       - tools/aegis_cli.py
       - tools/aegis_local_hook.py
       - tools/hooks/**
+      - scripts/install.sh
       - scripts/quickstart_smoke.sh
+      - Formula/aegis.rb
       - .github/workflows/quickstart-smoke.yml
       - README.md
       - docs/PERSONAL_QUICKSTART.md
@@ -78,3 +77,124 @@ jobs:
 
       - name: Run quickstart smoke
         run: bash scripts/quickstart_smoke.sh
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Curl|sh installer smoke — exercises scripts/install.sh end-to-end
+  # against the current branch's source. The published installer clones
+  # from github.com/happyikas/Aegis-ATV.git, but in CI we want to
+  # exercise *this PR's* install.sh, not whatever is on main, so we
+  # point AEGIS_REPO at the workspace via file:// and let install.sh
+  # do its real clone + uv-sync + aegis-install flow.
+  # ─────────────────────────────────────────────────────────────────────
+  curlsh-smoke:
+    name: scripts/install.sh — ubuntu
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pre-install uv (so install.sh's command -v uv path is taken)
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Run scripts/install.sh against this branch
+        env:
+          # Synthetic HOME so the installer can't touch the runner image's
+          # ~/.claude/settings.json.
+          HOME: ${{ runner.temp }}/fakehome
+          AEGIS_REPO: file://${{ github.workspace }}
+          AEGIS_HOME: ${{ runner.temp }}/aegis-src
+          AEGIS_REF: ${{ github.head_ref || github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${HOME}/.claude"
+          # Local file:// clones need this since git 2.38.1's CVE fix.
+          git config --global protocol.file.allow always
+          bash scripts/install.sh
+
+      - name: Verify hook landed in synthetic HOME
+        env:
+          HOME: ${{ runner.temp }}/fakehome
+        run: |
+          set -euo pipefail
+          test -f "${HOME}/.claude/settings.json"
+          grep -q "aegis_local_hook"             "${HOME}/.claude/settings.json"
+          grep -q "AEGIS_APPROVE_AS_BLOCK=0"     "${HOME}/.claude/settings.json"
+          grep -q "AEGIS_TOKEN_BUDGET=99999999"  "${HOME}/.claude/settings.json"
+          echo "✓ installer end-to-end OK"
+
+      - name: Re-run installer (idempotency check)
+        env:
+          HOME: ${{ runner.temp }}/fakehome
+          AEGIS_REPO: file://${{ github.workspace }}
+          AEGIS_HOME: ${{ runner.temp }}/aegis-src
+          AEGIS_REF: ${{ github.head_ref || github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Second run should fast-path on the existing checkout
+          # (git pull --ff-only) and create a settings.json backup.
+          bash scripts/install.sh
+          ls "${HOME}/.claude/settings.json.bak."* >/dev/null \
+            && echo "✓ idempotent re-install rotated a backup"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Brew formula syntax — a real `brew install` cannot succeed until
+  # the formula's sha256 placeholder is replaced at release time
+  # (see pkg/brew/README.md for the bump procedure). What we *can*
+  # verify is that the file parses as Ruby and contains every required
+  # Homebrew DSL field. Catches typos and accidental drops during
+  # release-time edits.
+  # ─────────────────────────────────────────────────────────────────────
+  brew-formula-syntax:
+    name: Formula/aegis.rb — ruby parse
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ruby syntax check
+        run: ruby -c Formula/aegis.rb
+
+      - name: Required Homebrew DSL fields present
+        run: |
+          set -euo pipefail
+          # Each item must literally appear in the formula. If a
+          # release-time edit accidentally drops one, this fails.
+          required=(
+            'class Aegis < Formula'
+            'desc '
+            'homepage '
+            'url '
+            'sha256 '
+            'depends_on "python@3.11"'
+            'depends_on "uv"'
+            'def install'
+            'def caveats'
+            'test do'
+          )
+          fail=0
+          for kw in "${required[@]}"; do
+            if ! grep -qF "${kw}" Formula/aegis.rb; then
+              echo "✗ missing required field: ${kw}"
+              fail=1
+            fi
+          done
+          [[ $fail -eq 0 ]] || exit 1
+          echo "✓ formula has all required Homebrew fields"
+
+      - name: Sanity-check sha256 shape
+        run: |
+          set -euo pipefail
+          # The placeholder ('0' × 64) is intentional pre-release; we
+          # just verify the value is a 64-hex-char string so a malformed
+          # edit (e.g. truncated paste) is caught.
+          line=$(grep -E '^\s*sha256 "' Formula/aegis.rb)
+          echo "${line}"
+          echo "${line}" | grep -qE 'sha256 "[0-9a-f]{64}"' \
+            || { echo "✗ sha256 must be exactly 64 lowercase hex chars"; exit 1; }
+          echo "✓ sha256 well-formed (placeholder OK pre-release)"
