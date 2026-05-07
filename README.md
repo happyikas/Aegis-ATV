@@ -10,11 +10,23 @@
 
 ## What you get in 5 minutes
 
+Pick whichever fits your setup — all three end at the same place:
+
 ```bash
+# Option A: source clone (full dev environment)
 git clone https://github.com/happyikas/Aegis-ATV.git && cd Aegis-ATV
 uv sync                              # ~30s
 uv run aegis install --mode local    # patches ~/.claude/settings.json
-# Restart Claude Code. Done.
+
+# Option B: one-liner installer (no manual clone)
+curl -LsSf https://raw.githubusercontent.com/happyikas/Aegis-ATV/main/scripts/install.sh | bash
+
+# Option C: Homebrew tap (macOS / Linuxbrew)
+brew tap happyikas/aegis https://github.com/happyikas/Aegis-ATV.git
+brew install happyikas/aegis/aegis
+aegis install --mode local
+
+# Then restart Claude Code. Done.
 ```
 
 Now every tool call Claude Code makes goes through Aegis first. Try a destructive command in your next session — it gets BLOCKed cryptographically with a signed audit line:
