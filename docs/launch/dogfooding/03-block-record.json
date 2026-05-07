@@ -1,0 +1,55 @@
+{
+  "ts_ns": 1777900711954374000,
+  "tool": "Bash",
+  "aid": "claude-code-session:00000000-0000-0000-0000-000000000000",
+  "decision": "BLOCK",
+  "reason": "hybrid[m13_attribution]: attribution-head BLOCK (score=1.08 \u2265 0.70); top contributor: tool_arg_inspection (0.30)",
+  "trace_id": "6e074c63ea35b5b90a0db1017a32004a",
+  "latency_ms": 35.454,
+  "mode": "local",
+  "explain": {
+    "atv_dim": 2080,
+    "atv_sha3": "fd559dd9fd127e9fdd95378441a3d7e3ef4c4bbfd9d9f46e189223a783c7afb9",
+    "step_traces": {
+      "aegis.firewall.step305_safe_allowlist.run": "step305: not safe-listed",
+      "aegis.firewall.step308_identity.run": "step308: skipped (no proof, require=false)",
+      "aegis.firewall.step309_instruction_drift.run": "step309: baseline disabled",
+      "aegis.firewall.step310_args.run": "step310: ok (inj=0.00)",
+      "aegis.firewall.step311_donor_rules.run": "step311: no donor rule matched",
+      "aegis.firewall.step312_normalize.run": "step312: passthrough (tool=Bash, path=?)",
+      "aegis.firewall.step315_aid_auth.run": "step315: ok (aid=claude-code-local:default-role)",
+      "aegis.firewall.step320_blast.run": "step320: blast=5 (tool=Bash)",
+      "aegis.firewall.step330_human.run": "step330: ok (blast=5)",
+      "aegis.firewall.step335_cost.run": "step335: ok (cum=0.0000, forecast=0.0000, ceiling=1.0000, burn=0.00)",
+      "aegis.firewall.step336_loop.run": "step336: fresh call",
+      "aegis.firewall.step337_hw_anomaly.run": "step337: HW signals nominal",
+      "aegis.firewall.step340_policy.run": "step340: sLLM block (conf=1.00) attr=[tool_arg_inspection:0.30, action_blast_radius:0.25, linkage_consistency_features:0.20]"
+    },
+    "m13_top": [
+      {
+        "subfield": "tool_arg_inspection",
+        "score": 0.3
+      },
+      {
+        "subfield": "action_blast_radius",
+        "score": 0.25
+      },
+      {
+        "subfield": "linkage_consistency_features",
+        "score": 0.2
+      },
+      {
+        "subfield": "hw_cost_attestation",
+        "score": 0.1504
+      },
+      {
+        "subfield": "thermal_ecc_drift",
+        "score": 0.0902
+      }
+    ],
+    "m13_score": 1.0,
+    "intent_record_id": "c5fdf4eea54d16ee"
+  },
+  "prev_hash": "4b9fadeab9e52140356ab9e5010e20c3cd721aa2aa9d468c3f278b9e3fa6ed1b",
+  "this_hash": "64a23dccd036eeb7628a73dfa49f308dcbca25e40b7202623143fdbefb83fc6d"
+}

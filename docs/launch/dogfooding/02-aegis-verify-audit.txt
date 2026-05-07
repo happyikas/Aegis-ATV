@@ -1,0 +1,4 @@
+✓ verify-audit (local chain) — 5583 records intact
+  audit:  /Users/example/.aegis/audit.jsonl
+  signing pubkey: not configured — chain hash verified, signatures (if any) NOT cryptographically verified.
+                  Run `aegis audit-key init` to enable.
