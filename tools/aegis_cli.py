@@ -1142,7 +1142,26 @@ def _build_pretool_command(
                 f"got {embedding!r}"
             )
         py = _hook_python_executable()
+        # ── Personal Solo Free defaults (PR #101 anti-self-DoS) ─────
+        # AEGIS_APPROVE_AS_BLOCK=0  — REQUIRE_APPROVAL surfaces as an
+        #     informational stderr line instead of a hard BLOCK. Local-
+        #     mode users haven't configured an approval queue, so a
+        #     hard BLOCK on every gray-zone call (cost gate, loop
+        #     detector, etc.) reduces to a self-DoS the moment the
+        #     audit chain accumulates traffic.
+        # AEGIS_TOKEN_BUDGET=99999999 — the cost gate is meant for
+        #     enterprise per-tenant budget enforcement (Sidecar). On
+        #     a Solo Free laptop nobody sets a budget, so the default
+        #     $1 ceiling crosses within hours of normal usage and
+        #     starts blocking every tool. Disabled by setting a
+        #     wildcard-large ceiling. Sidecar deployments still
+        #     enforce real budgets via the budget store.
+        # Both defaults are designed so a Personal install NEVER
+        # locks out its own user. Sidecar mode keeps the strict
+        # defaults (REQUIRE_APPROVAL → BLOCK, real budgets).
         prefix = (
+            f"AEGIS_APPROVE_AS_BLOCK=0 "
+            f"AEGIS_TOKEN_BUDGET=99999999 "
             f"AEGIS_EMBEDDING_PROVIDER={embedding} "
             f"AEGIS_JUDGE_PROVIDER={judge} "
             f"AEGIS_POLICY_DIR={POLICIES_DIR} "
@@ -1990,6 +2009,47 @@ def cmd_cache_lint(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_install_rescue() -> int:
+    """Restore ``~/.claude/settings.json`` from the most-recent
+    ``settings.json.bak.<ts>`` backup. PR #101 anti-self-DoS escape
+    hatch — when an install replaces a working hook with one that
+    locks the user out (cost gate, missing approve-as-block flag,
+    etc.) the user runs ``aegis install --rescue`` from a separate
+    terminal to roll back."""
+    backups = sorted(
+        SETTINGS_PATH.parent.glob("settings.json.bak.*"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if not backups:
+        print(
+            _red("[install --rescue] no settings.json.bak.* backups found"),
+            file=sys.stderr,
+        )
+        print(
+            f"  (looked under {SETTINGS_PATH.parent})",
+            file=sys.stderr,
+        )
+        return 1
+    latest = backups[0]
+    shutil.copy2(latest, SETTINGS_PATH)
+    print(_green(f"✓ restored {SETTINGS_PATH} from {latest.name}"))
+    print(
+        f"  ({len(backups)} backup{'s' if len(backups) != 1 else ''} "
+        "available, oldest first):"
+    )
+    for b in reversed(backups[:5]):
+        ts = time.strftime(
+            "%Y-%m-%d %H:%M:%S", time.localtime(b.stat().st_mtime),
+        )
+        print(f"    {ts}  {b.name}")
+    if len(backups) > 5:
+        print(f"    … +{len(backups) - 5} older")
+    print()
+    print("Restart Claude Code if hooks aren't behaving as expected.")
+    return 0
+
+
 def cmd_install(args: argparse.Namespace) -> int:
     """Idempotently install Aegis hooks into ``~/.claude/settings.json``.
 
@@ -2017,6 +2077,13 @@ def cmd_install(args: argparse.Namespace) -> int:
     * Plugin manifest validation — refuses to install if
       ``.claude-plugin/plugin.json`` is missing or malformed.
     """
+    # PR #101 — --rescue path: restore the most-recent settings.json
+    # backup. Useful when a previous install replaced the live hook
+    # with one that locks the user out (cost gate, missing
+    # AEGIS_APPROVE_AS_BLOCK=0, etc.). No-op if no backup exists.
+    if getattr(args, "rescue", False):
+        return _cmd_install_rescue()
+
     mode = args.mode
     judge = getattr(args, "judge", "dummy")
     embedding = getattr(args, "embedding", "dummy")
@@ -2196,9 +2263,24 @@ def cmd_install(args: argparse.Namespace) -> int:
         print("Sidecar mode: start the Aegis service with `docker compose up -d`")
         print("  (the hook POSTs to localhost:8000/evaluate)")
     else:
-        print("Local mode: in-process firewall — no service needed.")
+        print(_green(
+            "Local mode: in-process firewall — no service needed, "
+            "0 cloud calls."
+        ))
     print()
-    print("Restart Claude Code for the hooks to take effect.")
+    print(_green("─── NEXT STEPS ──────────────────"))
+    print("  1. Restart Claude Code (full quit & relaunch — tab reopen")
+    print("     is not enough; the hook loads from settings.json at")
+    print("     process start).")
+    print("  2. Try a destructive operation in Claude Code; Aegis will")
+    print("     BLOCK before the tool runs.")
+    print("  3. After a few sessions, inspect what got caught:")
+    print(_green("       uv run aegis report             # 5-line risk summary"))
+    print(_green("       uv run aegis verify-audit       # cryptographic chain check"))
+    print(_green("       uv run aegis policy diff --since 7d"))
+    print()
+    print("  Quickstart guide:  docs/PERSONAL_QUICKSTART.md")
+    print("  Provider upgrade:  uv run aegis pull-model --recommend")
 
     legacy_present = any(
         "install_hook.py" in h.get("command", "")
@@ -4281,6 +4363,14 @@ def build_parser() -> argparse.ArgumentParser:
             "BGE-base-en-v1.5 GGUF via llama-cpp (~100 MB; requires "
             "`aegis pull-model --model bge-base-en` + `--extra "
             "local-llm`). default: dummy"
+        ),
+    )
+    inst.add_argument(
+        "--rescue", action="store_true",
+        help=(
+            "Restore ~/.claude/settings.json from the most-recent "
+            "settings.json.bak.<ts> backup. Use when a previous install "
+            "left the user locked out (cost gate, missing flags, etc.)."
         ),
     )
     inst.set_defaults(fn=cmd_install)
