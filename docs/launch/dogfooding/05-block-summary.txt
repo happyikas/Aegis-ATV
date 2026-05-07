@@ -1,0 +1,20 @@
+Sample of BLOCK decisions from a real session (29 total):
+
+  Bash    hybrid[m13_attribution]: attribution-head BLOCK (score=1.08 ≥ 0.70); top contributor: t...
+  Edit    hybrid[m13_attribution]: attribution-head BLOCK (score=0.88 ≥ 0.70); top contributor: a...
+  Write   hybrid[m13_attribution]: attribution-head BLOCK (score=1.06 ≥ 0.70); top contributor: t...
+  Bash    dummy judge: matched keyword 'delete'
+  Edit    dangerous pattern: \brm\s+-rf\s+/
+  Bash    rule:git_destructive
+  Write   dangerous pattern: DROP\s+TABLE
+  Bash    dangerous pattern: DROP\s+TABLE
+  Edit    dangerous pattern: DROP\s+TABLE
+  Bash    dangerous pattern: \brm\s+-rf\s+/
+  Bash    rule:cloud_destructive
+  Write   dangerous pattern: \brm\s+-rf\s+/
+  Edit    dangerous pattern: /etc/(shadow|passwd)
+  Write   dangerous pattern: /etc/(shadow|passwd)
+  Bash    sensitive-path block: ~/.aws/credentials
+  Write   dangerous pattern: \bsudo\s+
+  Write   dangerous pattern: \b(exec|system)\s*\(
+  Bash    dangerous pattern: \b(exec|system)\s*\(

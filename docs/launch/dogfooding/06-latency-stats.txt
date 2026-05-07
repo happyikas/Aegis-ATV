@@ -1,0 +1,7 @@
+Latency distribution by decision (5,581-record session):
+
+  decision                 n   p50 ms   p95 ms   p99 ms
+  ------------------  ------  -------  -------  -------
+  ALLOW                  122     33.2     60.1    111.7
+  BLOCK                   29    145.5    239.0    261.7
+  REQUIRE_APPROVAL      2385    118.4    213.2    339.2
