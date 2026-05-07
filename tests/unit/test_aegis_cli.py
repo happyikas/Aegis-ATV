@@ -140,12 +140,14 @@ def isolated_install(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 def _install_args(  # type: ignore[no-untyped-def]
     force: bool = False, mode: str = "sidecar",
     judge: str = "dummy", embedding: str = "dummy",
+    rescue: bool = False,
 ):
     """Build a minimal Namespace-like object for cmd_install."""
     import argparse
 
     return argparse.Namespace(
         force=force, mode=mode, judge=judge, embedding=embedding,
+        rescue=rescue,
     )
 
 
@@ -595,6 +597,86 @@ def test_build_pretool_command_local_includes_env() -> None:
     # the hook does not require an OpenAI key.
     assert "AEGIS_EMBEDDING_PROVIDER=dummy" in cmd
     assert "AEGIS_JUDGE_PROVIDER=dummy" in cmd
+
+
+def test_build_pretool_command_local_anti_self_dos_defaults() -> None:
+    """PR #101: local-mode install must not lock the user out via the
+    cost gate or REQUIRE_APPROVAL escalation. Verified by checking
+    that the emitted hook command pre-pends both safety overrides."""
+    cmd = aegis_cli._build_pretool_command("local")
+    # REQUIRE_APPROVAL surfaces as informational, doesn't block tool calls
+    assert "AEGIS_APPROVE_AS_BLOCK=0" in cmd
+    # Cost gate disabled (wildcard-large budget)
+    assert "AEGIS_TOKEN_BUDGET=99999999" in cmd
+
+
+def test_build_pretool_command_sidecar_keeps_strict_defaults() -> None:
+    """Sidecar (Enterprise) mode must NOT prepend the Personal anti-
+    self-DoS overrides — Enterprise admins set per-tenant budgets via
+    the budget store, and REQUIRE_APPROVAL → BLOCK is the safe default
+    when an approval queue is configured."""
+    cmd = aegis_cli._build_pretool_command("sidecar")
+    assert "AEGIS_APPROVE_AS_BLOCK=0" not in cmd
+    assert "AEGIS_TOKEN_BUDGET=99999999" not in cmd
+
+
+# ── PR #101 — aegis install --rescue ──────────────────────────────────
+
+
+def test_rescue_restores_most_recent_backup(
+    isolated_install: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--rescue copies the newest settings.json.bak.<ts> to
+    settings.json. Useful when a previous install leaves the user
+    locked out by the cost gate."""
+    import time
+
+    settings = isolated_install / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    # Simulate a broken live settings.json
+    settings.write_text('{"hooks": {"PreToolUse": [{"broken": true}]}}')
+    # Simulate two backups, newer one carries known content
+    older = settings.parent / "settings.json.bak.1000000"
+    newer = settings.parent / "settings.json.bak.2000000"
+    older.write_text('{"old": "content"}')
+    newer.write_text('{"new": "content"}')
+    # Force mtime ordering so test isn't flaky on fast filesystems
+    import os
+    os.utime(older, (1000000, 1000000))
+    os.utime(newer, (2000000, 2000000))
+
+    rc = aegis_cli.cmd_install(_install_args(rescue=True))
+    assert rc == 0
+    # Latest backup wins
+    assert json.loads(settings.read_text()) == {"new": "content"}
+    out = capsys.readouterr().out
+    assert "restored" in out
+    assert "settings.json.bak.2000000" in out
+
+
+def test_rescue_with_no_backups_returns_error(
+    isolated_install: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """When no bak files exist, --rescue must return non-zero with a
+    clear message rather than silently doing nothing."""
+    rc = aegis_cli.cmd_install(_install_args(rescue=True))
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "no settings.json.bak" in err
+
+
+def test_rescue_skips_normal_install_path(
+    isolated_install: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """When --rescue is set, the install pipeline (manifest validation,
+    hook script registration, etc.) must NOT run. Verified by checking
+    that no settings.json is created when --rescue runs without backups
+    (the rescue code path returns before touching anything)."""
+    settings = isolated_install / ".claude" / "settings.json"
+    assert not settings.exists()
+    aegis_cli.cmd_install(_install_args(rescue=True))
+    # No backups + rescue → no install side-effects either
+    assert not settings.exists()
 
 
 def test_pretool_hook_marker_distinguishes_modes() -> None:

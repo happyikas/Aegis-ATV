@@ -1,56 +1,73 @@
-# AegisData T2 MVP
+# Aegis — Action Firewall for Claude Code
 
 [![CI](https://github.com/happyikas/Aegis-ATV/actions/workflows/ci.yml/badge.svg)](https://github.com/happyikas/Aegis-ATV/actions/workflows/ci.yml)
+[![tests](https://img.shields.io/badge/tests-2369%20passed-brightgreen)](https://github.com/happyikas/Aegis-ATV/actions/workflows/ci.yml)
+[![macmini](https://img.shields.io/badge/macmini%20suite-100%2F100-brightgreen)](docs/MANUAL_macmini_validation.md)
 
 ![demo](demo/recording/demo.gif)
 
-A Python sidecar that wraps every AI-agent tool call in a 2,080-dimensional
-**Agent Trace Vector (ATV-2080-v1)**, runs it through a 7-stage Action
-Firewall, brackets the call in an **Agent Telemetry Management Unit
-(ATMU)** Write-Ahead Intent Log, asks an sLLM judge when needed,
-**Ed25519-signs** every record, chains it into a **Merkle-linked
-audit log**, encrypts it into an **AES-256-GCM forensic journal**,
-maintains per-AID **circuit-breaker quarantines**, tracks per-tenant
-**cost attestation** in a separately-keyed ledger, exposes a
-**Hierarchical Agent Memory (HAM)** L3+L4 store, and feeds every
-observation into a **5-layer Burn-in controller** that progresses
-through Observation → Shadow → Assisted → Production.
+> **In-process firewall that intercepts every Claude Code tool call, scores it through a 16-step ATV-2080-v1 pipeline, and BLOCKs / requires approval / ALLOWs before the tool runs. Solo Free contract: 0 cloud calls, all processing on-device, ~5-minute install.**
 
-Implements the **T2 (software-only) tier** of AegisData provisional
-patent v7.10. The original 7-day MVP design is in [`PLAN.md`](PLAN.md);
-the patent-aligned re-plan and per-milestone status is in
-[`PLAN_v2.md`](PLAN_v2.md).
-
-**Status (2026-04-28):** v3.0.0 — **ATV-native sLLM stack**. M1–M17 +
-step311 donor rule pack + v2.1 Safe Auto-Run + v2.2 Poisoned
-Instruction Detector + v2.3 HW emulation + v2.4 step337 HW anomaly
-gate + **v3.0 attribution-head + local-Phi + hybrid judge**.
-**905 tests pass**, ruff clean, mypy strict over 89 source files.
+## What you get in 5 minutes
 
 ```bash
-# v3.0: confidence-routing judge tower (M13 → Phi → Haiku → Dummy)
-export AEGIS_JUDGE_PROVIDER=hybrid
-AEGIS_EMBEDDING_PROVIDER=dummy AEGIS_JUDGE_PROVIDER=dummy \
-  uv run python demo/judge_stack.py
-# 5 / 5 scenarios decided at Tier 1 (M13) in <1ms aggregate
-
-# v2.3+v2.4 HW/SW double-check live demo
-AEGIS_EMBEDDING_PROVIDER=dummy AEGIS_JUDGE_PROVIDER=dummy \
-  uv run python demo/hw_double_check.py
-# honest agent ✓ + 6 attack modes ✗ all caught
-#   3 by M12 escalation (Claim 27 cost axis)
-#   3 by step337 (HW band IOMMU / hypervisor / network exfil)
-
-# Sidecar mode: enable simulator + inject attack for demo
-AEGIS_HW_PROVIDER=sim                              # T3 emulation on (HW band populated)
-AEGIS_HW_INJECT_ATTACK=token_flops_mismatch        # demo: M12 escalation fires
+git clone https://github.com/happyikas/Aegis-ATV.git && cd Aegis-ATV
+uv sync                              # ~30s
+uv run aegis install --mode local    # patches ~/.claude/settings.json
+# Restart Claude Code. Done.
 ```
 
+Now every tool call Claude Code makes goes through Aegis first. Try a destructive command in your next session — it gets BLOCKed cryptographically with a signed audit line:
+
+```
+⛔ BLOCK  Bash  trace=ebf0c92d  (165 ms)
+   reason: dangerous pattern: <step310 regex>
+   advise: [HIGH] security-reviewer — Block until reviewer ACKs
+```
+
+→ **5-minute walkthrough**: [`docs/PERSONAL_QUICKSTART.md`](docs/PERSONAL_QUICKSTART.md).
+
+## What gets caught (highlights)
+
+* **Filesystem destructive** — recursive purge against system paths (`/var`, `/home`, `/`).
+* **VCS destructive** — force-push to main/master/prod/release, force-delete protected branches.
+* **Cloud destructive** — Kubernetes `delete`, Terraform `destroy`, Helm uninstall, AWS IAM/EC2/S3 mutation, GCP/Azure resource removal.
+* **SQL destructive** — drop-table on production, unbounded delete (no WHERE).
+* **Sandbox escape** — privileged Docker, capability adds, `nsenter`, `chroot`, `mount --bind`.
+* **Prompt injection** — "ignore previous instructions", `[INST] system`, MCP-injection patterns.
+* **Sensitive paths** — cloud credentials (`~/.aws/credentials`), SSH private keys, system password files, `.env`.
+* **Loop / runaway cost** — same call 3× → REQUIRE_APPROVAL.
+* **Instruction drift** — `CLAUDE.md` / `.mcp.json` / plugin manifest tampering.
+
+→ Full catalog: [`policies/rag_corpus/rules.jsonl`](policies/rag_corpus/rules.jsonl) (31 rules + 6 incident playbooks).
+
+## Solo Free contract — no data leaves your laptop
+
+| | Default install | Optional opt-in |
+|---|---|---|
+| Where Aegis runs | 100% your laptop | same |
+| Tool inputs / files / commands | never leave the machine | same |
+| sLLM judge | local rules (`dummy`) | `--judge haiku` calls Anthropic API |
+| Embeddings | SHA3 (`dummy`) | `--embedding bge-local` (one-time GGUF download, then local) |
+| Audit log | `~/.aegis/audit.jsonl` | same |
+
+→ The default install makes **0 outbound network requests**. Verify yourself with `tcpdump` / `Little Snitch` while Claude Code runs.
+
+## After it's installed
+
 ```bash
-uv run aegis install --mode sidecar    # multi-tenant FastAPI service
+uv run aegis report                # 5-line risk summary of recent activity
+uv run aegis verify-audit          # cryptographic chain check (detects any tampering)
+uv run aegis policy diff --since 7d  # what rules / playbooks / baselines changed
+uv run aegis pull-model --recommend  # upgrade path to Phi-3.5-mini / Haiku
+uv run python -m demo.macmini all  # 100-case self-validation
+```
+
+## Modes
+
+```bash
 uv run aegis install --mode local      # Solo Free in-process hook (no service)
-uv run aegis baseline init             # snapshot CLAUDE.md / AGENTS.md / .mcp.json
-uv run aegis report                    # 5-line Agent Risk Report
+uv run aegis install --mode sidecar    # multi-tenant FastAPI + Postgres + Redis (Enterprise)
 ```
 
 * **Safe Auto-Run** — known-safe ops (Read/Grep/Glob, ls, pytest,
