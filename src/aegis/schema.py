@@ -44,7 +44,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ATV_VERSION = "ATV-2080-v1"
 ATV_DIM = 2080
@@ -129,10 +129,25 @@ ALL_SUBFIELDS: list[tuple[str, slice]] = [
 # Header — patent ¶[0049]
 # ─────────────────────────────────────────────────────────────────────
 class ATVHeader(BaseModel):
-    """Structured header accompanying every ATV. Patent ¶[0049] fields."""
+    """Structured header accompanying every ATV. Patent ¶[0049] fields.
+
+    Field layout has two layers (PR #100 — ``docs/ATV_ARCHITECTURE.md``):
+
+    * **Legacy v1 fields** (``trace_id``, ``span_id``, ``aid``, …) —
+      kept for back-compat with v2.x audit lines. Existing callers
+      continue to work unchanged.
+    * **Patent-aligned identifiers** (``agent_id``,
+      ``agent_instance_id``, ``session_id``, ``parent_atv_hash``,
+      ``step_seq_no``, ``runtime_context_id``, …) — added so the
+      schema vocabulary matches Claim 1 + Section 5 of the patent.
+      When a patent-aligned field is left empty, the
+      ``_fill_patent_aliases`` validator copies the corresponding
+      legacy value so the two layers stay coherent.
+    """
 
     model_config = ConfigDict(populate_by_name=True)
 
+    # ── legacy v1 fields (kept for back-compat) ─────────────────────
     trace_id: str
     span_id: str
     parent_span_id: str | None = None
@@ -148,6 +163,45 @@ class ATVHeader(BaseModel):
     model_hash: str | None = None
     burn_in_id: str | None = None
     atv_hash: str | None = None  # SHA3-256 of tensor; populated by signer
+
+    # ── PR #100 patent-aligned identifiers ──────────────────────────
+    agent_id: str | None = None            # logical agent role / principal
+    agent_instance_id: str | None = None   # stateful execution context
+    session_id: str | None = None          # explicit session anchor
+    runtime_context_id: str | None = None  # container / TEE / CSD attestation
+    step_seq_no: int = 0                   # turn counter within session
+    action_txn_id: str | None = None       # patent-named alias of span_id
+    parent_atv_hash: str | None = None     # tree-shaped chain (call tree)
+    deployment_id: str | None = None       # consolidated node_id-style fingerprint
+    policy_id: str | None = None           # active firewall policy fingerprint
+    attestation_key_id: str | None = None  # which Ed25519 key signed
+
+    @model_validator(mode="after")
+    def _fill_patent_aliases(self) -> ATVHeader:
+        """Populate patent-aligned identifiers from legacy fields when
+        the caller has not set them explicitly. Legacy callers see no
+        behavioural change; new callers can override either layer."""
+        if not self.agent_instance_id:
+            self.agent_instance_id = self.aid
+        if not self.agent_id:
+            # Legacy mode treats AID as the only identifier — logical
+            # agent_id defaults to the same value. New callers separate
+            # them (logical = "MedRAG-CKD", instance = UUID per run).
+            self.agent_id = self.aid
+        if not self.session_id:
+            self.session_id = self.trace_id
+        if not self.action_txn_id:
+            self.action_txn_id = self.span_id
+        if not self.runtime_context_id:
+            if self.node_id and self.pod_id:
+                self.runtime_context_id = f"{self.node_id}:{self.pod_id}"
+            elif self.node_id:
+                self.runtime_context_id = self.node_id
+            elif self.pod_id:
+                self.runtime_context_id = self.pod_id
+        if not self.deployment_id:
+            self.deployment_id = self.node_id
+        return self
 
     # Aliases for legacy callers
     @property
