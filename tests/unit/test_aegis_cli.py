@@ -629,8 +629,6 @@ def test_rescue_restores_most_recent_backup(
     """--rescue copies the newest settings.json.bak.<ts> to
     settings.json. Useful when a previous install leaves the user
     locked out by the cost gate."""
-    import time
-
     settings = isolated_install / ".claude" / "settings.json"
     settings.parent.mkdir(parents=True, exist_ok=True)
     # Simulate a broken live settings.json
