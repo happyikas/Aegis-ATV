@@ -7,16 +7,28 @@
 
 ---
 
-## TL;DR — 4 줄
+## TL;DR — 셋 중 한 가지
 
 ```bash
+# A) 소스 클론 (개발도 같이 하실 분)
 git clone https://github.com/happyikas/Aegis-ATV.git && cd Aegis-ATV
 uv sync                              # 의존성 (~30s)
 uv run aegis install --mode local    # ~/.claude/settings.json 패치
-# Claude Code 재시작 — 끝.
+
+# B) 원라이너 (clone 없이)
+curl -LsSf https://raw.githubusercontent.com/happyikas/Aegis-ATV/main/scripts/install.sh | bash
+
+# C) Homebrew (macOS / Linuxbrew)
+brew tap happyikas/aegis https://github.com/happyikas/Aegis-ATV.git
+brew install happyikas/aegis/aegis
+aegis install --mode local
+
+# 그 후 Claude Code 재시작 — 끝.
 ```
 
 이제 Claude Code 안에서 무엇을 하든 매 도구 호출이 Aegis 의 16-step firewall 을 거칩니다. 외부 API 호출 0건, 모든 처리 본인 디바이스에서 끝.
+
+> A/B/C 모두 동일한 in-process 후크와 동일한 정책을 설치합니다 — 차이는 소스 트리를 어디에 두느냐 뿐. B 는 `~/.aegis-src/` 에 클론, C 는 Homebrew cellar 에 설치, A 는 본인이 지정한 디렉터리.
 
 ---
 
