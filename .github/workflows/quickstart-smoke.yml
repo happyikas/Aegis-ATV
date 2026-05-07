@@ -1,0 +1,80 @@
+name: quickstart smoke
+
+# Verify that the README's documented install path actually works on a
+# clean Ubuntu / macOS runner. This catches drift between the docs and
+# the CLI (renamed flags, removed defaults, broken --mode local install)
+# before users hit it.
+#
+# Triggers:
+#   * pushes to main (sanity check before tagging a release)
+#   * PRs that touch the install surface (CLI, hook, smoke script,
+#     README, quickstart docs, lockfile)
+#   * weekly schedule — picks up uv / Python ecosystem drift even when
+#     the repo has been quiet
+#   * workflow_dispatch — manual re-run from the Actions tab
+#
+# Note: a follow-up PR will extend this workflow with two more jobs
+# once Formula/aegis.rb and scripts/install.sh land:
+#   * curlsh-smoke         — runs scripts/install.sh end-to-end
+#   * brew-formula-syntax  — `ruby -c Formula/aegis.rb` + DSL grep
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - tools/aegis_cli.py
+      - tools/aegis_local_hook.py
+      - tools/hooks/**
+      - scripts/quickstart_smoke.sh
+      - .github/workflows/quickstart-smoke.yml
+      - README.md
+      - docs/PERSONAL_QUICKSTART.md
+      - pyproject.toml
+      - uv.lock
+  pull_request:
+    branches: [main]
+    paths:
+      - tools/aegis_cli.py
+      - tools/aegis_local_hook.py
+      - tools/hooks/**
+      - scripts/quickstart_smoke.sh
+      - .github/workflows/quickstart-smoke.yml
+      - README.md
+      - docs/PERSONAL_QUICKSTART.md
+      - pyproject.toml
+      - uv.lock
+  schedule:
+    - cron: '17 6 * * 1'   # Monday 06:17 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: quickstart-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────
+  # Direct smoke — run scripts/quickstart_smoke.sh against a clean
+  # checkout. Catches CLI / hook / settings.json regressions.
+  # ─────────────────────────────────────────────────────────────────────
+  direct-smoke:
+    name: scripts/quickstart_smoke.sh — ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Run quickstart smoke
+        run: bash scripts/quickstart_smoke.sh
