@@ -231,7 +231,8 @@ uv run aegis install --rescue
 
 ## 다음 단계
 
-* **3-min 데모 영상** — [demo/recording/demo.gif](../demo/recording/demo.gif)
+* **30-초 데모 GIF** — [demo/recording/quickstart.gif](../demo/recording/quickstart.gif) · 소스: [`draw_quickstart_gif.py`](../demo/recording/draw_quickstart_gif.py)
+* **풀 3-min 데모** — [demo/recording/demo.gif](../demo/recording/demo.gif) (Sidecar / dashboard 까지)
 * **상세 매뉴얼 (한국어)** — [`docs/MANUAL_v2.2.md`](MANUAL_v2.2.md)
 * **ATV 구조 시각자료** — [`docs/diagrams/atv_2080_v1.png`](diagrams/atv_2080_v1.png)
 * **90-case 회귀 검증** — [`docs/MANUAL_macmini_validation.md`](MANUAL_macmini_validation.md)
