@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/happyikas/Aegis-ATV/blob/main/SECURITY.md
+    about: Please do not file public issues for security findings — see SECURITY.md for the private channel.
+  - name: Personal Quickstart
+    url: https://github.com/happyikas/Aegis-ATV/blob/main/docs/PERSONAL_QUICKSTART.md
+    about: 5-minute install + first-BLOCK walkthrough.
+  - name: Discussions
+    url: https://github.com/happyikas/Aegis-ATV/discussions
+    about: Questions, ideas, and show-and-tell — open-ended threads belong here, not the issue tracker.
