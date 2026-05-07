@@ -92,6 +92,13 @@ jobs:
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Land the actual head ref (push: main, pull_request: source
+          # branch) so install.sh can `git clone --branch <ref>` from
+          # this workspace via file://. Default checkout for PRs leaves
+          # a detached HEAD at the merge commit — file:// clone of that
+          # has no branch by AEGIS_REF and exits 128.
+          ref: ${{ github.head_ref || github.ref_name }}
 
       - name: Pre-install uv (so install.sh's command -v uv path is taken)
         uses: astral-sh/setup-uv@v3
