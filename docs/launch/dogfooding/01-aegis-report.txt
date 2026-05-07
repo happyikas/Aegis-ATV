@@ -1,0 +1,11 @@
+AegisData Agent Risk Report
+===========================
+  audit log: /Users/example/.aegis/audit.jsonl  (5581 entries)
+
+  ✅   122 safe tool calls auto-approved
+  ⚠️   2374 high-risk actions required approval
+  ⛔    29 destructive commands blocked
+  ⛔     0 poisoned-instruction sources detected
+  💸     0 redundant calls deduplicated
+  🔁     0 potential loops aborted
+  🧾  Full signed local audit: /Users/example/.aegis/audit.jsonl

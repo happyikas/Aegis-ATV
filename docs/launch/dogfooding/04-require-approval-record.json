@@ -1,0 +1,12 @@
+{
+  "ts_ns": 1777782653317349000,
+  "tool": "Edit",
+  "aid": "claude-code-session:00000000-0000-0000-0000-000000000000",
+  "decision": "REQUIRE_APPROVAL",
+  "reason": "hybrid[m13_attribution]: attribution-head REQUIRE_APPROVAL (score=0.55 \u2265 0.40); top contributor: tool_arg_inspection (0.30)",
+  "trace_id": "593fbf2c15cdb37d1f132d6c6a970a09",
+  "latency_ms": 14.322,
+  "mode": "local",
+  "prev_hash": "dfed2098b3d31ab7053923739f65b7ded588aeb7d85125ad9e3ca3762a3ef13b",
+  "this_hash": "63b2f2058c53b934a36d808035a345844e1b92c18e90904eee2469e0d8d86e4d"
+}
