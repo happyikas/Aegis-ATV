@@ -16,8 +16,7 @@ Apply once, before any of the three channels go live:
 
 - [ ] All install paths verified on a clean VM today
       (see `SHOW_HN.md` § posting checklist).
-- [ ] LICENSE file landed (currently blocking; mentioned in
-      multiple drafts as TBD).
+- [x] LICENSE file landed (Apache-2.0 — PR #110).
 - [ ] `Formula/aegis.rb` `sha256` updated to the launch-tag value
       (currently the all-zero placeholder; bump procedure in
       [`../../pkg/brew/README.md`](../../pkg/brew/README.md)).

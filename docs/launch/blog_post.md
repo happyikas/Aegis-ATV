@@ -168,8 +168,8 @@ read-only. Aegis adds <1% latency overhead to a typical session.
 
 ## Roadmap
 
-- LICENSE file + Homebrew-core graduation (`pkg/brew/README.md` has
-  the criteria).
+- Homebrew-core graduation (`pkg/brew/README.md` has the criteria
+  — Apache-2.0 LICENSE prerequisite is satisfied).
 - Windows / WSL2 native support (currently macOS + Linux only).
 - MCP server packaging — register Aegis as an MCP server so other
   MCP-aware agents can use it without the Claude-Code-specific hook.

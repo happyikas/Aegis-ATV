@@ -3,6 +3,7 @@
 [![CI](https://github.com/happyikas/Aegis-ATV/actions/workflows/ci.yml/badge.svg)](https://github.com/happyikas/Aegis-ATV/actions/workflows/ci.yml)
 [![tests](https://img.shields.io/badge/tests-2369%20passed-brightgreen)](https://github.com/happyikas/Aegis-ATV/actions/workflows/ci.yml)
 [![macmini](https://img.shields.io/badge/macmini%20suite-100%2F100-brightgreen)](docs/MANUAL_macmini_validation.md)
+[![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 ![demo](demo/recording/quickstart.gif)
 

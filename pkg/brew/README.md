@@ -65,7 +65,7 @@ The current setup uses a **third-party tap** rather than the official
 `homebrew-core` repository. To submit to homebrew-core later we'll
 need:
 
-* A stable LICENSE file in the project root (currently TBD).
+* ✅ A stable LICENSE file in the project root (Apache-2.0 — landed in PR #110).
 * At least 30 days of public release history with no breaking changes.
 * A test block that does not require network access (already true).
 * No optional Python dependencies that fetch model files at install
