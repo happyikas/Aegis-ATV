@@ -12,8 +12,10 @@ at 1440×3200.
 
 ```
 demo/recording/
-├── demo.cast                 # asciinema v3 recording (15 KB)
-├── demo.gif                  # rendered playback (884 KB, ~25s loop)
+├── quickstart.gif            # ★ Personal MVP first-screen GIF (Pillow-generated, 131 KB, 32s loop)
+├── draw_quickstart_gif.py    # source: synthetic 6-frame terminal session
+├── demo.cast                 # asciinema v3 recording — full Sidecar demo (15 KB)
+├── demo.gif                  # rendered Sidecar playback (884 KB, ~25s loop)
 ├── transcript.log            # plain-text transcript (with ANSI colors)
 ├── capture_screens.sh        # script that produced the screens
 ├── narration-60s.txt         # 60-second voiceover script (source)
