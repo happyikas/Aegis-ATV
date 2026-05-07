@@ -156,6 +156,36 @@ uv run aegis install --mode local    # 다시 켜기
 
 ---
 
+## Audit log 서명 켜기 (선택)
+
+기본 install 은 `~/.aegis/audit.jsonl` 에 **SHA3-256 체인** 으로 무결성을
+보장합니다 (한 줄이라도 변조되면 그 이후 모든 hash 가 깨짐). 추가로
+**Ed25519 서명** 을 켜면 키 없이는 체인을 다시 계산조차 할 수 없게 됩니다
+(공증/규제/공유 audit 용도).
+
+```bash
+# 1) 한 번만 — Ed25519 keypair 생성 (~/.aegis/keys/audit.ed25519{,.pub})
+uv run aegis audit-key init
+
+# 2) 그 이후 모든 audit append 는 자동으로 서명됨
+#    Claude Code 재시작 불필요 — 즉시 적용
+
+# 3) 검증
+uv run aegis verify-audit
+# ✓ verify-audit (local chain) — N records intact
+#   signing pubkey: loaded — signed records were also Ed25519-verified
+
+# 4) 공개 fingerprint 만 따로 보기 (audit 공유 시 상대방에게 공유)
+uv run aegis audit-key show
+```
+
+키 분실 시: 기존 서명은 `~/.aegis/keys/audit.ed25519.pub` 만 있으면 검증
+가능. 새 키로 재생성하면 새 서명만 새 체인에 들어가고 옛 서명은 옛 키로
+계속 검증됨 (`aegis audit-key init --force` 권장하지 않음 — 옛 서명을
+이어서 못 만듦).
+
+---
+
 ## 모델 업그레이드 (선택)
 
 기본 **dummy provider** 는 룰 기반이라 빠르지만 회색 케이스 분류가 약합니다. 본격 사용 시:

@@ -26,10 +26,26 @@ remains the path for cryptographic non-repudiation.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
+
+# fcntl is POSIX-only. Personal MVP supports macOS + Linux today
+# (see docs/launch/FAQ.md "Windows support"). On non-POSIX hosts the
+# import fails silently and append() falls back to the unlocked path
+# — single-process correctness is preserved by the threading.Lock in
+# JsonlStore; the file lock here exists only to guard against
+# *cross-process* races (multiple Claude Code sessions writing to the
+# same ~/.aegis/audit.jsonl simultaneously).
+try:
+    import fcntl as _fcntl
+    _FCNTL_AVAILABLE = True
+except ImportError:  # pragma: no cover — Windows path
+    _fcntl = None  # type: ignore[assignment]
+    _FCNTL_AVAILABLE = False
 
 GENESIS_HASH = "0" * 64
 
@@ -130,6 +146,16 @@ def append(path: Path, record: dict[str, Any]) -> dict[str, Any]:
     SHA3 of the public key). Records without a signing key configured
     proceed unchanged — backwards compatible.
 
+    Concurrency: the read-prev-hash → compute → write sequence is
+    protected by an exclusive ``fcntl.flock`` on the audit file across
+    POSIX hosts. This serialises *cross-process* writers (multiple
+    Claude Code sessions on the same ``~/.aegis/audit.jsonl``) so two
+    concurrent appends cannot read the same ``prev_hash`` and fork the
+    chain. Within a single process, JsonlStore's threading.Lock
+    handles intra-process concurrency. On non-POSIX hosts (Windows,
+    not yet supported) the lock degrades to no-op and single-process
+    correctness only.
+
     Returns the augmented record (caller can inspect it). Audit
     failures raise ``OSError`` — callers in the hot path should wrap
     this in try/except so a write error never blocks the tool call.
@@ -144,27 +170,46 @@ def append(path: Path, record: dict[str, Any]) -> dict[str, Any]:
     except Exception:  # noqa: BLE001 — rotation is best-effort
         pass
 
-    prev_hash = _last_hash(path)
-    chained = {**record, "prev_hash": prev_hash}
-    chained["this_hash"] = _hash_record(prev_hash, chained)
-
-    # Optional Ed25519 signing — silent when no key is configured.
-    try:
-        from aegis.audit.signing import (
-            load_private_key_or_none,
-            sign_hash,
-        )
-        keypair = load_private_key_or_none()
-        if keypair is not None:
-            chained["signature"] = sign_hash(chained["this_hash"], keypair)
-            chained["pubkey_fingerprint"] = keypair.fingerprint
-    except Exception:  # noqa: BLE001 — signing is best-effort
-        # Never fail an audit append because of signing trouble.
-        pass
-
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(chained, default=str) + "\n")
+
+    # Open + flock + read-prev → compute → write → fsync, all under
+    # one exclusive lock. Without this, two writers can both observe
+    # the same prev_hash, both compute their this_hash from it, and
+    # both append — forking the chain at that point.
+    with path.open("a+", encoding="utf-8") as fh:
+        if _FCNTL_AVAILABLE:
+            _fcntl.flock(fh.fileno(), _fcntl.LOCK_EX)
+        try:
+            prev_hash = _last_hash(path)
+            chained = {**record, "prev_hash": prev_hash}
+            chained["this_hash"] = _hash_record(prev_hash, chained)
+
+            # Optional Ed25519 signing — silent when no key is configured.
+            try:
+                from aegis.audit.signing import (
+                    load_private_key_or_none,
+                    sign_hash,
+                )
+                keypair = load_private_key_or_none()
+                if keypair is not None:
+                    chained["signature"] = sign_hash(
+                        chained["this_hash"], keypair,
+                    )
+                    chained["pubkey_fingerprint"] = keypair.fingerprint
+            except Exception:  # noqa: BLE001 — signing is best-effort
+                # Never fail an audit append because of signing trouble.
+                pass
+
+            fh.write(json.dumps(chained, default=str) + "\n")
+            fh.flush()
+            # fsync can fail on some filesystems (e.g. tmpfs in tests);
+            # the chain stays consistent even without it since the
+            # write itself is held under flock.
+            with contextlib.suppress(OSError):
+                os.fsync(fh.fileno())
+        finally:
+            if _FCNTL_AVAILABLE:
+                _fcntl.flock(fh.fileno(), _fcntl.LOCK_UN)
     return chained
 
 
