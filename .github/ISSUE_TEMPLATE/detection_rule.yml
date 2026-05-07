@@ -1,0 +1,73 @@
+name: New detection rule / playbook
+description: Propose a new entry for `policies/rag_corpus/rules.jsonl` or `policies/safe_actions.json`.
+title: "[rule] "
+labels: ["enhancement", "policy"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Proposing a new rule is one of the highest-leverage contributions
+        you can make. To merge a rule we need to know **what it catches**,
+        **why we believe it's a real risk**, and **how often it fires
+        false-positive on safe code**.
+
+  - type: input
+    id: rule-id
+    attributes:
+      label: Suggested rule ID
+      placeholder: "rule-aws-rds-delete-cluster"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Rule kind
+      options:
+        - "BLOCK rule (rules.jsonl)"
+        - "REQUIRE_APPROVAL rule (rules.jsonl)"
+        - "Safe-allowlist entry (safe_actions.json)"
+        - "Sensitive path entry (sensitive_paths.json)"
+        - "Incident playbook (rag_corpus/playbooks/)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: pattern
+    attributes:
+      label: Pattern
+      description: |
+        Regex or literal substring. Paraphrase if necessary — do not
+        paste a copy-pasteable working payload.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: incident
+    attributes:
+      label: Incident reference
+      description: |
+        Where has this pattern been observed in the wild? Link to a public
+        post-mortem, CVE, blog write-up, or describe an internal incident
+        in general terms.
+    validations:
+      required: true
+
+  - type: textarea
+    id: false-positives
+    attributes:
+      label: Expected false positives
+      description: |
+        What legitimate uses might this rule catch? How would a developer
+        bypass it (e.g., explicit `--force-allowlist` flag)?
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: ready
+    attributes:
+      label: Readiness
+      options:
+        - label: I have a unit test ready for this rule.
+        - label: I have a draft PR for this rule.

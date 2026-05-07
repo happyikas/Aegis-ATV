@@ -1,0 +1,97 @@
+name: Bug report
+description: Something isn't working — wrong rule fires, hook crashes, install fails, etc.
+title: "[bug] "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Before filing, please check that:
+
+        * This is **not a security finding** — if it is, please use the
+          private channel in [SECURITY.md](https://github.com/happyikas/Aegis-ATV/blob/main/SECURITY.md) instead.
+        * The issue reproduces on the latest `main`.
+
+  - type: input
+    id: version
+    attributes:
+      label: Aegis version
+      description: Output of `uv run aegis --version` or commit SHA.
+      placeholder: v3.1.0 / commit abc1234
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install-mode
+    attributes:
+      label: Install mode
+      options:
+        - "local (Solo Free / in-process hook)"
+        - "sidecar (Docker / FastAPI service)"
+        - "not yet installed"
+      default: 0
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS / platform
+      placeholder: macOS 15.4 (arm64) · Ubuntu 22.04 (x86_64) · ...
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      placeholder: "3.11.9"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: One-paragraph summary of the actual behaviour.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: One-paragraph summary of the intended behaviour.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: |
+        Smallest sequence of commands or shortest input that reproduces
+        the issue. If the bug is "the firewall let X through", paraphrase
+        the prompt — don't paste a literal payload.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: |
+        Last ~50 lines of `~/.aegis/audit.jsonl` or the hook stderr.
+        Redact anything sensitive.
+      render: text
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I have read [SECURITY.md](https://github.com/happyikas/Aegis-ATV/blob/main/SECURITY.md) and confirmed this is not a security finding.
+          required: true
+        - label: I have checked existing open issues for duplicates.
+          required: true
