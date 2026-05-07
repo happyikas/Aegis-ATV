@@ -75,6 +75,35 @@ uv run aegis pull-model --recommend  # upgrade path to Phi-3.5-mini / Haiku
 uv run python -m demo.macmini all  # 100-case self-validation
 ```
 
+## Verify integrity
+
+Two layers, both runnable any time without network:
+
+```bash
+# 1) Hash chain — default, no key required.
+#    Detects any post-write mutation of ~/.aegis/audit.jsonl.
+uv run aegis verify-audit
+#   ✓ verify-audit (local chain) — 5,583 records intact
+#   signing pubkey: not configured
+
+# 2) Optional Ed25519 signing — opt-in, one-shot setup.
+#    Without the private key, the chain cannot be re-computed forward
+#    from a tampered point. Recommended for any audit log you intend
+#    to share, archive, or use as evidence.
+uv run aegis audit-key init       # generate ~/.aegis/keys/audit.ed25519{,.pub}
+uv run aegis verify-audit
+#   ✓ verify-audit (local chain) — 6 records intact
+#   signing pubkey: loaded — signed records were also Ed25519-verified
+
+# 3) Share the public fingerprint (so others can verify your audit
+#    without running your machine):
+uv run aegis audit-key show
+#   fingerprint: f2a17931406e4f56
+#   pub:         ~/.aegis/keys/audit.ed25519.pub
+```
+
+Sample real-session output is checked in under [`docs/launch/dogfooding/`](docs/launch/dogfooding/) — captured against an actual `~/.aegis/audit.jsonl`, not synthetic.
+
 ## Modes
 
 ```bash

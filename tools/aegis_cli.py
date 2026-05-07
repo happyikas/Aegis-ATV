@@ -2281,6 +2281,10 @@ def cmd_install(args: argparse.Namespace) -> int:
     print()
     print("  Quickstart guide:  docs/PERSONAL_QUICKSTART.md")
     print("  Provider upgrade:  uv run aegis pull-model --recommend")
+    print(
+        "  Sign audit log:    uv run aegis audit-key init"
+        "  (optional — adds Ed25519 signatures on every append)"
+    )
 
     legacy_present = any(
         "install_hook.py" in h.get("command", "")

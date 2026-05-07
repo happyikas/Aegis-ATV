@@ -15,7 +15,7 @@ attribution scores, latencies, decision counts — is verbatim.
 | File | Captured by | What it shows |
 |------|-------------|---------------|
 | [`01-aegis-report.txt`](01-aegis-report.txt) | `uv run aegis report` | The 5-line risk summary printed at session level. 5,581 records → 122 ALLOW, 2,374 REQUIRE_APPROVAL, 29 BLOCK. |
-| [`02-aegis-verify-audit.txt`](02-aegis-verify-audit.txt) | `uv run aegis verify-audit` | Chain integrity check. `5,583 records intact` — every prev_hash/this_hash verified end-to-end. |
+| [`02-aegis-verify-audit.txt`](02-aegis-verify-audit.txt) | `uv run aegis verify-audit` | Chain integrity check **with Ed25519 signing enabled** (`aegis audit-key init` was run, then a fresh chain started). `signing pubkey: loaded — signed records were also Ed25519-verified` is the launch-target state. The 5,583-record unsigned chain from the same session is archived locally; the launch artifact shows a clean signed chain. |
 | [`03-block-record.json`](03-block-record.json) | `grep -m1 '"decision": "BLOCK"' ~/.aegis/audit.jsonl \| jq` | One full BLOCK record showing the complete step trace (305→340), the 30-subfield m13 attribution head's top contributors, the ATV sha3, and the Merkle hashes. |
 | [`04-require-approval-record.json`](04-require-approval-record.json) | same, for `REQUIRE_APPROVAL` | Shorter trace example — m13 score in the [0.40, 0.70) range escalates to human approval rather than outright BLOCK. |
 | [`05-block-summary.txt`](05-block-summary.txt) | `jq` over the 29 BLOCKs | Distinct (tool, reason) pairs from the session. Shows step310/311 catching `\brm\s+-rf\s+/`, `DROP\s+TABLE`, `/etc/(shadow\|passwd)`, sudo, exec/system, sensitive-path reads (`~/.aws/credentials`), and m13-attribution-driven BLOCKs. |
