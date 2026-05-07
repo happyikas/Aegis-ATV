@@ -9,7 +9,7 @@ RUN pip install --no-cache-dir uv
 
 WORKDIR /app
 
-COPY pyproject.toml uv.lock* /app/
+COPY pyproject.toml uv.lock* README.md LICENSE NOTICE /app/
 RUN uv sync --frozen --no-install-project || uv sync --no-install-project
 
 COPY src /app/src
