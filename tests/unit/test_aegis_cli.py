@@ -1468,3 +1468,193 @@ def test_auto_pull_models_no_op_on_empty_tuple() -> None:
     """free profile passes () so install doesn't trigger any download."""
     rc = aegis_cli._auto_pull_models(())
     assert rc == 0
+
+
+# ── PR-C: aegis forensic <selector> ─────────────────────────────────
+
+
+def _write_audit_record(
+    fh, *, ts_ns: int, decision: str, tool: str = "Bash",
+    aid: str = "session-abc", trace_id: str = "trace-1",
+    reason: str = "stub", latency_ms: float = 1.0,
+    explain: dict | None = None,
+) -> None:
+    rec = {
+        "ts_ns": ts_ns,
+        "tool": tool,
+        "aid": aid,
+        "decision": decision,
+        "reason": reason,
+        "trace_id": trace_id,
+        "latency_ms": latency_ms,
+        "mode": "local",
+        "explain": explain or {},
+        "prev_hash": "0" * 64,
+        "this_hash": "f" * 64,
+    }
+    fh.write(json.dumps(rec) + "\n")
+
+
+def _make_audit_fixture(tmp_path: Path) -> Path:
+    """Mixed-decision, two-AID audit log for forensic tests."""
+    audit = tmp_path / "audit.jsonl"
+    base = 1_700_000_000_000_000_000  # any plausible ns timestamp
+    with audit.open("w") as fh:
+        # Session A — 3 records, mixed decisions
+        _write_audit_record(
+            fh, ts_ns=base + 0, decision="ALLOW", tool="Read",
+            aid="session-A", trace_id="trA-001", latency_ms=12.0,
+        )
+        _write_audit_record(
+            fh, ts_ns=base + 1_000_000_000,
+            decision="REQUIRE_APPROVAL", tool="Edit",
+            aid="session-A", trace_id="trA-002", latency_ms=145.0,
+            reason="m13 score=0.55",
+            explain={"step_timings_us": {"step340_policy.run": 27432}},
+        )
+        _write_audit_record(
+            fh, ts_ns=base + 2_000_000_000,
+            decision="BLOCK", tool="Bash",
+            aid="session-A", trace_id="trA-003", latency_ms=240.0,
+            reason="dangerous pattern",
+            explain={"advisor_gate": {"invoked": True, "reason": "BLOCK"}},
+        )
+        # Session B — different AID, should be filtered out by selector
+        _write_audit_record(
+            fh, ts_ns=base + 3_000_000_000,
+            decision="ALLOW", aid="session-B", trace_id="trB-001",
+        )
+    return audit
+
+
+def _forensic_args(selector: str, **kw):
+    import argparse
+    return argparse.Namespace(
+        selector=selector,
+        trace=kw.get("trace"),
+        audit=kw.get("audit"),
+        since=kw.get("since"),
+        limit=kw.get("limit", 0),
+        json=kw.get("json", False),
+    )
+
+
+def test_forensic_no_audit_returns_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    rc = aegis_cli.cmd_forensic(_forensic_args(
+        "anything", audit=str(tmp_path / "absent.jsonl"),
+    ))
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "no audit log" in out
+
+
+def test_forensic_filters_by_aid(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    audit = _make_audit_fixture(tmp_path)
+    rc = aegis_cli.cmd_forensic(_forensic_args(
+        "session-A", audit=str(audit),
+    ))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "session-A" in out
+    assert "3 record(s)" in out
+    # Session-B record must NOT bleed in.
+    assert "trB-001" not in out
+
+
+def test_forensic_last_resolves_to_most_recent_aid(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    audit = _make_audit_fixture(tmp_path)
+    rc = aegis_cli.cmd_forensic(_forensic_args("last", audit=str(audit)))
+    assert rc == 0
+    out = capsys.readouterr().out
+    # Most recent = session-B in our fixture (last appended).
+    assert "session-B" in out
+
+
+def test_forensic_trace_filter_narrows_to_one_call(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    audit = _make_audit_fixture(tmp_path)
+    rc = aegis_cli.cmd_forensic(_forensic_args(
+        "session-A", audit=str(audit), trace="trA-002",
+    ))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "1 record(s)" in out
+    assert "trA-002" in out
+    assert "trA-001" not in out
+
+
+def test_forensic_json_output_structure(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    audit = _make_audit_fixture(tmp_path)
+    rc = aegis_cli.cmd_forensic(_forensic_args(
+        "session-A", audit=str(audit), json=True,
+    ))
+    assert rc == 0
+    out = capsys.readouterr().out
+    obj = json.loads(out)
+    assert obj["selector"] == "session-A"
+    assert obj["count"] == 3
+    assert obj["first_ts_ns"] < obj["last_ts_ns"]
+    assert len(obj["records"]) == 3
+    assert all(r["aid"] == "session-A" for r in obj["records"])
+
+
+def test_forensic_no_matching_records_returns_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    audit = _make_audit_fixture(tmp_path)
+    rc = aegis_cli.cmd_forensic(_forensic_args(
+        "session-zzz", audit=str(audit),
+    ))
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "no records match" in out
+
+
+def test_forensic_limit_respects_recent_n(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    audit = _make_audit_fixture(tmp_path)
+    rc = aegis_cli.cmd_forensic(_forensic_args(
+        "session-A", audit=str(audit), limit=2,
+    ))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "2 record(s)" in out
+    # The two most-recent records of session-A → trA-002 + trA-003.
+    assert "trA-002" in out
+    assert "trA-003" in out
+
+
+def test_forensic_renders_step_timings_and_advisor_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """When the audit record has PR-D step_timings_us or PR-A
+    advisor_gate, the timeline surfaces them as └─ sublines."""
+    audit = _make_audit_fixture(tmp_path)
+    rc = aegis_cli.cmd_forensic(_forensic_args(
+        "session-A", audit=str(audit),
+    ))
+    assert rc == 0
+    out = capsys.readouterr().out
+    # PR-D timing line present for trA-002.
+    assert "slow steps" in out
+    assert "step340_policy" in out
+    # PR-A advisor gate line present for trA-003.
+    assert "advisor: invoked" in out
+
+
+def test_forensic_subparser_dispatches_correctly() -> None:
+    parser = aegis_cli.build_parser()
+    args = parser.parse_args(["forensic", "session-A", "--limit", "5"])
+    assert args.fn.__name__ == "cmd_forensic"
+    assert args.selector == "session-A"
+    assert args.limit == 5
