@@ -57,6 +57,15 @@ POLICIES_DIR = PROJECT_ROOT / "policies"
 SRC_DIR = PROJECT_ROOT / "src"
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 
+# Sprint 1 PR3 — Claude Code custom slash commands.
+# Source: tools/claude_commands/*.md (templates with {AEGIS_CMD} placeholder).
+# Dest:   ~/.claude/commands/aegis-*.md (rendered at install time).
+SLASH_COMMANDS_SRC = HERE / "claude_commands"
+SLASH_COMMANDS_DST = Path.home() / ".claude" / "commands"
+# Marker so uninstall removes only what we installed (preserves user-owned
+# files in the same directory if any).
+SLASH_COMMANDS_MARKER = "<!-- aegis-managed-slash-command -->"
+
 
 def _conn() -> sqlite3.Connection:
     if not DB.exists():
@@ -1059,6 +1068,76 @@ def cmd_snapshots(args: argparse.Namespace) -> int:
             f"tool={snap.get('tool', '?'):<12} captured={cap}"
         )
     return 0
+
+
+def _resolve_aegis_cmd() -> str:
+    """Return the bash command that invokes ``aegis`` from anywhere on the
+    user's machine — used by the slash-command templates.
+
+    Resolution priority:
+      1. If ``aegis`` is on the user's $PATH (brew install / pipx install /
+         curl|sh installer with ~/.local/bin), use the bare command.
+      2. Else fall back to ``uv run --project <PROJECT_ROOT> aegis``, which
+         works from a fresh source clone without a global install.
+    """
+    on_path = shutil.which("aegis")
+    if on_path:
+        return "aegis"
+    # Source-clone fallback. PROJECT_ROOT is the directory we were imported
+    # from; uv handles dep resolution automatically.
+    return f'uv run --project "{PROJECT_ROOT}" aegis'
+
+
+def _install_slash_commands(*, dry_run: bool = False) -> tuple[int, list[str]]:
+    """Render ``tools/claude_commands/aegis-*.md`` templates into
+    ``~/.claude/commands/`` so users can invoke ``/aegis-report`` etc.
+    from inside Claude Code without leaving the session.
+
+    The template's ``{AEGIS_CMD}`` placeholder is replaced at install time
+    with the resolved command (see :func:`_resolve_aegis_cmd`).
+
+    Returns ``(count_written, list_of_filenames)``. Idempotent: re-running
+    overwrites whatever is there.
+    """
+    if not SLASH_COMMANDS_SRC.exists():
+        return 0, []
+    if not dry_run:
+        SLASH_COMMANDS_DST.mkdir(parents=True, exist_ok=True)
+    aegis_cmd = _resolve_aegis_cmd()
+    written: list[str] = []
+    for tmpl in sorted(SLASH_COMMANDS_SRC.glob("aegis-*.md")):
+        body = tmpl.read_text(encoding="utf-8")
+        rendered = body.replace("{AEGIS_CMD}", aegis_cmd)
+        # Append our marker so uninstall can identify Aegis-owned files
+        # without nuking the user's own slash commands in the same dir.
+        if SLASH_COMMANDS_MARKER not in rendered:
+            rendered = f"{SLASH_COMMANDS_MARKER}\n{rendered}"
+        target = SLASH_COMMANDS_DST / tmpl.name
+        if not dry_run:
+            target.write_text(rendered, encoding="utf-8")
+        written.append(target.name)
+    return len(written), written
+
+
+def _uninstall_slash_commands(*, dry_run: bool = False) -> tuple[int, list[str]]:
+    """Remove only Aegis-owned slash command files (those carrying the
+    ``SLASH_COMMANDS_MARKER`` marker). User-owned files in the same
+    directory are preserved verbatim.
+    """
+    if not SLASH_COMMANDS_DST.exists():
+        return 0, []
+    removed: list[str] = []
+    for f in sorted(SLASH_COMMANDS_DST.glob("aegis-*.md")):
+        try:
+            head = f.read_text(encoding="utf-8")[:200]
+        except OSError:
+            continue
+        if SLASH_COMMANDS_MARKER not in head:
+            continue
+        if not dry_run:
+            f.unlink()
+        removed.append(f.name)
+    return len(removed), removed
 
 
 def _validate_plugin_manifest() -> tuple[bool, str]:
@@ -2958,6 +3037,35 @@ def cmd_install(args: argparse.Namespace) -> int:
                 "grey-zone calls. Cloud calls go to Anthropic only when "
                 "the local-phi tier is uncertain."
             ))
+
+    # PR3 — install Claude Code custom slash commands. Default ON; opt-out
+    # via --no-commands. Local-mode only (sidecar mode users typically
+    # don't share the same Claude Code installation per-host).
+    if mode == "local" and not getattr(args, "no_commands", False):
+        try:
+            n_cmds, cmd_names = _install_slash_commands()
+            if n_cmds:
+                print(_green(
+                    f"  installed {n_cmds} Claude Code slash command(s) "
+                    f"→ {SLASH_COMMANDS_DST}"
+                ))
+                cmd_short = ", ".join(
+                    f"/{c.replace('.md', '')}" for c in cmd_names[:3]
+                )
+                more = f" +{n_cmds - 3} more" if n_cmds > 3 else ""
+                print(_green(
+                    f"  available in next Claude Code session: {cmd_short}{more}"
+                ))
+                print(_green(
+                    "  type /aegis-help for the full list (or pass "
+                    "--no-commands to skip on next install)"
+                ))
+        except Exception as e:  # noqa: BLE001 — slash commands are non-blocking
+            print(_yellow(
+                f"  warning: could not install slash commands ({e}); "
+                "core hook is still active. Re-run install or pass "
+                "--no-commands to silence this."
+            ))
     print()
     print(_green("─── NEXT STEPS ──────────────────"))
     print("  1. Restart Claude Code (full quit & relaunch — tab reopen")
@@ -2966,8 +3074,13 @@ def cmd_install(args: argparse.Namespace) -> int:
     print("  2. Try a destructive operation in Claude Code; Aegis will")
     print("     BLOCK before the tool runs.")
     print("  3. After a few sessions, inspect what got caught:")
-    print(_green("       uv run aegis report             # 5-line risk summary"))
-    print(_green("       uv run aegis verify-audit       # cryptographic chain check"))
+    print(_green("       /aegis-report                   # 5-line risk summary (in Claude Code)"))
+    print(_green("       /aegis-verify                   # cryptographic chain check"))
+    print(_green("       /aegis-forensic last            # postmortem timeline"))
+    print(_green("       /aegis-help                     # all available commands"))
+    print(_green("     ── or from your shell ──"))
+    print(_green("       uv run aegis report"))
+    print(_green("       uv run aegis verify-audit"))
     print(_green("       uv run aegis policy diff --since 7d"))
     print()
     print("  Quickstart guide:  docs/PERSONAL_QUICKSTART.md")
@@ -3081,6 +3194,22 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     n_dropped = _drop_aegis_entries(hooks_section)
     SETTINGS_PATH.write_text(json.dumps(existing, indent=2) + "\n")
     print(_green(f"✓ removed {n_dropped} Aegis hook entry(ies) from {SETTINGS_PATH}"))
+
+    # PR3 — also remove our slash commands. Only files carrying the
+    # SLASH_COMMANDS_MARKER are touched, so user-owned commands in the
+    # same directory survive verbatim.
+    try:
+        n_cmds, cmd_names = _uninstall_slash_commands(
+            dry_run=getattr(args, "dry_run", False),
+        )
+        if n_cmds:
+            verb = "would remove" if getattr(args, "dry_run", False) else "✓ removed"
+            print(_green(
+                f"{verb} {n_cmds} slash command(s) from {SLASH_COMMANDS_DST}"
+            ))
+    except Exception as e:  # noqa: BLE001
+        print(_yellow(f"  warning: could not clean slash commands: {e}"))
+
     print()
     print(_yellow("Restart Claude Code for the change to take effect."))
     print(
@@ -5218,6 +5347,16 @@ def build_parser() -> argparse.ArgumentParser:
             "Restore ~/.claude/settings.json from the most-recent "
             "settings.json.bak.<ts> backup. Use when a previous install "
             "left the user locked out (cost gate, missing flags, etc.)."
+        ),
+    )
+    inst.add_argument(
+        "--no-commands", action="store_true",
+        help=(
+            "Skip installing Claude Code custom slash commands "
+            "(/aegis-report, /aegis-verify, /aegis-advise, "
+            "/aegis-forensic, /aegis-help) into ~/.claude/commands/. "
+            "Default: install them so users can invoke Aegis without "
+            "leaving Claude Code."
         ),
     )
     inst.set_defaults(fn=cmd_install)

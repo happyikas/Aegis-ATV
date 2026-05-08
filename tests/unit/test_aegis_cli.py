@@ -1900,3 +1900,149 @@ def test_advise_subparser_dispatches() -> None:
     assert args.fn.__name__ == "cmd_advise"
     assert args.selector == "last"
     assert args.category == "cost"
+
+
+# ── PR3: /aegis slash commands ──────────────────────────────────────
+
+
+def test_resolve_aegis_cmd_uses_path_when_available(monkeypatch) -> None:
+    """When `aegis` is on PATH, slash commands invoke the bare command."""
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda _: "/opt/homebrew/bin/aegis")
+    assert aegis_cli._resolve_aegis_cmd() == "aegis"
+
+
+def test_resolve_aegis_cmd_falls_back_to_uv_run(monkeypatch) -> None:
+    """No `aegis` on PATH → uv run fallback for source clones."""
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda _: None)
+    cmd = aegis_cli._resolve_aegis_cmd()
+    assert cmd.startswith("uv run --project ")
+    assert cmd.endswith(" aegis")
+
+
+def test_install_slash_commands_writes_5_files(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        aegis_cli, "SLASH_COMMANDS_DST", tmp_path / "commands",
+    )
+    n, names = aegis_cli._install_slash_commands()
+    assert n == 5
+    assert set(names) == {
+        "aegis-report.md",
+        "aegis-verify.md",
+        "aegis-advise.md",
+        "aegis-forensic.md",
+        "aegis-help.md",
+    }
+    # Marker prepended so uninstall can identify Aegis-owned files
+    body = (tmp_path / "commands" / "aegis-report.md").read_text()
+    assert aegis_cli.SLASH_COMMANDS_MARKER in body
+    # AEGIS_CMD placeholder is fully substituted (no remnant)
+    assert "{AEGIS_CMD}" not in body
+
+
+def test_install_slash_commands_substitutes_resolved_aegis_cmd(
+    tmp_path, monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        aegis_cli, "SLASH_COMMANDS_DST", tmp_path / "commands",
+    )
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda _: "/usr/local/bin/aegis")
+    aegis_cli._install_slash_commands()
+    body = (tmp_path / "commands" / "aegis-report.md").read_text()
+    assert "aegis report --since 24h" in body
+    # Source-clone fallback string should NOT appear when aegis is on PATH
+    assert "uv run --project" not in body
+
+
+def test_uninstall_slash_commands_only_removes_aegis_owned(
+    tmp_path, monkeypatch,
+) -> None:
+    """User-owned files (without the marker) must survive uninstall —
+    even if their filename happens to start with 'aegis-'."""
+    cmds_dir = tmp_path / "commands"
+    cmds_dir.mkdir(parents=True)
+    monkeypatch.setattr(aegis_cli, "SLASH_COMMANDS_DST", cmds_dir)
+    aegis_cli._install_slash_commands()  # 5 marked files
+
+    # Plant a user-owned file that has 'aegis-' prefix but no marker
+    (cmds_dir / "aegis-but-mine.md").write_text(
+        "no marker — this is the user's own command\n"
+    )
+    (cmds_dir / "my-command.md").write_text("user's other command")
+
+    n_removed, names = aegis_cli._uninstall_slash_commands()
+    assert n_removed == 5
+    # Aegis files all gone
+    assert not (cmds_dir / "aegis-report.md").exists()
+    assert not (cmds_dir / "aegis-help.md").exists()
+    # User files preserved verbatim
+    assert (cmds_dir / "aegis-but-mine.md").exists()
+    assert (cmds_dir / "my-command.md").exists()
+
+
+def test_uninstall_slash_commands_dry_run_writes_nothing(
+    tmp_path, monkeypatch,
+) -> None:
+    cmds_dir = tmp_path / "commands"
+    monkeypatch.setattr(aegis_cli, "SLASH_COMMANDS_DST", cmds_dir)
+    aegis_cli._install_slash_commands()
+    n_before = len(list(cmds_dir.glob("aegis-*.md")))
+    n_removed, _ = aegis_cli._uninstall_slash_commands(dry_run=True)
+    assert n_removed == 5
+    n_after = len(list(cmds_dir.glob("aegis-*.md")))
+    assert n_after == n_before  # nothing actually deleted
+
+
+def test_install_no_commands_flag_skips_slash_install(
+    isolated_install: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`aegis install --no-commands` patches settings.json but installs
+    no slash command files."""
+    import argparse
+    cmds_dir = isolated_install / ".claude" / "commands"
+    monkeypatch.setattr(aegis_cli, "SLASH_COMMANDS_DST", cmds_dir)
+    rc = aegis_cli.cmd_install(argparse.Namespace(
+        force=False, mode="local", judge=None, embedding=None,
+        rescue=False, profile="free", no_commands=True,
+    ))
+    assert rc == 0
+    # Settings still patched
+    assert (isolated_install / ".claude" / "settings.json").exists()
+    # Slash commands NOT installed (--no-commands)
+    if cmds_dir.exists():
+        assert not list(cmds_dir.glob("aegis-*.md"))
+
+
+def test_install_default_includes_slash_commands(
+    isolated_install: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`aegis install --mode local` (no --no-commands) installs slash
+    commands by default."""
+    import argparse
+    cmds_dir = isolated_install / ".claude" / "commands"
+    monkeypatch.setattr(aegis_cli, "SLASH_COMMANDS_DST", cmds_dir)
+    rc = aegis_cli.cmd_install(argparse.Namespace(
+        force=False, mode="local", judge=None, embedding=None,
+        rescue=False, profile="free", no_commands=False,
+    ))
+    assert rc == 0
+    assert cmds_dir.exists()
+    # All 5 expected files present
+    expected = {
+        "aegis-report.md", "aegis-verify.md", "aegis-advise.md",
+        "aegis-forensic.md", "aegis-help.md",
+    }
+    actual = {f.name for f in cmds_dir.glob("aegis-*.md")}
+    assert actual == expected
+
+
+def test_install_no_commands_arg_in_parser() -> None:
+    parser = aegis_cli.build_parser()
+    args = parser.parse_args(["install", "--no-commands"])
+    assert args.no_commands is True
+    args = parser.parse_args(["install"])
+    assert args.no_commands is False
