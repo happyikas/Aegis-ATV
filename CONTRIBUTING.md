@@ -152,9 +152,26 @@ behaviour go to the SECURITY.md contact address with subject prefix
 
 ## License
 
-The repository does not yet ship a top-level `LICENSE` file. Until
-one lands, contributions are accepted on the understanding that they
-will be re-licensed under the eventual project license (the maintainer
-will not pick a license that surprises contributors — see issue
-tracker for the current proposal). If this is a blocker for your
-organisation, please raise it before opening a PR.
+This project is licensed under the **Apache License, Version 2.0**
+([LICENSE](LICENSE) + [NOTICE](NOTICE)). By submitting a contribution
+you agree that your contribution is licensed under the same terms.
+
+Apache-2.0 was chosen for three reasons:
+
+1. **Explicit patent grant.** The Aegis architecture corresponds to
+   the AegisData patent v4. Apache-2.0 is the standard OSS license
+   that grants every recipient an explicit license to all patent
+   claims that the contributor can license — preventing patent
+   disputes that plain MIT/BSD leave open.
+2. **Commercial-friendly without copyleft surprises.** Downstream
+   users can integrate Aegis into proprietary code, and the project
+   can later split out an Enterprise / Sidecar tier without
+   re-licensing.
+3. **Compatibility with downstream packagers.** Homebrew-core, PyPI,
+   Linux distributions, and corporate review boards all accept
+   Apache-2.0 without friction.
+
+Contributions that introduce additional third-party dependencies
+must use Apache-2.0-compatible licenses (Apache-2.0, MIT, BSD-2/3,
+ISC). GPL/AGPL/SSPL/BSL dependencies are not accepted in the core
+Personal MVP — open an issue first if your contribution requires one.

@@ -147,9 +147,10 @@ documented in `pkg/brew/README.md`). Until then, prefer the
 
 ### "Will this graduate to homebrew-core?"
 
-That's the plan. The criteria block (LICENSE file, 30 days of
-release history with no breaking changes, network-free test block)
-is in `pkg/brew/README.md`. Currently blocked on the LICENSE file.
+That's the plan. The remaining criteria are 30 days of release
+history with no breaking changes plus a network-free test block —
+the LICENSE prerequisite is now satisfied (Apache-2.0). The full
+checklist is in `pkg/brew/README.md`.
 
 ### "Windows support?"
 
