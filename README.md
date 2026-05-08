@@ -19,6 +19,28 @@ Claude Code's built-in `--allowedTools` / `--dangerously-skip-permissions` are b
 
 For regulated industries (finance, healthcare, government) where AI coding assistants are blocked by audit requirements, the cryptographic decision log turns *"we have logs of what the AI did"* into *"we have signed proof that the AI did exactly this and nothing more."*
 
+### Side-by-side: Aegis vs Claude Code's built-in flags
+
+| | Claude Code built-in | **Aegis** |
+|---|---|---|
+| **Tool allow / deny** | `--allowedTools` / `--disallowedTools` — static list, set per session | 16-step pipeline + 31 detection rules + sLLM judge for grey-zone calls — dynamic, per-call |
+| **Bypass switch** | `--dangerously-skip-permissions` — binary on/off | Profile-aware (`--profile {free,pro,cloud}`) — different intelligence tier per use case |
+| **Audit log** | Session log (plain text, mutable) | `~/.aegis/audit.jsonl` with SHA3-256 prev_hash/this_hash chain + opt-in Ed25519 signatures |
+| **Tamper detection** | None — text log can be edited or deleted silently | `aegis verify-audit` — one command, walks chain, exits non-zero on any mutation |
+| **Forensic timeline** | Manual `grep` over session transcripts | `aegis forensic <session_id>` — chronological per-call timeline with step trace + advisor signals |
+| **Cost / runaway gate** | None | step335 cost gate (`AEGIS_TOKEN_BUDGET`) + step336 loop detector (3× same call → REQUIRE_APPROVAL) |
+| **Instruction-drift detection** | None | step309 — SHA3 baseline of `CLAUDE.md` / `AGENTS.md` / `.mcp.json` / plugin manifests; any drift BLOCKs every call until reattest |
+| **Per-call risk scoring** | None | 30-subfield ATV-2080-v1 vector + M13 attribution head — top-3 contributing signals stamped into every audit record |
+| **Live recommendations** | None | `aegis advise` — cost / performance / security advisor surface (`--profile pro`/`cloud` activates the 8-advisor pipeline) |
+| **Compliance-grade evidence** | "Logs exist somewhere" | "Signed cryptographic proof, exportable, externally verifiable" |
+| **External reach when running** | None (Claude API only) | None by default (Solo Free contract); opt-in Anthropic Haiku via `--profile cloud` |
+| **Install / uninstall** | Native, instant | `aegis install --mode local` (~5 min, idempotent) + `aegis uninstall` (preserves user-owned hooks) + `--rescue` |
+| **Open source** | Closed (Anthropic) | Apache-2.0, full source [github.com/happyikas/Aegis-ATV](https://github.com/happyikas/Aegis-ATV) |
+
+The built-in flags solve "is this tool allowed to run?" Aegis solves "what did the agent actually do, can we prove it later, and how do we catch the bad cases the allowlist missed?"
+
+Both are useful — Aegis is **layered on top**, not a replacement. The two work together: keep `--allowedTools` for coarse permissions, add Aegis for the cryptographic audit + structured per-call scoring + cost / drift / loop gates that the binary flags can't express.
+
 ## Verify integrity (the differentiating feature)
 
 Two layers, both runnable any time without network:
