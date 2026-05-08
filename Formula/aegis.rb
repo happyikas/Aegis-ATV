@@ -21,7 +21,7 @@ class Aegis < Formula
   # NOTE: sha256 placeholder — when cutting a release, regenerate via:
   #   curl -sL https://github.com/happyikas/Aegis-ATV/archive/refs/tags/vX.Y.Z.tar.gz | shasum -a 256
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
-  license "Apache-2.0"   # placeholder — track the LICENSE file once it lands
+  license "Apache-2.0"
   head "https://github.com/happyikas/Aegis-ATV.git", branch: "main"
 
   depends_on "python@3.11"

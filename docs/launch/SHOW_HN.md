@@ -71,10 +71,13 @@ both are below.
 > chain crypto, the sLLM judge prompt structure, the safe-allowlist
 > design, or the trade-off between dummy / hybrid / real-LLM modes.
 >
-> Caveat: this is solo-built and the LICENSE file isn't in yet — the
-> repo is open and contributions are welcome under
+> Caveat: this is solo-built. Source is Apache-2.0
+> ([LICENSE](https://github.com/happyikas/Aegis-ATV/blob/main/LICENSE)
+> + [NOTICE](https://github.com/happyikas/Aegis-ATV/blob/main/NOTICE));
+> contributions welcome under
 > [CONTRIBUTING.md](https://github.com/happyikas/Aegis-ATV/blob/main/CONTRIBUTING.md);
-> security findings go through [SECURITY.md](https://github.com/happyikas/Aegis-ATV/blob/main/SECURITY.md).
+> security findings go through
+> [SECURITY.md](https://github.com/happyikas/Aegis-ATV/blob/main/SECURITY.md).
 
 ---
 

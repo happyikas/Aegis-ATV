@@ -2,6 +2,25 @@
 name = "aegis-mvp"
 version = "0.1.0"
 description = "AegisData T2 MVP — 2080-D ATV signing & audit sidecar for AI agent tool calls"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+readme = "README.md"
+authors = [
+    { name = "Chan Ik Park", email = "noreply@github.com" },
+]
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Software Development :: Quality Assurance",
+    "Development Status :: 4 - Beta",
+]
+keywords = ["claude-code", "agent", "firewall", "security", "audit", "atv"]
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.110",
