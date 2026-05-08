@@ -17,9 +17,8 @@ Apply once, before any of the three channels go live:
 - [ ] All install paths verified on a clean VM today
       (see `SHOW_HN.md` § posting checklist).
 - [x] LICENSE file landed (Apache-2.0 — PR #110).
-- [ ] `Formula/aegis.rb` `sha256` updated to the launch-tag value
-      (currently the all-zero placeholder; bump procedure in
-      [`../../pkg/brew/README.md`](../../pkg/brew/README.md)).
+- [x] `Formula/aegis.rb` `sha256` bumped to v0.1.0
+      (`46caeac5c9d758fdc8864523105ff3e0a7d4d87ca8cf92533869602c781a8d85`).
 - [ ] CI green on `main` and the tests-passed badge number is
       current.
 - [ ] Dogfooding screenshots captured against the actual
