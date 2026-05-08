@@ -4,10 +4,19 @@ Each step is a callable ``(atv, inp, ctx) -> StepResult``. The orchestrator
 walks them in order; the first BLOCK or REQUIRE_APPROVAL short-circuits.
 ``FirewallContext`` is a per-request scratch space so a step (e.g. step320)
 can publish a value (e.g. blast radius) for later steps to consume.
+
+Optional per-step latency profiling (PR-D): when
+``AEGIS_STEP_TIMING_ENABLED=1`` the orchestrator wraps each step with
+``time.perf_counter_ns()`` and stamps microseconds into
+``Verdict.step_timings_us``. The hook then embeds this dict into the
+audit record's ``explain.step_timings_us`` field. Default off — adds
+zero overhead when not requested.
 """
 
 from __future__ import annotations
 
+import os
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -77,6 +86,14 @@ def default_steps() -> list[StepFn]:
     ]
 
 
+def _step_timing_enabled() -> bool:
+    """Cheap per-call check — env var is read fresh every invocation so
+    operators can flip the flag without restarting Claude Code."""
+    return os.environ.get("AEGIS_STEP_TIMING_ENABLED", "").lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
 def run_firewall(
     atv: np.ndarray,
     inp: ATVInput,
@@ -86,19 +103,31 @@ def run_firewall(
     chosen = list(steps) if steps is not None else default_steps()
     ctx = FirewallContext()
     traces: dict[str, str] = {}
+    timing_enabled = _step_timing_enabled()
+    timings: dict[str, int] | None = {} if timing_enabled else None
     for fn in chosen:
-        result = fn(atv, inp, ctx)
-        traces[f"{fn.__module__}.{fn.__name__}"] = result.trace
+        key = f"{fn.__module__}.{fn.__name__}"
+        if timing_enabled:
+            t0 = time.perf_counter_ns()
+            result = fn(atv, inp, ctx)
+            elapsed_us = (time.perf_counter_ns() - t0) // 1000
+            assert timings is not None  # narrow for mypy
+            timings[key] = int(elapsed_us)
+        else:
+            result = fn(atv, inp, ctx)
+        traces[key] = result.trace
         if result.verdict in ("BLOCK", "REQUIRE_APPROVAL"):
             return Verdict(
                 decision=result.verdict,  # type: ignore[arg-type]
                 reason=result.reason,
                 atv_id=atv_id,
                 step_traces=traces,
+                step_timings_us=timings,
             )
     return Verdict(
         decision="ALLOW",
         reason="all firewall steps passed",
         atv_id=atv_id,
         step_traces=traces,
+        step_timings_us=timings,
     )
