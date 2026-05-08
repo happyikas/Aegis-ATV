@@ -379,6 +379,12 @@ class Verdict(BaseModel):
     signature: str | None = None
     confidence: float = 1.0
     step_traces: dict[str, str] = Field(default_factory=dict)
+    # PR-D — opt-in per-step latency. Populated by run_firewall only
+    # when AEGIS_STEP_TIMING_ENABLED=1. Keys mirror step_traces (module
+    # + fn name); values are microseconds (int rounded). Default None
+    # so the field is omitted from JSON when timing is off — keeps the
+    # audit log lean for users who haven't opted in.
+    step_timings_us: dict[str, int] | None = None
 
 
 # ─────────────────────────────────────────────────────────────────────
