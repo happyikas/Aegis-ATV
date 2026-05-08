@@ -242,6 +242,21 @@ uv run python -c "import aegis"
 echo $AEGIS_JUDGE_PROVIDER
 # 2) hybrid 또는 dummy 가 가장 빠름
 uv run aegis install --mode local --judge dummy --force
+
+# 3) 어떤 step 이 시간을 잡아먹는지 정확히 확인 (PR-D)
+#    AEGIS_STEP_TIMING_ENABLED=1 을 shell 에 export 한 뒤 Claude Code
+#    재시작. 그 후 ~/.aegis/audit.jsonl 의 explain.step_timings_us 에
+#    step 별 microsecond 수치가 stamp 됨.
+export AEGIS_STEP_TIMING_ENABLED=1
+tail -1 ~/.aegis/audit.jsonl | python3 -c "
+import json, sys
+r = json.loads(sys.stdin.read())
+ts = r.get('explain', {}).get('step_timings_us', {})
+for k, v in sorted(ts.items(), key=lambda x: -x[1]):
+    print(f'{v:>6} us  {k}')
+"
+# 보통 step340 (sLLM judge) 가 1위, 그 외는 microsecond 단위.
+# 기본은 OFF — overhead 0 이 launch contract.
 ```
 
 ### audit log 가 너무 큼

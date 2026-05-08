@@ -200,6 +200,18 @@ def _build_explain_block(atv: Any, inp: Any, verdict: Any) -> dict[str, Any]:
     except Exception:  # noqa: BLE001
         pass
 
+    # ── PR-D: per-step latency (opt-in via AEGIS_STEP_TIMING_ENABLED) ─
+    # The orchestrator populates Verdict.step_timings_us only when the
+    # env var is set. When present, we embed the full dict so users can
+    # see exactly which step ate the latency budget — most useful for
+    # diagnosing why a particular session feels slow under --profile pro.
+    try:
+        timings = getattr(verdict, "step_timings_us", None)
+        if timings:
+            explain["step_timings_us"] = dict(timings)
+    except Exception:  # noqa: BLE001
+        pass
+
     # ── M13 top-5 attribution ───────────────────────────────────────
     try:
         from aegis.judge.attribution_head import AttributionHead
