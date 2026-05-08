@@ -186,26 +186,38 @@ uv run aegis audit-key show
 
 ---
 
-## 모델 업그레이드 (선택)
+## 지능 티어 선택 — `--profile {free, pro, cloud}`
 
-기본 **dummy provider** 는 룰 기반이라 빠르지만 회색 케이스 분류가 약합니다. 본격 사용 시:
+PR-A 부터 `aegis install` 이 세 가지 사전 설정을 제공합니다 — 모델 다운로드 + advisor 활성화 + judge/embedding 선택을 한 번에 처리:
+
+| Profile | 무엇이 들어가나 | 디스크 | 클라우드 호출 |
+|---------|----------------|--------|---------------|
+| `free` (default, 오늘과 동일) | dummy embedding + dummy judge, advisor OFF | ~50 MB (소스만) | 0 |
+| `pro` | **bge-local** embedding + **hybrid** judge (M13 + local-phi) + advisor ON | +700 MB GGUF (자동 다운로드) | 0 |
+| `cloud` | pro 스택 + Haiku judge for 회색지대 (`ANTHROPIC_API_KEY` 필요) | +700 MB GGUF | opt-in (Anthropic API only) |
 
 ```bash
-# 권고 — RAG 모드 (애매한 케이스에서 정확한 판단)
-uv run aegis pull-model --model phi3-mini    # 2.2 GB GGUF
-export AEGIS_JUDGE_MODEL_PATH=$PWD/models/Phi-3.5-mini-instruct-Q4_K_M.gguf
-uv run aegis install --mode local --judge local-phi --force
+# Personal MVP 의 기본 — 0 클라우드 0 모델
+uv run aegis install --mode local --profile free
 
-# 더 빠른 모드 — RAG OFF, 1B 모델
-uv run aegis pull-model --model llama-3.2-1b
-export AEGIS_RAG_ENABLED=0
+# 본격 사용 — 진짜 semantic retrieval + M13 attribution head 활성화
+uv run aegis install --mode local --profile pro
+# → 자동으로 bge-base-en (~100 MB) + llama-3.2-1b (~700 MB) 다운로드
+# → 이미 받은 파일은 fast-path skip (idempotent)
 
-# Anthropic Haiku (클라우드, 가장 정확)
+# 정확도 우선 — 회색지대 호출만 클라우드 escalate
 export ANTHROPIC_API_KEY=sk-ant-...
-uv run aegis install --mode local --judge haiku --force
+uv run aegis install --mode local --profile cloud
 ```
 
-`uv run aegis pull-model --recommend` 로 항상 최신 권고 표 확인.
+`--judge` / `--embedding` 를 명시하면 profile 의 baseline 위에 덮어씁니다:
+
+```bash
+# pro 의 advisor + bge-local 은 유지하되 judge 는 dummy 로 고정
+uv run aegis install --mode local --profile pro --judge dummy
+```
+
+`uv run aegis pull-model --recommend` 로 디바이스 (RAM/GPU) 별 추천 모델 확인.
 
 ---
 

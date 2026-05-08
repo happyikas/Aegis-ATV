@@ -368,9 +368,17 @@ def test_install_registers_posttooluse(isolated_install: Path) -> None:
     assert any("post_tool.py" in c for c in cmds)
 
 
-def test_install_default_judge_is_dummy() -> None:
+def test_install_default_judge_is_none_resolved_from_profile() -> None:
+    """PR-A: --judge default became None at the parser level; resolution
+    happens in cmd_install via _resolve_profile (free profile → dummy)."""
     args = aegis_cli.build_parser().parse_args(["install"])
-    assert args.judge == "dummy"
+    assert args.judge is None
+    assert args.profile == "free"
+    resolved = aegis_cli._resolve_profile(
+        args.profile, judge_arg=args.judge, embedding_arg=args.embedding,
+    )
+    assert resolved["judge"] == "dummy"
+    assert resolved["embedding"] == "dummy"
 
 
 def test_install_judge_hybrid_accepted() -> None:
@@ -1249,9 +1257,15 @@ def test_human_size_formats() -> None:
 # ---- Solo Free real embedding: --embedding flag + BGE wiring -----------
 
 
-def test_install_default_embedding_is_dummy() -> None:
+def test_install_default_embedding_resolves_to_dummy_via_profile() -> None:
+    """PR-A: parser default is None now; profile resolver supplies
+    the per-tier embedding. free profile → dummy."""
     args = aegis_cli.build_parser().parse_args(["install"])
-    assert args.embedding == "dummy"
+    assert args.embedding is None
+    resolved = aegis_cli._resolve_profile(
+        args.profile, judge_arg=None, embedding_arg=None,
+    )
+    assert resolved["embedding"] == "dummy"
 
 
 def test_install_embedding_bge_local_accepted() -> None:
@@ -1345,3 +1359,112 @@ def test_pull_model_argparse_accepts_bge_models() -> None:
         ["pull-model", "--model", "bge-small-en"]
     )
     assert args.model == "bge-small-en"
+
+
+# ── PR-A: --profile {free,pro,cloud} ────────────────────────────────
+
+
+def test_profile_default_is_free() -> None:
+    args = aegis_cli.build_parser().parse_args(["install"])
+    assert args.profile == "free"
+
+
+def test_profile_choices_validated() -> None:
+    import pytest
+
+    parser = aegis_cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["install", "--profile", "bogus"])
+
+
+def test_resolve_profile_free_keeps_dummy() -> None:
+    r = aegis_cli._resolve_profile(
+        "free", judge_arg=None, embedding_arg=None,
+    )
+    assert r["judge"] == "dummy"
+    assert r["embedding"] == "dummy"
+    assert r["advisor_enabled"] is False
+    assert r["auto_pull"] == ()
+
+
+def test_resolve_profile_pro_resolves_to_hybrid_bge_with_advisor() -> None:
+    r = aegis_cli._resolve_profile(
+        "pro", judge_arg=None, embedding_arg=None,
+    )
+    assert r["judge"] == "hybrid"
+    assert r["embedding"] == "bge-local"
+    assert r["advisor_enabled"] is True
+    assert r["advisor_provider"] == "heuristic"
+    assert "bge-base-en" in r["auto_pull"]
+    assert "llama-3.2-1b" in r["auto_pull"]
+
+
+def test_resolve_profile_cloud_uses_haiku_advisor() -> None:
+    r = aegis_cli._resolve_profile(
+        "cloud", judge_arg=None, embedding_arg=None,
+    )
+    assert r["judge"] == "hybrid"
+    assert r["embedding"] == "bge-local"
+    assert r["advisor_enabled"] is True
+    assert r["advisor_provider"] == "haiku"
+    # Cloud reuses the local-tier model files for fallback when the
+    # API key is missing or Anthropic is unreachable.
+    assert "bge-base-en" in r["auto_pull"]
+
+
+def test_resolve_profile_explicit_judge_overrides_baseline() -> None:
+    """User can pin a tier even when picking a richer profile."""
+    r = aegis_cli._resolve_profile(
+        "pro", judge_arg="dummy", embedding_arg=None,
+    )
+    assert r["judge"] == "dummy"
+    assert r["embedding"] == "bge-local"  # profile baseline still applies
+
+
+def test_resolve_profile_explicit_embedding_overrides_baseline() -> None:
+    r = aegis_cli._resolve_profile(
+        "pro", judge_arg=None, embedding_arg="dummy",
+    )
+    assert r["embedding"] == "dummy"
+    assert r["judge"] == "hybrid"  # profile baseline still applies
+
+
+def test_resolve_profile_rejects_unknown_name() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="--profile must be one of"):
+        aegis_cli._resolve_profile(
+            "nonsense", judge_arg=None, embedding_arg=None,
+        )
+
+
+def test_build_pretool_command_advisor_off_by_default() -> None:
+    """free profile → no AEGIS_ADVISOR_ENABLED in the hook command."""
+    cmd = aegis_cli._build_pretool_command(
+        "local", judge="dummy", embedding="dummy", advisor_enabled=False,
+    )
+    assert "AEGIS_ADVISOR_ENABLED" not in cmd
+
+
+def test_build_pretool_command_advisor_on_for_pro() -> None:
+    cmd = aegis_cli._build_pretool_command(
+        "local", judge="hybrid", embedding="bge-local",
+        advisor_enabled=True, advisor_provider="heuristic",
+    )
+    assert "AEGIS_ADVISOR_ENABLED=1" in cmd
+    assert "AEGIS_ADVISOR_PROVIDER=heuristic" in cmd
+
+
+def test_build_pretool_command_advisor_haiku_for_cloud() -> None:
+    cmd = aegis_cli._build_pretool_command(
+        "local", judge="hybrid", embedding="bge-local",
+        advisor_enabled=True, advisor_provider="haiku",
+    )
+    assert "AEGIS_ADVISOR_ENABLED=1" in cmd
+    assert "AEGIS_ADVISOR_PROVIDER=haiku" in cmd
+
+
+def test_auto_pull_models_no_op_on_empty_tuple() -> None:
+    """free profile passes () so install doesn't trigger any download."""
+    rc = aegis_cli._auto_pull_models(())
+    assert rc == 0
