@@ -1658,3 +1658,245 @@ def test_forensic_subparser_dispatches_correctly() -> None:
     assert args.fn.__name__ == "cmd_forensic"
     assert args.selector == "session-A"
     assert args.limit == 5
+
+
+# ── PR-F: aegis advise ──────────────────────────────────────────────
+
+
+def _write_advice_record(
+    fh, *, ts_ns: int, aid: str, advisor: str, priority: str = "medium",
+    action: str = "stub action", reasoning: str = "stub reasoning",
+    cited_signals=None, action_steps=None,
+) -> None:
+    """Write an audit record carrying explain.action_advice."""
+    rec = {
+        "ts_ns": ts_ns,
+        "tool": "Bash",
+        "aid": aid,
+        "decision": "REQUIRE_APPROVAL",
+        "reason": "stub",
+        "trace_id": f"trace-{advisor}-{ts_ns}",
+        "latency_ms": 50.0,
+        "mode": "local",
+        "explain": {
+            "action_advice": {
+                "decision": "REQUIRE_APPROVAL",
+                "advisor_kind": "heuristic",
+                "recommended_advisors": [
+                    {
+                        "advisor": advisor,
+                        "priority": priority,
+                        "action": action,
+                        "reasoning": reasoning,
+                        "cited_signals": cited_signals or [],
+                        "action_steps": action_steps or [],
+                    }
+                ],
+            },
+        },
+        "prev_hash": "0" * 64,
+        "this_hash": "f" * 64,
+    }
+    fh.write(json.dumps(rec) + "\n")
+
+
+def _make_advise_fixture(tmp_path: Path) -> Path:
+    """Audit log with advisor recommendations spanning all 3 categories.
+
+    Records appended in chronological order (matches how
+    aegis_local_hook actually emits them): session-B first (older
+    AID, before session-A started), then session-A in time order.
+    ``selector="last"`` therefore resolves to session-A.
+    """
+    audit = tmp_path / "audit.jsonl"
+    base_ts = int(time.time() * 1_000_000_000)  # now, in ns
+    with audit.open("w") as fh:
+        # session-B starts and ends earlier — must be appended FIRST
+        # so the "last AID" rule (line order matches ts order) picks A.
+        _write_advice_record(
+            fh, ts_ns=base_ts - 1_000_000,
+            aid="session-B",
+            advisor="permission-escalator", priority="high",
+            action="Different session noise",
+        )
+        # session-A: 3 cost recs (high)
+        for i in range(3):
+            _write_advice_record(
+                fh, ts_ns=base_ts + i, aid="session-A",
+                advisor="cost-optimizer", priority="high",
+                action="Prune expensive turns",
+                reasoning="budget burn 1.5x",
+                cited_signals=["budget_used_ratio"],
+                action_steps=[{
+                    "verb": "prune-turns",
+                    "parameters": {
+                        "turn_indices_rel": [-3, -2, -1],
+                        "saved_dollars_estimate": 0.42,
+                    },
+                    "expected_impact": "saves $0.42",
+                    "confidence": 0.85,
+                }],
+            )
+        # session-A: performance (medium)
+        _write_advice_record(
+            fh, ts_ns=base_ts + 10, aid="session-A",
+            advisor="loop-breaker", priority="medium",
+            action="Break the retry loop",
+            reasoning="same call 3x in a row",
+        )
+        # session-A: security (low)
+        _write_advice_record(
+            fh, ts_ns=base_ts + 20, aid="session-A",
+            advisor="security-reviewer", priority="low",
+            action="Review destructive intent",
+            reasoning="ambiguous fs op",
+        )
+    return audit
+
+
+def _advise_args(**kw):
+    import argparse
+    return argparse.Namespace(
+        selector=kw.get("selector", "last"),
+        audit=kw.get("audit"),
+        since=kw.get("since", "7d"),
+        category=kw.get("category", "all"),
+        priority=kw.get("priority", "all"),
+        limit=kw.get("limit", 20),
+        json=kw.get("json", False),
+    )
+
+
+def test_advise_no_audit_returns_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    rc = aegis_cli.cmd_advise(_advise_args(
+        audit=str(tmp_path / "absent.jsonl"),
+    ))
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "no audit log" in out
+
+
+def test_advise_aggregates_3_recs_across_categories(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    audit = _make_advise_fixture(tmp_path)
+    rc = aegis_cli.cmd_advise(_advise_args(audit=str(audit)))
+    assert rc == 0
+    out = capsys.readouterr().out
+    # 3 distinct recommendations should appear (cost + perf + sec); the
+    # cost one should aggregate 3 occurrences into one ×3 row.
+    assert "3 recommendation(s)" in out
+    assert "cost-optimizer" in out
+    assert "×3" in out  # dedupe count rendered
+    assert "loop-breaker" in out
+    assert "security-reviewer" in out
+
+
+def test_advise_priority_ordering(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    audit = _make_advise_fixture(tmp_path)
+    rc = aegis_cli.cmd_advise(_advise_args(audit=str(audit)))
+    assert rc == 0
+    out = capsys.readouterr().out
+    high_pos = out.find("HIGH")
+    medium_pos = out.find("MEDIUM")
+    low_pos = out.find("LOW")
+    # HIGH > MEDIUM > LOW in render order.
+    assert 0 < high_pos < medium_pos < low_pos
+
+
+def test_advise_category_filter_cost_only(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    audit = _make_advise_fixture(tmp_path)
+    rc = aegis_cli.cmd_advise(_advise_args(
+        audit=str(audit), category="cost",
+    ))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "cost-optimizer" in out
+    # Other categories filtered out.
+    assert "loop-breaker" not in out
+    assert "security-reviewer" not in out
+
+
+def test_advise_priority_filter_high_only(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    audit = _make_advise_fixture(tmp_path)
+    rc = aegis_cli.cmd_advise(_advise_args(
+        audit=str(audit), priority="high",
+    ))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "cost-optimizer" in out  # the only high-priority advisor
+    assert "loop-breaker" not in out  # medium
+    assert "security-reviewer" not in out  # low
+
+
+def test_advise_selector_all_includes_other_session(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    audit = _make_advise_fixture(tmp_path)
+    rc = aegis_cli.cmd_advise(_advise_args(
+        audit=str(audit), selector="all",
+    ))
+    assert rc == 0
+    out = capsys.readouterr().out
+    # session-B's permission-escalator should now appear.
+    assert "permission-escalator" in out
+
+
+def test_advise_json_mode_structure(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    audit = _make_advise_fixture(tmp_path)
+    rc = aegis_cli.cmd_advise(_advise_args(
+        audit=str(audit), json=True,
+    ))
+    assert rc == 0
+    obj = json.loads(capsys.readouterr().out)
+    assert obj["selector"] == "last"
+    assert obj["scope_aid"] == "session-A"
+    assert obj["records_walked"] >= 5
+    assert obj["advisor_invocations"] == 5
+    assert obj["category_counts"]["cost"] == 1
+    assert obj["category_counts"]["performance"] == 1
+    assert obj["category_counts"]["security"] == 1
+    # Recommendations sorted high-first.
+    assert obj["recommendations"][0]["priority"] == "high"
+    assert obj["recommendations"][0]["count"] == 3
+
+
+def test_advise_no_advice_records_returns_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """When the audit log has no action_advice records (free profile,
+    advisor disabled), advise prints a friendly hint to upgrade."""
+    audit = tmp_path / "audit.jsonl"
+    base_ts = int(time.time() * 1_000_000_000)
+    with audit.open("w") as fh:
+        # records without action_advice
+        rec = {
+            "ts_ns": base_ts, "tool": "Bash", "aid": "session-A",
+            "decision": "ALLOW", "reason": "ok", "trace_id": "tr-1",
+            "latency_ms": 5.0, "mode": "local", "explain": {},
+            "prev_hash": "0" * 64, "this_hash": "f" * 64,
+        }
+        fh.write(json.dumps(rec) + "\n")
+    rc = aegis_cli.cmd_advise(_advise_args(audit=str(audit)))
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "no advisor recommendations" in out
+    assert "--profile pro" in out
+
+
+def test_advise_subparser_dispatches() -> None:
+    parser = aegis_cli.build_parser()
+    args = parser.parse_args(["advise", "--category", "cost"])
+    assert args.fn.__name__ == "cmd_advise"
+    assert args.selector == "last"
+    assert args.category == "cost"

@@ -2086,6 +2086,300 @@ def cmd_forensic(args: argparse.Namespace) -> int:
     return 0
 
 
+# ─────────────────────────────────────────────────────────────────────
+# PR-F: aegis advise — surface live advisor recommendations
+# ─────────────────────────────────────────────────────────────────────
+
+
+# Closed catalog from src/aegis/judge/advisor.py — eight advisor names
+# bucketed into the three Personal MVP advisor categories. Update this
+# table when new advisors are added to the judge prompt.
+_ADVISOR_CATEGORIES: dict[str, str] = {
+    # Cost domain
+    "cost-optimizer":     "cost",
+    "kv-cache-optimizer": "cost",
+    "context-compactor":  "cost",
+    # Performance domain
+    "test-runner":     "performance",
+    "loop-breaker":    "performance",
+    "human-clarifier": "performance",
+    # Security domain
+    "security-reviewer":   "security",
+    "permission-escalator": "security",
+}
+
+_PRIORITY_GLYPH: dict[str, str] = {
+    "high":   "🔴 HIGH  ",
+    "medium": "🟡 MEDIUM",
+    "low":    "🟢 LOW   ",
+}
+
+_PRIORITY_RANK: dict[str, int] = {"high": 0, "medium": 1, "low": 2}
+
+
+def _format_action_step(step: dict[str, Any]) -> str:
+    """One-line render of an action_steps[] entry."""
+    verb = str(step.get("verb", "?"))
+    params = step.get("parameters") or {}
+    impact = str(step.get("expected_impact", "")).strip()
+    # Pick the most informative param keys per verb for a compact line.
+    key_hints: list[str] = []
+    if "turn_indices_rel" in params:
+        idx = params["turn_indices_rel"]
+        key_hints.append(f"turns={idx if isinstance(idx, list) else idx}")
+        if "saved_dollars_estimate" in params:
+            key_hints.append(f"saves ${params['saved_dollars_estimate']:.2f}")
+    elif "from_model" in params:
+        key_hints.append(
+            f"{params.get('from_model')} → {params.get('to_model')}"
+        )
+    elif "from_tool" in params:
+        key_hints.append(
+            f"{params.get('from_tool')} → {params.get('to_tool')}"
+        )
+    elif "channel" in params:
+        key_hints.append(f"channel={params.get('channel')}")
+    elif "diagnostic_command" in params:
+        key_hints.append(f"cmd={params.get('diagnostic_command')}")
+    elif "clarifying_question" in params:
+        q = str(params.get("clarifying_question", ""))
+        key_hints.append(f"ask=\"{q[:50]}\"")
+    rendered = " ".join(key_hints)
+    head = f"{verb}" + (f"  {rendered}" if rendered else "")
+    return f"{head}    [{impact}]" if impact else head
+
+
+def cmd_advise(args: argparse.Namespace) -> int:
+    """`aegis advise [selector]` — live advisor recommendations.
+
+    The "no dummy product-ready" audit identified that --profile pro /
+    cloud writes per-decision advisor recommendations into
+    ``explain.action_advice`` of every audit record, but the user has
+    no way to surface them — they only land in audit.jsonl. This
+    command reads recent records and renders the recommendations
+    grouped by domain (cost / performance / security), deduplicated
+    and sorted by priority + recency.
+
+    Selector defaults to "last" (most-recent AID's recommendations).
+    Pass an AID for cross-session aggregation, or "all" to read every
+    record in the window regardless of AID.
+
+    Filters:
+      --category cost|performance|security|all     (default: all)
+      --priority high|medium|low|all                (default: all)
+      --since DURATION                              (default: 7d)
+      --limit N                                     (max recommendations
+                                                     to render; default 20)
+
+    Read-only — never modifies audit.jsonl.
+    """
+    audit_path = (
+        Path(args.audit) if args.audit
+        else Path.home() / ".aegis" / "audit.jsonl"
+    )
+    if not audit_path.exists():
+        print(f"[advise] no audit log at {audit_path}")
+        print(
+            "        (start a Claude Code session with `aegis install "
+            "--mode local --profile pro` so the advisor pipeline can run.)"
+        )
+        return 1
+
+    selector = args.selector or "last"
+    since_secs = _parse_window_secs(args.since) if args.since else 7 * 86400
+    cutoff_ns = int(time.time() - since_secs) * 1_000_000_000
+    cat_filter = (args.category or "all").lower()
+    pri_filter = (args.priority or "all").lower()
+    limit = int(args.limit or 20)
+
+    # ── Pass 1: scan records, grab those with action_advice ─────────
+    records: list[tuple[int, str, dict[str, Any]]] = []
+    last_aid: str | None = None
+    n_walked = 0
+    with audit_path.open("r", encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            ts = int(rec.get("ts_ns", 0) or 0)
+            if ts < cutoff_ns:
+                continue
+            n_walked += 1
+            aid = str(rec.get("aid", ""))
+            if aid:
+                last_aid = aid
+            advice = (rec.get("explain") or {}).get("action_advice")
+            if not isinstance(advice, dict):
+                continue
+            recs = advice.get("recommended_advisors") or []
+            if not recs:
+                continue
+            records.append((ts, aid, advice))
+
+    if not records:
+        print(_yellow(
+            f"[advise] no advisor recommendations in the last "
+            f"{int(since_secs/86400)}d at {audit_path}"
+        ))
+        print(
+            "         enable the advisor pipeline with "
+            "`aegis install --mode local --profile pro` "
+            "(or --profile cloud)."
+        )
+        return 1
+
+    # Resolve selector.
+    if selector.lower() == "last":
+        if last_aid is None:
+            print(_yellow("[advise] could not infer LAST aid"))
+            return 1
+        scope_aid: str | None = last_aid
+    elif selector.lower() == "all":
+        scope_aid = None
+    else:
+        scope_aid = selector
+
+    if scope_aid is not None:
+        records = [(ts, a, adv) for ts, a, adv in records if a == scope_aid]
+        if not records:
+            print(_yellow(
+                f"[advise] no advisor records for selector={scope_aid!r}"
+            ))
+            return 1
+
+    # ── Pass 2: aggregate recommendations across records ────────────
+    # Dedupe key: (advisor, action sentence). Count occurrences, keep
+    # the highest-priority + most-recent example so the rendered
+    # priority and timestamp reflect the worst the user has seen.
+    aggregated: dict[tuple[str, str], dict[str, Any]] = {}
+    for ts, _aid, adv in records:
+        for r in (adv.get("recommended_advisors") or []):
+            advisor = str(r.get("advisor", "?"))
+            action = str(r.get("action", ""))
+            key = (advisor, action)
+            slot = aggregated.setdefault(key, {
+                "advisor": advisor,
+                "action": action,
+                "category": _ADVISOR_CATEGORIES.get(advisor, "other"),
+                "priority": str(r.get("priority", "low")).lower(),
+                "reasoning": str(r.get("reasoning", "")),
+                "cited_signals": list(r.get("cited_signals", []) or []),
+                "action_steps": list(r.get("action_steps", []) or []),
+                "count": 0,
+                "last_ts_ns": 0,
+            })
+            slot["count"] += 1
+            slot["last_ts_ns"] = max(int(slot["last_ts_ns"]), ts)
+            new_pri = str(r.get("priority", "low")).lower()
+            if _PRIORITY_RANK.get(new_pri, 99) < _PRIORITY_RANK.get(
+                str(slot["priority"]), 99,
+            ):
+                slot["priority"] = new_pri
+
+    # Filter by category / priority.
+    filtered: list[dict[str, Any]] = []
+    for slot in aggregated.values():
+        if cat_filter != "all" and slot["category"] != cat_filter:
+            continue
+        if pri_filter != "all" and slot["priority"] != pri_filter:
+            continue
+        filtered.append(slot)
+
+    # Sort by priority asc (high first), then count desc, then recency desc.
+    filtered.sort(key=lambda s: (
+        _PRIORITY_RANK.get(str(s["priority"]), 99),
+        -int(s["count"]),
+        -int(s["last_ts_ns"]),
+    ))
+    if limit:
+        filtered = filtered[:limit]
+
+    # ── Render ──────────────────────────────────────────────────────
+    if getattr(args, "json", False):
+        out = {
+            "selector": selector,
+            "scope_aid": scope_aid,
+            "since_secs": since_secs,
+            "records_walked": n_walked,
+            "advisor_invocations": len(records),
+            "recommendations": filtered,
+            "category_counts": {
+                cat: sum(
+                    1 for s in aggregated.values() if s["category"] == cat
+                )
+                for cat in ("cost", "performance", "security")
+            },
+        }
+        print(json.dumps(out, default=str))
+        return 0
+
+    if not filtered:
+        print(_yellow(
+            f"[advise] no recommendations match category={cat_filter}, "
+            f"priority={pri_filter}"
+        ))
+        return 0
+
+    days = since_secs / 86400
+    print(_green(
+        f"aegis advise — {len(filtered)} recommendation(s) "
+        f"from last {days:.0f}d"
+    ))
+    print(f"  audit:               {audit_path}")
+    if scope_aid:
+        print(f"  scope AID:           {scope_aid}")
+    else:
+        print("  scope:               all sessions in window")
+    print(f"  records walked:      {n_walked:,}")
+    print(f"  advisor invocations: {len(records):,}")
+    print()
+
+    cat_counts: dict[str, int] = {"cost": 0, "performance": 0, "security": 0}
+    for slot in aggregated.values():
+        cat = str(slot["category"])
+        if cat in cat_counts:
+            cat_counts[cat] += 1
+
+    for slot in filtered:
+        glyph = _PRIORITY_GLYPH.get(str(slot["priority"]), "         ")
+        cat = str(slot["category"]).upper()
+        count_part = (
+            f" ×{slot['count']}" if int(slot["count"]) > 1 else ""
+        )
+        advisor = str(slot["advisor"])
+        print(f"  {glyph}  [{cat:<11}]  {advisor}{count_part}")
+        action_str = str(slot["action"])
+        if len(action_str) > 96:
+            action_str = action_str[:93] + "..."
+        print(f"             \"{action_str}\"")
+        reasoning = str(slot["reasoning"])
+        if reasoning:
+            if len(reasoning) > 100:
+                reasoning = reasoning[:97] + "..."
+            print(f"             Why: {reasoning}")
+        signals = slot["cited_signals"]
+        if isinstance(signals, list) and signals:
+            sig_str = ", ".join(str(s) for s in signals[:5])
+            print(f"             Cited: {sig_str}")
+        steps = slot["action_steps"]
+        if isinstance(steps, list) and steps:
+            print("             Steps:")
+            for step in steps[:3]:
+                if isinstance(step, dict):
+                    print(f"               · {_format_action_step(step)}")
+        print()
+
+    # Footer category breakdown.
+    print(_green("by category:"))
+    for cat, c in cat_counts.items():
+        print(f"  {cat:<12} {c:>3} active")
+    return 0
+
+
 def cmd_cache_lint(args: argparse.Namespace) -> int:
     """`aegis cache-lint` — diagnose Anthropic prompt-cache breakage.
 
@@ -4765,6 +5059,56 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     fr.set_defaults(fn=cmd_forensic)
+
+    # ── PR-F: aegis advise [selector] ──────────────────────────────
+    ad = sub.add_parser(
+        "advise",
+        help=(
+            "Surface live advisor recommendations from recent audit "
+            "records, grouped by domain (cost / performance / security). "
+            "Reads explain.action_advice written by --profile pro/cloud."
+        ),
+    )
+    ad.add_argument(
+        "selector", nargs="?", default="last",
+        help=(
+            "AID for cross-session aggregation; 'last' (default) for "
+            "the most-recent AID's recommendations; 'all' for every "
+            "session in the window."
+        ),
+    )
+    ad.add_argument(
+        "--audit", default=None,
+        help="audit log path (default: ~/.aegis/audit.jsonl)",
+    )
+    ad.add_argument(
+        "--since", default="7d", metavar="DURATION",
+        help="time window (e.g. 7d / 24h / 3600). default: 7d",
+    )
+    ad.add_argument(
+        "--category",
+        choices=["cost", "performance", "security", "all"],
+        default="all",
+        help="filter to one advisor domain (default: all)",
+    )
+    ad.add_argument(
+        "--priority",
+        choices=["high", "medium", "low", "all"],
+        default="all",
+        help="filter by recommendation priority (default: all)",
+    )
+    ad.add_argument(
+        "--limit", type=int, default=20,
+        help="max recommendations to render (default: 20)",
+    )
+    ad.add_argument(
+        "--json", action="store_true",
+        help=(
+            "emit a single JSON object with recommendations[] + "
+            "category_counts for downstream tooling"
+        ),
+    )
+    ad.set_defaults(fn=cmd_advise)
 
     cl = sub.add_parser(
         "cache-lint",
