@@ -72,6 +72,7 @@ Now every tool call Claude Code makes goes through Aegis first. Try a destructiv
 uv run aegis report                # 5-line risk summary of recent activity
 uv run aegis verify-audit          # cryptographic chain check (detects any tampering)
 uv run aegis forensic last         # postmortem timeline of the most-recent session
+uv run aegis advise                # live cost / performance / security advice (--profile pro/cloud)
 uv run aegis policy diff --since 7d  # what rules / playbooks / baselines changed
 uv run aegis pull-model --recommend  # upgrade path to Phi-3.5-mini / Haiku
 uv run python -m demo.macmini all  # 100-case self-validation
