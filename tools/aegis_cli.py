@@ -4518,7 +4518,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     st = sub.add_parser(
         "status",
-        help="Plugin-mode operational status + optional performance dashboard",
+        help="📊 ATV Live — operational status + optional performance dashboard",
     )
     st.add_argument(
         "--performance",
@@ -4560,7 +4560,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     ak = sub.add_parser(
         "audit-key",
-        help="Manage the optional Ed25519 audit-signing key (v4.4)",
+        help="(neutral) Manage the optional Ed25519 audit-signing key (v4.4)",
     )
     ak_sub = ak.add_subparsers(dest="action", required=False)
     ak_init = ak_sub.add_parser(
@@ -4600,7 +4600,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     co = sub.add_parser(
         "cost",
-        help="Cost rollup (`summary`) and what-if replay (`replay`).",
+        help="📊 ATV Live — cost rollup (`summary`) and 🏋️ ATV Coach what-if replay (`replay`).",
     )
     co_sub = co.add_subparsers(dest="action")
     co_sum = co_sub.add_parser(
@@ -4727,7 +4727,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     fm = sub.add_parser(
         "fleet-monitor",
-        help="Live multi-session cost monitor (PR #3 of 5). "
+        help="📊 ATV Live — multi-session cost daemon. "
         "Tails ~/.aegis/audit.jsonl, fires notifier on threshold "
         "crossings.",
     )
@@ -4760,9 +4760,15 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Seconds between polls (default: 1.0).")
     fm.set_defaults(fn=cmd_fleet_monitor)
 
-    sub.add_parser("health").set_defaults(fn=cmd_health)
+    sub.add_parser(
+        "health",
+        help="🔧 ATV Doctor — Aegis self-health check (firewall hook, audit log, key, drift).",
+    ).set_defaults(fn=cmd_health)
 
-    rb = sub.add_parser("rollback")
+    rb = sub.add_parser(
+        "rollback",
+        help="🔧 ATV Doctor — revert a destructive tool call by trace / session / time window.",
+    )
     rb.add_argument("invocation_id", nargs="?", default=None)
     rb.add_argument("--allow-git", action="store_true")
     rb.add_argument("--dry-run", action="store_true")
@@ -4770,7 +4776,10 @@ def build_parser() -> argparse.ArgumentParser:
     rb.add_argument("--since", help="Restore all snapshots since ISO datetime")
     rb.set_defaults(fn=cmd_rollback)
 
-    sn = sub.add_parser("snapshots")
+    sn = sub.add_parser(
+        "snapshots",
+        help="🔧 ATV Doctor — list / prune ATMU rollback snapshots.",
+    )
     sn.add_argument("action", nargs="?", default="list", choices=["list", "prune"])
     sn.add_argument("--limit", type=int, default=50)
     sn.add_argument(
@@ -4778,7 +4787,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sn.set_defaults(fn=cmd_snapshots)
 
-    bn = sub.add_parser("burnin")
+    bn = sub.add_parser(
+        "burnin",
+        help="🏋️ ATV Coach — burn-in (5-layer × 4-phase) train / revert / shadow / export.",
+    )
     bn.add_argument(
         "action",
         choices=[
@@ -4872,7 +4884,7 @@ def build_parser() -> argparse.ArgumentParser:
     ac = sub.add_parser(
         "advisor-calibration",
         help=(
-            "Inspect / retrain the advisor-gate calibration "
+            "🏋️ ATV Coach — inspect / retrain the advisor-gate calibration "
             "(M13 confidence + session_drift percentile thresholds) "
             "from accumulated audit retrospectives (Phase D)."
         ),
@@ -4905,7 +4917,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     cm = sub.add_parser(
         "case-memory",
-        help="Build / inspect the step340 RAG case memory (BGE-derived nearest-neighbour index)",
+        help="🏋️ ATV Coach — build / inspect the step340 RAG case memory (nearest-neighbour index)",
     )
     cm.add_argument(
         "action",
@@ -4936,7 +4948,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     se = sub.add_parser(
         "session",
-        help="Inspect / clear the per-session behavioural-drift store",
+        help="📊 ATV Live — inspect / clear the per-session behavioural-drift store",
     )
     se.add_argument(
         "action",
@@ -5126,7 +5138,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     rep = sub.add_parser(
         "report",
-        help="5-line Agent Risk Report from the local audit log",
+        help="📊 ATV Live — 5-line Agent Risk Report from the local audit log",
     )
     rep.add_argument(
         "--audit",
@@ -5167,9 +5179,9 @@ def build_parser() -> argparse.ArgumentParser:
     fr = sub.add_parser(
         "forensic",
         help=(
-            "Postmortem timeline for one session — chronological list "
-            "of decisions, reasons, step traces, advisor signals, and "
-            "(if AEGIS_STEP_TIMING_ENABLED was on) per-step latency. "
+            "🔧 ATV Doctor — postmortem timeline for one session "
+            "(decisions / reasons / step traces / advisor signals / "
+            "per-step latency if AEGIS_STEP_TIMING_ENABLED). "
             "Read-only over ~/.aegis/audit.jsonl."
         ),
     )
@@ -5217,7 +5229,7 @@ def build_parser() -> argparse.ArgumentParser:
     ad = sub.add_parser(
         "advise",
         help=(
-            "Surface live advisor recommendations from recent audit "
+            "🔧 ATV Doctor — advisor recommendations from recent audit "
             "records, grouped by domain (cost / performance / security). "
             "Reads explain.action_advice written by --profile pro/cloud."
         ),

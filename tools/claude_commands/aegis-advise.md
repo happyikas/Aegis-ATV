@@ -1,7 +1,9 @@
 ---
-description: Live cost / performance / security advisor recommendations
+description: 🔧 ATV Doctor — cost / performance / security advisor recommendations
 allowed-tools: Bash
 ---
+
+This is part of the **🔧 ATV Doctor** surface — runs the 8-advisor pipeline (cost / latency / reliability / security / compliance / safety / efficiency / governance) over the recent audit window and returns prioritized recommendations.
 
 Run this exact bash command and show the user its output verbatim:
 

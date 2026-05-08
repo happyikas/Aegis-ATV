@@ -1,8 +1,10 @@
 ---
-description: Postmortem timeline for one Claude Code session (use $ARGUMENTS to pick selector)
+description: 🔧 ATV Doctor — postmortem timeline for one Claude Code session (use $ARGUMENTS to pick selector)
 allowed-tools: Bash
 argument-hint: <selector or 'last'>
 ---
+
+This is part of the **🔧 ATV Doctor** surface — chronological per-call timeline (step traces + advisor signals + audit chain links) for postmortem analysis.
 
 The user wants a forensic timeline. Use this exact bash command, substituting the user's argument (defaulting to `last`):
 
