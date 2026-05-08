@@ -7,7 +7,45 @@
 
 ![demo](demo/recording/quickstart.gif)
 
-> **In-process firewall that intercepts every Claude Code tool call, scores it through a 16-step ATV-2080-v1 pipeline, and BLOCKs / requires approval / ALLOWs before the tool runs. Solo Free contract: 0 cloud calls, all processing on-device, ~5-minute install.**
+> **Every Claude Code tool call gets a cryptographic audit line.** SHA3-chained, Ed25519-signed, on local disk only. Tamper-evident with one CLI command. Plus a 16-step ATV-2080-v1 firewall that BLOCKs / requires approval / ALLOWs before the tool runs. 0 cloud calls by default, ~5-minute install.
+
+## Why this exists
+
+Claude Code's built-in `--allowedTools` / `--dangerously-skip-permissions` are binary toggles with no audit trail. Aegis adds three things they don't:
+
+1. **Cryptographic audit chain** — every decision is appended to `~/.aegis/audit.jsonl` with an Ed25519 signature and SHA3-256 prev/this hash. `aegis verify-audit` walks the chain in one command — detects edits, deletes, re-orderings.
+2. **Per-call structured risk scoring** — 31 detection rules + 6 incident playbooks running over a 30-subfield ATV-2080-v1 vector representation, with sLLM judge for grey-zone calls (Solo Free: dummy/local; opt-in: Anthropic Haiku).
+3. **Cost / loop / instruction-drift gates** — catches runaway agents, redundant retry loops, and tampered `CLAUDE.md` / `.mcp.json` baseline before the tool runs, not after the bill.
+
+For regulated industries (finance, healthcare, government) where AI coding assistants are blocked by audit requirements, the cryptographic decision log turns *"we have logs of what the AI did"* into *"we have signed proof that the AI did exactly this and nothing more."*
+
+## Verify integrity (the differentiating feature)
+
+Two layers, both runnable any time without network:
+
+```bash
+# 1) Hash chain — default, no key required.
+#    Detects any post-write mutation of ~/.aegis/audit.jsonl.
+uv run aegis verify-audit
+#   ✓ verify-audit (local chain) — 5,583 records intact
+#   signing pubkey: not configured
+
+# 2) Optional Ed25519 signing — opt-in, one-shot setup.
+#    Without the private key, the chain cannot be re-computed forward
+#    from a tampered point.  Recommended for any audit log you intend
+#    to share, archive, or use as compliance evidence.
+uv run aegis audit-key init      # generate ~/.aegis/keys/audit.ed25519{,.pub}
+uv run aegis verify-audit
+#   ✓ verify-audit (local chain) — 6 records intact
+#   signing pubkey: loaded — signed records were also Ed25519-verified
+
+# 3) Share the public fingerprint so others can verify without your machine:
+uv run aegis audit-key show
+#   fingerprint: f2a17931406e4f56
+#   pub:         ~/.aegis/keys/audit.ed25519.pub
+```
+
+Real-session output is checked in under [`docs/launch/dogfooding/`](docs/launch/dogfooding/) — captured against an actual 5,583-record `~/.aegis/audit.jsonl`, not synthetic.
 
 ## What you get in 5 minutes
 
@@ -77,35 +115,6 @@ uv run aegis policy diff --since 7d  # what rules / playbooks / baselines change
 uv run aegis pull-model --recommend  # upgrade path to Phi-3.5-mini / Haiku
 uv run python -m demo.macmini all  # 100-case self-validation
 ```
-
-## Verify integrity
-
-Two layers, both runnable any time without network:
-
-```bash
-# 1) Hash chain — default, no key required.
-#    Detects any post-write mutation of ~/.aegis/audit.jsonl.
-uv run aegis verify-audit
-#   ✓ verify-audit (local chain) — 5,583 records intact
-#   signing pubkey: not configured
-
-# 2) Optional Ed25519 signing — opt-in, one-shot setup.
-#    Without the private key, the chain cannot be re-computed forward
-#    from a tampered point. Recommended for any audit log you intend
-#    to share, archive, or use as evidence.
-uv run aegis audit-key init       # generate ~/.aegis/keys/audit.ed25519{,.pub}
-uv run aegis verify-audit
-#   ✓ verify-audit (local chain) — 6 records intact
-#   signing pubkey: loaded — signed records were also Ed25519-verified
-
-# 3) Share the public fingerprint (so others can verify your audit
-#    without running your machine):
-uv run aegis audit-key show
-#   fingerprint: f2a17931406e4f56
-#   pub:         ~/.aegis/keys/audit.ed25519.pub
-```
-
-Sample real-session output is checked in under [`docs/launch/dogfooding/`](docs/launch/dogfooding/) — captured against an actual `~/.aegis/audit.jsonl`, not synthetic.
 
 ## Modes
 
