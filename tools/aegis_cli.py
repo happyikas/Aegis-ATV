@@ -30,6 +30,7 @@ operational from D3.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import shutil
@@ -1859,6 +1860,229 @@ def cmd_report(args: argparse.Namespace) -> int:
         for tag, c in top:
             print(f"    {c:>4} × {tag}")
 
+    return 0
+
+
+# ─────────────────────────────────────────────────────────────────────
+# PR-C: aegis forensic <selector> — single-session timeline
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _format_ts(ts_ns: int) -> str:
+    """ISO-style timestamp with millisecond precision for the timeline."""
+    if ts_ns <= 0:
+        return "                       "
+    secs = ts_ns / 1_000_000_000
+    import datetime as _dt
+
+    dt = _dt.datetime.fromtimestamp(secs)
+    return dt.strftime("%Y-%m-%d %H:%M:%S.") + f"{int((secs % 1) * 1000):03d}"
+
+
+def _decision_glyph(decision: str) -> str:
+    return {
+        "ALLOW": "✅ ALLOW           ",
+        "BLOCK": "⛔ BLOCK           ",
+        "REQUIRE_APPROVAL": "⚠️  REQUIRE_APPROVAL",
+    }.get(decision, f"   {decision}")
+
+
+def cmd_forensic(args: argparse.Namespace) -> int:
+    """`aegis forensic <selector>` — postmortem timeline for one session.
+
+    The launch-prep audit identified that there was no single command
+    to answer "show me the full forensic timeline of session X."
+    Operators stitched it from `aegis report --explain`, `tail | jq`,
+    `aegis replay`, etc. This command reads the signed audit log once
+    and emits a chronologically-ordered timeline with:
+
+    * decision + tool + reason (one line per call)
+    * step traces of interest (BLOCK / REQUIRE_APPROVAL / m13 hybrid)
+    * top-3 step latencies if AEGIS_STEP_TIMING_ENABLED was on (PR-D)
+    * advisor_gate signal if --profile pro/cloud was active (PR-A)
+    * cumulative-cost cursor across the session
+
+    Selector resolution:
+
+    * Positional `<selector>`:
+        - "LAST" / "last" → the AID of the most-recent record
+        - exact match against `aid` field
+        - prefix match against `trace_id` (handy for sharing a partial
+          trace from a Slack message)
+
+    * `--trace TRACE_ID` filters to a single call within the session.
+    * `--audit PATH` overrides the default ~/.aegis/audit.jsonl.
+    * `--since 7d` / `--limit N` narrow the window.
+    * `--json` emits a structured object for downstream tooling.
+
+    Read-only — never modifies audit.jsonl.
+    """
+    audit_path = (
+        Path(args.audit) if args.audit
+        else Path.home() / ".aegis" / "audit.jsonl"
+    )
+    if not audit_path.exists():
+        print(f"[forensic] no audit log at {audit_path}")
+        print(
+            "        (start a Claude Code session with `aegis install "
+            "--mode local` so the hook can append decisions.)"
+        )
+        return 1
+
+    selector = args.selector
+    trace_filter = getattr(args, "trace", None)
+    since_secs = _parse_window_secs(args.since) if args.since else None
+    cutoff_ns = (
+        int(time.time() - since_secs) * 1_000_000_000 if since_secs else 0
+    )
+    limit = int(getattr(args, "limit", 0) or 0)
+
+    # ── Pass 1: scan + filter, collect matching records in memory ────
+    records: list[dict[str, Any]] = []
+    last_aid: str | None = None
+    with audit_path.open("r", encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            ts = int(rec.get("ts_ns", 0) or 0)
+            if cutoff_ns and ts < cutoff_ns:
+                continue
+            # A record carries either flat-style fields (local hook,
+            # decision/aid/trace_id at top level) or nested
+            # payload.header (sidecar). Only the local schema is the
+            # forensic target — the sidecar already exposes
+            # /forensic/replay endpoint.
+            if "decision" not in rec:
+                continue
+            last_aid = rec.get("aid") or last_aid
+            records.append(rec)
+
+    if not records:
+        print(_yellow(f"[forensic] no decision records in {audit_path}"))
+        return 1
+
+    # Resolve "last" → most-recent AID.
+    if selector and selector.lower() == "last":
+        if last_aid is None:
+            print(_yellow("[forensic] could not infer LAST aid — log empty"))
+            return 1
+        selector = last_aid
+
+    if not selector:
+        print(_red("[forensic] selector required (positional or 'last')"),
+              file=sys.stderr)
+        return 2
+
+    # ── Pass 2: filter to selector + optional trace ─────────────────
+    matched = [
+        r for r in records
+        if r.get("aid") == selector
+        or (
+            isinstance(r.get("trace_id"), str)
+            and str(r.get("trace_id", "")).startswith(selector)
+        )
+    ]
+    if trace_filter:
+        matched = [r for r in matched if r.get("trace_id") == trace_filter]
+    if limit:
+        matched = matched[-limit:]
+
+    if not matched:
+        print(_yellow(
+            f"[forensic] no records match selector={selector!r}"
+            + (f" --trace {trace_filter}" if trace_filter else "")
+        ))
+        return 1
+
+    # ── Render ──────────────────────────────────────────────────────
+    if getattr(args, "json", False):
+        out = {
+            "selector": selector,
+            "trace_filter": trace_filter,
+            "audit_path": str(audit_path),
+            "count": len(matched),
+            "first_ts_ns": int(matched[0].get("ts_ns", 0) or 0),
+            "last_ts_ns": int(matched[-1].get("ts_ns", 0) or 0),
+            "records": matched,
+        }
+        print(json.dumps(out, default=str))
+        return 0
+
+    # Human-readable timeline.
+    first_ts = int(matched[0].get("ts_ns", 0) or 0)
+    last_ts = int(matched[-1].get("ts_ns", 0) or 0)
+    duration_s = (last_ts - first_ts) / 1_000_000_000 if last_ts > first_ts else 0
+
+    print(_green(
+        f"forensic timeline — selector={selector}, {len(matched)} record(s)"
+    ))
+    print(f"  audit:    {audit_path}")
+    if first_ts and last_ts:
+        print(
+            f"  window:   {_format_ts(first_ts)}  →  {_format_ts(last_ts)}"
+            f"  ({duration_s:,.1f}s)"
+        )
+    if trace_filter:
+        print(f"  trace_id: {trace_filter}")
+    print()
+
+    counts: dict[str, int] = {"ALLOW": 0, "BLOCK": 0, "REQUIRE_APPROVAL": 0}
+    total_latency_ms = 0.0
+    for r in matched:
+        d = str(r.get("decision", "?"))
+        counts[d] = counts.get(d, 0) + 1
+        with contextlib.suppress(TypeError, ValueError):
+            total_latency_ms += float(r.get("latency_ms", 0) or 0)
+        ts_str = _format_ts(int(r.get("ts_ns", 0) or 0))
+        trace_short = str(r.get("trace_id", ""))[:8] or "--------"
+        tool = str(r.get("tool", "?"))[:6].ljust(6)
+        latency = float(r.get("latency_ms", 0) or 0)
+        print(
+            f"  {ts_str}  [trace={trace_short}…]  {tool}  "
+            f"{_decision_glyph(d)}  ({latency:>6.1f} ms)"
+        )
+        reason = r.get("reason")
+        if reason:
+            reason_str = str(reason)
+            if len(reason_str) > 90:
+                reason_str = reason_str[:87] + "..."
+            print(f"                  └─ reason: {reason_str}")
+        explain = r.get("explain") or {}
+        # PR-D step timings — if present, show top 3.
+        timings = explain.get("step_timings_us") or {}
+        if isinstance(timings, dict) and timings:
+            top3 = sorted(
+                timings.items(), key=lambda kv: -int(kv[1] or 0),
+            )[:3]
+            tt = "  ".join(
+                f"{k.split('.')[-2]}={v}us" for k, v in top3
+            )
+            print(f"                  └─ slow steps: {tt}")
+        # PR-A advisor gate — only when --profile pro/cloud is active.
+        gate = explain.get("advisor_gate") or {}
+        if isinstance(gate, dict) and gate.get("invoked"):
+            gate_reason = str(gate.get("reason", ""))[:60]
+            print(f"                  └─ advisor: invoked ({gate_reason})")
+
+    # Summary footer.
+    print()
+    print(_green("summary:"))
+    print(f"  events:           {len(matched)}")
+    for d in ("ALLOW", "REQUIRE_APPROVAL", "BLOCK"):
+        c = counts.get(d, 0)
+        if c:
+            pct = (100 * c) / len(matched)
+            print(f"  {d:<17} {c:>4}  ({pct:.0f}%)")
+    print(f"  total latency:    {total_latency_ms:,.1f} ms")
+    print()
+    print("artifacts (run separately):")
+    print("  uv run aegis verify-audit         # chain integrity")
+    print("  uv run aegis report               # session-level summary")
     return 0
 
 
@@ -4491,6 +4715,56 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     rep.set_defaults(fn=cmd_report)
+
+    # ── PR-C: aegis forensic <selector> ────────────────────────────
+    fr = sub.add_parser(
+        "forensic",
+        help=(
+            "Postmortem timeline for one session — chronological list "
+            "of decisions, reasons, step traces, advisor signals, and "
+            "(if AEGIS_STEP_TIMING_ENABLED was on) per-step latency. "
+            "Read-only over ~/.aegis/audit.jsonl."
+        ),
+    )
+    fr.add_argument(
+        "selector",
+        help=(
+            "AID (session id) to filter by — exact match. "
+            "Pass 'last' / 'LAST' for the most-recent AID. "
+            "A trace_id prefix also works for cross-session lookup."
+        ),
+    )
+    fr.add_argument(
+        "--trace",
+        default=None,
+        help="(optional) narrow to a single trace_id within the session",
+    )
+    fr.add_argument(
+        "--audit",
+        default=None,
+        help="audit log path (default: ~/.aegis/audit.jsonl)",
+    )
+    fr.add_argument(
+        "--since",
+        default=None,
+        metavar="DURATION",
+        help="only records within this window, e.g. 7d / 24h / 3600",
+    )
+    fr.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="show only the most-recent N matching records (0 = all)",
+    )
+    fr.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "emit a single JSON object {selector, count, records[]} for "
+            "downstream tooling (jq / spreadsheet / blog post)"
+        ),
+    )
+    fr.set_defaults(fn=cmd_forensic)
 
     cl = sub.add_parser(
         "cache-lint",
