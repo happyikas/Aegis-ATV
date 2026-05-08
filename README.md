@@ -9,6 +9,18 @@
 
 > **Every Claude Code tool call gets a cryptographic audit line.** SHA3-chained, Ed25519-signed, on local disk only. Tamper-evident with one CLI command. Plus a 16-step ATV-2080-v1 firewall that BLOCKs / requires approval / ALLOWs before the tool runs. 0 cloud calls by default, ~5-minute install.
 
+## Three named features
+
+Aegis ships as three named features built on the same firewall + audit chain:
+
+| | What it does | Run |
+|---|---|---|
+| **🏋️ ATV Coach** | Learns your environment's normal/anomaly distribution (5-layer × 4-phase burn-in) and feeds it into the sLLM judge + RAG step340 | `aegis burnin retrain`, `aegis case-memory build` |
+| **📊 ATV Live** | Real-time agent monitoring across **cost / performance / security** | `aegis report`, `aegis cost summary`, `aegis fleet-monitor start` |
+| **🔧 ATV Doctor** | Diagnoses + advises + rolls back when the agent is in trouble (or about to be) | `aegis forensic last`, `aegis advise`, `aegis rollback <trace>` |
+
+User manuals (Korean is the canonical version): [`docs/manuals/`](docs/manuals/README.md)
+
 ## Why this exists
 
 Claude Code's built-in `--allowedTools` / `--dangerously-skip-permissions` are binary toggles with no audit trail. Aegis adds three things they don't:

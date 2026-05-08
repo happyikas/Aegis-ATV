@@ -1,7 +1,9 @@
 ---
-description: Aegis 5-line risk summary of recent Claude Code tool calls
+description: 📊 ATV Live — 5-line risk summary of recent Claude Code tool calls
 allowed-tools: Bash
 ---
+
+This is the **📊 ATV Live** entry point — a 5-line snapshot of cost / performance / security over the recent window.
 
 Run this exact bash command and show the user its output verbatim, with no commentary unless the output indicates an error or absence:
 

@@ -3,6 +3,8 @@ description: Cryptographically verify the Aegis audit chain (SHA3 + Ed25519)
 allowed-tools: Bash
 ---
 
+This is the **neutral infrastructure** chain-integrity verifier — independent of Coach / Live / Doctor. Should pass any time, on any install.
+
 Run this exact bash command and show the user its output verbatim:
 
 ```bash
