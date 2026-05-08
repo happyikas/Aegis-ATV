@@ -1081,6 +1081,71 @@ def _validate_plugin_manifest() -> tuple[bool, str]:
 
 VALID_LOCAL_JUDGES = ("dummy", "hybrid", "local-phi")
 VALID_LOCAL_EMBEDDINGS = ("dummy", "bge-local")
+VALID_LOCAL_PROFILES = ("free", "pro", "cloud")
+
+
+# ── Profile resolution ───────────────────────────────────────────────
+
+
+# Each profile sets baselines for (judge, embedding, advisor_enabled,
+# advisor_provider) and lists model files to auto-download. Explicit
+# `--judge` / `--embedding` flags override the profile baseline.
+#
+#   free   — Solo Free contract: 0 cloud calls, 0 model files. Today's
+#            default behaviour, made explicit.
+#   pro    — Real local intelligence: M13 attribution head + bge-local
+#            embeddings + local-phi judge fallback. ~700 MB GGUF
+#            download. Still 0 cloud calls.
+#   cloud  — Maximum accuracy: same as pro plus Anthropic Haiku judge
+#            for grey-zone calls. Requires ANTHROPIC_API_KEY at runtime;
+#            cost is ~$0.50–2.00/month for typical solo dev usage.
+_PROFILE_DEFAULTS: dict[str, dict[str, object]] = {
+    "free": {
+        "judge": "dummy",
+        "embedding": "dummy",
+        "advisor_enabled": False,
+        "advisor_provider": None,
+        "auto_pull": (),
+    },
+    "pro": {
+        "judge": "hybrid",
+        "embedding": "bge-local",
+        "advisor_enabled": True,
+        "advisor_provider": "heuristic",
+        "auto_pull": ("bge-base-en", "llama-3.2-1b"),
+    },
+    "cloud": {
+        "judge": "hybrid",
+        "embedding": "bge-local",
+        "advisor_enabled": True,
+        "advisor_provider": "haiku",
+        "auto_pull": ("bge-base-en", "llama-3.2-1b"),
+    },
+}
+
+
+def _resolve_profile(
+    profile: str,
+    *,
+    judge_arg: str | None,
+    embedding_arg: str | None,
+) -> dict[str, object]:
+    """Apply profile baselines, letting explicit --judge / --embedding override.
+
+    Returns dict with: judge, embedding, advisor_enabled, advisor_provider,
+    auto_pull. The auto_pull tuple lists model spec names the install
+    command should download before patching settings.json.
+    """
+    if profile not in _PROFILE_DEFAULTS:
+        raise ValueError(
+            f"--profile must be one of {VALID_LOCAL_PROFILES}, got {profile!r}"
+        )
+    base = dict(_PROFILE_DEFAULTS[profile])
+    if judge_arg is not None:
+        base["judge"] = judge_arg
+    if embedding_arg is not None:
+        base["embedding"] = embedding_arg
+    return base
 
 
 def _hook_python_executable() -> str:
@@ -1108,7 +1173,11 @@ def _hook_python_executable() -> str:
 
 
 def _build_pretool_command(
-    mode: str, *, judge: str = "dummy", embedding: str = "dummy",
+    mode: str, *,
+    judge: str = "dummy",
+    embedding: str = "dummy",
+    advisor_enabled: bool = False,
+    advisor_provider: str | None = None,
 ) -> str:
     """Compose the shell command embedded into the PreToolUse hook.
 
@@ -1167,6 +1236,15 @@ def _build_pretool_command(
             f"AEGIS_POLICY_DIR={POLICIES_DIR} "
             f"PYTHONPATH={SRC_DIR}"
         )
+        # PR-A: profile=pro / cloud activates the cost / performance /
+        # security advisor pipeline (default is OFF — see
+        # tools/aegis_local_hook.py:56). When enabled, the per-decision
+        # advisor evaluates non-ALLOW verdicts and stamps
+        # explain.action_advice into the audit log.
+        if advisor_enabled:
+            prefix = f"{prefix} AEGIS_ADVISOR_ENABLED=1"
+            if advisor_provider:
+                prefix = f"{prefix} AEGIS_ADVISOR_PROVIDER={advisor_provider}"
         # When local-phi/hybrid is requested, embed AEGIS_JUDGE_MODEL_PATH
         # so the judge enters real mode without manual .env editing. If
         # the file is absent, LocalPhiJudge falls back to stub mode and
@@ -2085,8 +2163,52 @@ def cmd_install(args: argparse.Namespace) -> int:
         return _cmd_install_rescue()
 
     mode = args.mode
-    judge = getattr(args, "judge", "dummy")
-    embedding = getattr(args, "embedding", "dummy")
+    profile = getattr(args, "profile", "free")
+    if mode == "local":
+        if profile not in VALID_LOCAL_PROFILES:
+            print(
+                _red(
+                    f"--profile must be one of {VALID_LOCAL_PROFILES}, "
+                    f"got {profile!r}"
+                ),
+                file=sys.stderr,
+            )
+            return 2
+        # Resolve baseline from profile, letting explicit --judge /
+        # --embedding override. Args parsed with default=None so we
+        # can distinguish "user explicit" from "use profile default".
+        resolved = _resolve_profile(
+            profile,
+            judge_arg=getattr(args, "judge", None),
+            embedding_arg=getattr(args, "embedding", None),
+        )
+        judge = str(resolved["judge"])
+        embedding = str(resolved["embedding"])
+        advisor_enabled = bool(resolved["advisor_enabled"])
+        advisor_provider = resolved["advisor_provider"]
+        # _PROFILE_DEFAULTS is typed dict[str, dict[str, object]] so this
+        # narrowing satisfies mypy without forcing a TypedDict.
+        _ap_raw = resolved["auto_pull"]
+        _profile_pull: tuple[object, ...] = (
+            tuple(_ap_raw) if isinstance(_ap_raw, (tuple, list)) else ()
+        )
+        # Filter by what the *resolved* configuration actually uses.
+        # If the user overrode --judge dummy / --embedding dummy on top
+        # of profile=pro, do not download models that won't be loaded
+        # — respect the explicit override.
+        _needs: list[object] = []
+        if embedding == "bge-local" and "bge-base-en" in _profile_pull:
+            _needs.append("bge-base-en")
+        if judge in ("local-phi", "hybrid") and "llama-3.2-1b" in _profile_pull:
+            _needs.append("llama-3.2-1b")
+        auto_pull_specs: tuple[object, ...] = tuple(_needs)
+    else:
+        # Sidecar mode keeps the legacy defaults — profile is local-only.
+        judge = getattr(args, "judge", None) or "dummy"
+        embedding = getattr(args, "embedding", None) or "dummy"
+        advisor_enabled = False
+        advisor_provider = None
+        auto_pull_specs = ()
     if mode == "local" and judge not in VALID_LOCAL_JUDGES:
         print(
             _red(f"--judge must be one of {VALID_LOCAL_JUDGES}, got {judge!r}"),
@@ -2103,14 +2225,43 @@ def cmd_install(args: argparse.Namespace) -> int:
         )
         return 2
 
+    # Cloud profile: warn (don't fail) if ANTHROPIC_API_KEY isn't set.
+    # The user may set it in ~/.zshrc post-install; the firewall handles
+    # missing key gracefully (falls back to the local-phi tier of the
+    # hybrid judge with a one-time stderr warning).
+    if mode == "local" and profile == "cloud" and not os.environ.get(
+        "ANTHROPIC_API_KEY"
+    ):
+        print(_yellow(
+            "  warning: --profile cloud activates the Haiku judge but "
+            "ANTHROPIC_API_KEY is not set. The hybrid chain falls back to "
+            "local-phi when the key is missing — set the key in your shell "
+            "profile to enable cloud-tier accuracy."
+        ))
+
     ok, info = _validate_plugin_manifest()
     if not ok:
         print(_red(info), file=sys.stderr)
         return 1
     suffix = (
-        f", judge={judge}, embedding={embedding}" if mode == "local" else ""
+        f", profile={profile}, judge={judge}, embedding={embedding}"
+        if mode == "local" else ""
     )
     print(f"[install] plugin v{info}, mode={mode}{suffix}")
+
+    # PR-A: profile=pro / cloud auto-pulls required GGUF model files
+    # before patching settings.json, so the hook never starts up
+    # pointing at a missing model. Idempotent — pull-model fast-paths
+    # if the target already exists.
+    if mode == "local" and auto_pull_specs:
+        rc = _auto_pull_models(auto_pull_specs)
+        if rc != 0:
+            print(_red(
+                f"[install] auto-pull failed (rc={rc}); refusing to patch "
+                f"settings.json with a profile that needs missing models. "
+                f"Re-run after fixing the download, or use --profile free."
+            ), file=sys.stderr)
+            return rc
 
     # When the judge needs a local GGUF, pre-flight the model file +
     # llama-cpp-python so the user knows immediately if the install
@@ -2162,6 +2313,8 @@ def cmd_install(args: argparse.Namespace) -> int:
 
     pretool_cmd = _build_pretool_command(
         mode, judge=judge, embedding=embedding,
+        advisor_enabled=advisor_enabled,
+        advisor_provider=advisor_provider if isinstance(advisor_provider, str) else None,
     )
     pretool_marker = _pretool_hook_marker(mode)
     pretool_entry = {
@@ -2263,10 +2416,30 @@ def cmd_install(args: argparse.Namespace) -> int:
         print("Sidecar mode: start the Aegis service with `docker compose up -d`")
         print("  (the hook POSTs to localhost:8000/evaluate)")
     else:
-        print(_green(
-            "Local mode: in-process firewall — no service needed, "
-            "0 cloud calls."
-        ))
+        # Profile-aware banner — surfaces the intelligence tier so users
+        # know what to expect (no cloud calls, semantic retrieval on,
+        # haiku grey-zone judge, etc.).
+        if profile == "free":
+            print(_green(
+                "Local mode (profile=free): in-process firewall — "
+                "no service needed, 0 cloud calls, 0 model files."
+            ))
+            print(_yellow(
+                "  upgrade with `aegis install --mode local --profile pro`  "
+                "(M13 attribution head + bge-local + advisor; ~700 MB)"
+            ))
+        elif profile == "pro":
+            print(_green(
+                "Local mode (profile=pro): real semantic retrieval + "
+                "M13 attribution + local-phi judge + advisor — "
+                "still 0 cloud calls."
+            ))
+        else:  # cloud
+            print(_green(
+                "Local mode (profile=cloud): pro stack + haiku judge for "
+                "grey-zone calls. Cloud calls go to Anthropic only when "
+                "the local-phi tier is uncertain."
+            ))
     print()
     print(_green("─── NEXT STEPS ──────────────────"))
     print("  1. Restart Claude Code (full quit & relaunch — tab reopen")
@@ -2409,6 +2582,41 @@ def _human_size(n_bytes: int) -> str:
             return f"{n_bytes:.1f} {unit}" if unit != "B" else f"{n_bytes} B"
         n_bytes /= 1024  # type: ignore[assignment]
     return f"{n_bytes:.1f} GB"
+
+
+def _auto_pull_models(spec_names: tuple[object, ...]) -> int:
+    """Idempotently download each model spec listed by a profile.
+
+    Calls cmd_pull_model() programmatically per spec. Each pull is a
+    no-op when the target file already exists with the right size, so
+    re-running install is cheap. Returns 0 on full success, non-zero
+    on the first failure (caller refuses to patch settings.json).
+
+    Used by --profile pro / cloud to make the install one-shot — users
+    don't have to remember to run pull-model separately.
+    """
+    import argparse as _ap
+
+    if not spec_names:
+        return 0
+    print(_green(
+        f"[install] auto-pulling {len(spec_names)} model file(s) for "
+        f"profile (idempotent — already-present files fast-path)"
+    ))
+    for name in spec_names:
+        ns = _ap.Namespace(
+            model=str(name),
+            list=False,
+            force=False,
+            recommend=False,
+        )
+        rc = cmd_pull_model(ns)
+        if rc != 0:
+            print(_red(
+                f"[install] auto-pull failed for spec={name!r} (rc={rc})"
+            ), file=sys.stderr)
+            return rc
+    return 0
 
 
 def _check_llama_cpp_installed() -> tuple[bool, str]:
@@ -4346,27 +4554,44 @@ def build_parser() -> argparse.ArgumentParser:
         "--force", action="store_true", help="add hook even if already installed"
     )
     inst.add_argument(
+        "--profile",
+        choices=list(VALID_LOCAL_PROFILES),
+        default="free",
+        help=(
+            "(--mode local only) intelligence-tier preset. "
+            "free: dummy embedding + dummy judge + advisor OFF (today's "
+            "default; 0 cloud calls, 0 model files). "
+            "pro: bge-local + hybrid (M13 attribution head + local-phi) + "
+            "advisor heuristic; auto-pulls ~700 MB GGUF; still 0 cloud "
+            "calls. "
+            "cloud: same as pro plus haiku judge for grey-zone calls; "
+            "requires ANTHROPIC_API_KEY. "
+            "Explicit --judge / --embedding override the profile baseline. "
+            "default: free"
+        ),
+    )
+    inst.add_argument(
         "--judge",
         choices=list(VALID_LOCAL_JUDGES),
-        default="dummy",
+        default=None,
         help=(
-            "(--mode local only) sLLM judge stack. dummy: keyword-only "
-            "(fastest, may miss AWS-secret + loop scenarios). hybrid: "
-            "heuristic + keyword + M13 attribution head (recommended for "
-            "real coding-AI traffic, still offline). default: dummy"
+            "(--mode local only) sLLM judge stack — overrides --profile. "
+            "dummy: keyword-only (fastest, may miss AWS-secret + loop "
+            "scenarios). hybrid: heuristic + keyword + M13 attribution "
+            "head (recommended for real coding-AI traffic, still offline). "
+            "default: per --profile (free=dummy, pro/cloud=hybrid)"
         ),
     )
     inst.add_argument(
         "--embedding",
         choices=list(VALID_LOCAL_EMBEDDINGS),
-        default="dummy",
+        default=None,
         help=(
             "(--mode local only) embedding provider for ATV agent_state "
-            "and action_history slots. dummy: deterministic SHA3 noise "
-            "(no semantic similarity, no install). bge-local: real "
-            "BGE-base-en-v1.5 GGUF via llama-cpp (~100 MB; requires "
-            "`aegis pull-model --model bge-base-en` + `--extra "
-            "local-llm`). default: dummy"
+            "and action_history slots — overrides --profile. dummy: "
+            "deterministic SHA3 noise (no semantic similarity, no install). "
+            "bge-local: real BGE-base-en-v1.5 GGUF via llama-cpp (~100 MB). "
+            "default: per --profile (free=dummy, pro/cloud=bge-local)"
         ),
     )
     inst.add_argument(
