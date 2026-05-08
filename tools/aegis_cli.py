@@ -52,6 +52,7 @@ POST_HOOK_SCRIPT = HERE / "hooks" / "post_tool.py"
 STOP_HOOK_SCRIPT = HERE / "hooks" / "session_end.py"
 PRECOMPACT_HOOK_SCRIPT = HERE / "hooks" / "pre_compact.py"
 USER_PROMPT_HOOK_SCRIPT = HERE / "hooks" / "user_prompt_submit.py"
+SESSION_START_HOOK_SCRIPT = HERE / "hooks" / "session_start.py"
 PLUGIN_MANIFEST = PROJECT_ROOT / ".claude-plugin" / "plugin.json"
 POLICIES_DIR = PROJECT_ROOT / "policies"
 SRC_DIR = PROJECT_ROOT / "src"
@@ -1358,6 +1359,9 @@ _AEGIS_HOOK_FINGERPRINTS = (
     "aegis_hook.py",
     "tools/hooks/post_tool.py",
     "tools/hooks/session_end.py",
+    "tools/hooks/pre_compact.py",
+    "tools/hooks/user_prompt_submit.py",
+    "tools/hooks/session_start.py",     # Sprint 1 PR4
 )
 
 
@@ -1377,6 +1381,7 @@ def _drop_aegis_entries(hooks_section: dict[str, list[dict[str, Any]]]) -> int:
     for stage in (
         "PreToolUse", "PostToolUse", "Stop",
         "PreCompact", "UserPromptSubmit",   # PR #47
+        "SessionStart",                      # PR4 (Sprint 1)
     ):
         entries = hooks_section.get(stage, [])
         keep: list[dict[str, Any]] = []
@@ -2916,6 +2921,24 @@ def cmd_install(args: argparse.Namespace) -> int:
             "hooks": [{"type": "command", "command": user_prompt_cmd}],
         })
 
+    # Sprint 1 PR4 — SessionStart welcome hint. Fires once on first
+    # session post-install, guides new users to the slash commands and
+    # the killer feature (audit chain). Subsequent sessions are silent
+    # via the ~/.aegis/.welcomed marker.
+    session_start_hooks = hooks_section.setdefault("SessionStart", [])
+    session_start_already = any(
+        str(SESSION_START_HOOK_SCRIPT) in h.get("command", "")
+        for entry in session_start_hooks
+        for h in entry.get("hooks", [])
+    )
+    if not session_start_already:
+        session_start_cmd = (
+            f"{_hook_python_executable()} {SESSION_START_HOOK_SCRIPT}"
+        )
+        session_start_hooks.append({
+            "hooks": [{"type": "command", "command": session_start_cmd}],
+        })
+
     SETTINGS_PATH.write_text(json.dumps(existing, indent=2) + "\n")
 
     print(_green(f"\u2713 installed Aegis hooks → {SETTINGS_PATH}"))
@@ -2928,6 +2951,8 @@ def cmd_install(args: argparse.Namespace) -> int:
         print(f"  PreCompact:  {PRECOMPACT_HOOK_SCRIPT}")
     if not user_prompt_already:
         print(f"  UserPromptSubmit: {USER_PROMPT_HOOK_SCRIPT}")
+    if not session_start_already:
+        print(f"  SessionStart: {SESSION_START_HOOK_SCRIPT}")
     print('  matcher: "*" (every tool — narrow this in settings.json if too noisy)')
     print()
     if mode == "sidecar":

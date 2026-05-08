@@ -1900,3 +1900,59 @@ def test_advise_subparser_dispatches() -> None:
     assert args.fn.__name__ == "cmd_advise"
     assert args.selector == "last"
     assert args.category == "cost"
+
+
+# ── PR4: SessionStart hook registration ─────────────────────────────
+
+
+def test_install_registers_session_start_hook(
+    isolated_install: Path,
+) -> None:
+    """`aegis install` should register the SessionStart hook into
+    settings.json so the welcome message can fire on the user's next
+    Claude Code launch."""
+    import argparse
+    rc = aegis_cli.cmd_install(argparse.Namespace(
+        force=False, mode="local", judge=None, embedding=None,
+        rescue=False, profile="free",
+    ))
+    assert rc == 0
+    settings = json.loads(
+        (isolated_install / ".claude" / "settings.json").read_text()
+    )
+    sess_start = settings.get("hooks", {}).get("SessionStart", [])
+    assert len(sess_start) == 1
+    cmd = sess_start[0]["hooks"][0]["command"]
+    assert "session_start.py" in cmd
+
+
+def test_uninstall_removes_session_start_hook(
+    isolated_install: Path,
+) -> None:
+    """Uninstall must drop SessionStart hook (alongside the others)."""
+    import argparse
+    aegis_cli.cmd_install(argparse.Namespace(
+        force=False, mode="local", judge=None, embedding=None,
+        rescue=False, profile="free",
+    ))
+    settings_path = isolated_install / ".claude" / "settings.json"
+    pre = json.loads(settings_path.read_text())
+    assert pre["hooks"]["SessionStart"], "pre-condition: hook installed"
+
+    rc = aegis_cli.cmd_uninstall(argparse.Namespace(
+        dry_run=False, no_backup=False,
+    ))
+    assert rc == 0
+    post = json.loads(settings_path.read_text())
+    # SessionStart entries were Aegis-owned → all dropped.
+    assert post["hooks"].get("SessionStart", []) == []
+
+
+def test_session_start_script_is_aegis_owned() -> None:
+    """The SessionStart script path must match the fingerprint set so
+    --force can evict stale entries on re-install."""
+    fp = "tools/hooks/session_start.py"
+    assert any(
+        fp in candidate
+        for candidate in aegis_cli._AEGIS_HOOK_FINGERPRINTS
+    )
