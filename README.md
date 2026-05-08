@@ -111,6 +111,24 @@ uv run aegis install --mode local      # Solo Free in-process hook (no service)
 uv run aegis install --mode sidecar    # multi-tenant FastAPI + Postgres + Redis (Enterprise)
 ```
 
+### Local-mode intelligence tiers (`--profile`)
+
+```bash
+# free   (default): dummy embedding + dummy judge, advisor OFF, 0 cloud, 0 model files
+uv run aegis install --mode local --profile free
+
+# pro    : bge-local embedding + hybrid (M13+local-phi) judge + advisor ON; 0 cloud,
+#          ~700 MB GGUF auto-downloaded on install
+uv run aegis install --mode local --profile pro
+
+# cloud  : pro stack + Anthropic Haiku judge for grey-zone calls;
+#          requires ANTHROPIC_API_KEY in shell profile
+uv run aegis install --mode local --profile cloud
+```
+
+Explicit `--judge` / `--embedding` override the profile baseline — useful for pinning a specific tier (e.g., `--profile pro --judge dummy` keeps the pro embedding + advisor but uses keyword-only judge).
+
+
 * **Safe Auto-Run** — known-safe ops (Read/Grep/Glob, ls, pytest,
   ruff, git status) skip the sLLM judge — <5 ms median.
 * **12 / 12 known incident classes** block + cloud destructive
