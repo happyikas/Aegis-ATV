@@ -1,0 +1,36 @@
+{
+  "apiVersion": 1,
+  "name": "aegis",
+  "displayName": "Aegis ATV",
+  "description": "Run every tool call through Aegis ATV's 16-step firewall + cryptographic audit chain. BLOCKs destructive operations, requires approval for grey-zone calls, and writes a SHA3-chained Ed25519-signed audit line per decision.",
+  "version": "0.1.0-preview.1",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/happyikas/Aegis-ATV/tree/main/openclaw-plugin",
+  "main": "dist/index.js",
+  "permissions": [
+    "tool-call:intercept",
+    "network:localhost"
+  ],
+  "configuration": {
+    "aegisUrl": {
+      "type": "string",
+      "default": "http://localhost:8000",
+      "description": "Base URL of the Aegis sidecar service. Run `docker compose up -d` from the Aegis-ATV repo to start it."
+    },
+    "tenantId": {
+      "type": "string",
+      "default": "default",
+      "description": "Tenant ID stamped into every audit record. Use distinct tenants for multi-channel ops (per channel, per team, etc.)."
+    },
+    "timeoutMs": {
+      "type": "number",
+      "default": 1500,
+      "description": "Aegis evaluation timeout in milliseconds. On timeout the plugin defaults to ALLOW + an audit-warning record (fail-open) — set to 0 to fail-closed instead."
+    },
+    "failClosed": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, sidecar errors (timeout / 5xx / unreachable) BLOCK the tool call instead of allowing fail-open. Recommended for regulated industries."
+    }
+  }
+}
