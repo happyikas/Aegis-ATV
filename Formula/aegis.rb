@@ -18,10 +18,7 @@ class Aegis < Formula
   desc "Action Firewall for Claude Code — 16-step ATV-2080-v1 pipeline, on-device, signed audit"
   homepage "https://github.com/happyikas/Aegis-ATV"
   url "https://github.com/happyikas/Aegis-ATV/archive/refs/tags/v0.2.0.tar.gz"
-  # sha256 will be filled in by a follow-up PR after `git push --tags v0.2.0`
-  # creates the GitHub-side tarball. Until then `brew install --HEAD` works
-  # and the formula parse-only CI smoke continues to pass.
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  sha256 "82f8ed49a6346777054f9222b8e082d5f3d2d85b1236895fbbf5bad2df13abbb"
   license "Apache-2.0"
   head "https://github.com/happyikas/Aegis-ATV.git", branch: "main"
 
