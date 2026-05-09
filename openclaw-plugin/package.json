@@ -1,0 +1,52 @@
+{
+  "name": "@openclaw/plugin-aegis",
+  "version": "0.1.0-preview.1",
+  "description": "OpenClaw plugin that runs every tool call through Aegis ATV's 16-step firewall + cryptographic audit chain.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "openclaw.plugin.json"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "aegis",
+    "firewall",
+    "audit",
+    "agent",
+    "security"
+  ],
+  "author": "Aegis ATV contributors",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/happyikas/Aegis-ATV.git",
+    "directory": "openclaw-plugin"
+  },
+  "homepage": "https://github.com/happyikas/Aegis-ATV/tree/main/openclaw-plugin",
+  "bugs": "https://github.com/happyikas/Aegis-ATV/issues",
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.4.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

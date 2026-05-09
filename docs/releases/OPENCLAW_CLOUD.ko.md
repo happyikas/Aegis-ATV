@@ -101,12 +101,13 @@ cloud LLM 트랙이라서 발생하는 한계 — Local OSS 트랙으로 가야 
 | 단계 | 상태 | 설명 |
 |------|------|------|
 | 1. OpenClaw 분석 + 통합 가능성 검증 | ✅ 완료 | [PR #118](https://github.com/happyikas/Aegis-ATV/pull/118) |
-| 2. `aegis install --target openclaw-cloud` stub | ✅ 본 PR | "coming soon" + 안내 |
-| 3. `@openclaw/plugin-aegis` TypeScript 플러그인 | 🟡 진행 중 | 3–4주 분량 (Local 트랙과 공통) |
-| 4. 다채널 attribution 통합 | 🟡 설계만 | OpenClaw event metadata → ATV |
-| 5. Param rewrite 통합 | 🟡 설계만 | step312 normalize 의 변환 모드 |
-| 6. Provider drift 감지 | 🔴 예정 | Coach 의 새 학습 차원 |
-| 7. ClawHub 마켓 등록 | 🔴 예정 | distribution channel |
+| 2. `aegis install --target openclaw-cloud` stub | ✅ 완료 | [PR #127](https://github.com/happyikas/Aegis-ATV/pull/127) |
+| 3. `@openclaw/plugin-aegis` TypeScript 스켈레톤 | ✅ 완료 | `openclaw-plugin/` — handler + HTTP client + 19 tests |
+| 4. End-to-end OpenClaw runtime 통합 테스트 | 🟡 진행 중 | sidecar `/evaluate` ↔ 플러그인 |
+| 5. 다채널 attribution 통합 | 🟡 설계만 | OpenClaw event metadata → ATV `header.channel` |
+| 6. Param rewrite 통합 | ✅ 핸들러에 구현됨 | `sanitized_input` 처리 |
+| 7. Provider drift 감지 | 🔴 예정 | Coach 의 새 학습 차원 |
+| 8. npm publish + ClawHub 마켓 등록 | 🔴 예정 | distribution channel |
 
 → 단계 3 (TypeScript 플러그인) 이 Local 트랙과 공유되므로, 그 PR 이 머지되면 **Cloud 트랙 4–5 는 빠르게 따라옴**.
 
