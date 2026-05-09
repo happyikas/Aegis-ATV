@@ -1,4 +1,4 @@
-# `@openclaw/plugin-aegis` npm publish runbook
+# `@happyikas/openclaw-plugin-aegis` npm publish runbook
 
 Step-by-step commands for publishing the OpenClaw plugin to npm.
 Mirrors the structure of [`RELEASE_v0.2.0.md`](RELEASE_v0.2.0.md)
@@ -111,7 +111,7 @@ node_modules or test fixtures), revisit the `files` field in
 > with `npm publish --tag <name>`. Without `--tag`, npm rejects the
 > publish (since v9). Even if the publish succeeded, omitting the
 > tag would set the pre-release as the default `latest` install
-> for anyone running `npm install @openclaw/plugin-aegis`, which
+> for anyone running `npm install @happyikas/openclaw-plugin-aegis`, which
 > is exactly what we don't want for a preview release.
 
 ```bash
@@ -132,21 +132,21 @@ npm publish --dry-run --tag preview
 Successful publish prints:
 
 ```
-+ @openclaw/plugin-aegis@0.2.0-preview.2
++ @happyikas/openclaw-plugin-aegis@0.2.0-preview.2
 ```
 
 After publish, users install with the explicit tag:
 
 ```bash
 # Pre-release install (this is what your README documents):
-npm install @openclaw/plugin-aegis@preview
+npm install @happyikas/openclaw-plugin-aegis@preview
 # (resolves to the highest version tagged `preview`)
 
 # Pin to the exact pre-release:
-npm install @openclaw/plugin-aegis@0.2.0-preview.2
+npm install @happyikas/openclaw-plugin-aegis@0.2.0-preview.2
 
 # Default install (after GA):
-npm install @openclaw/plugin-aegis
+npm install @happyikas/openclaw-plugin-aegis
 ```
 
 ---
@@ -157,11 +157,11 @@ npm install @openclaw/plugin-aegis
 # Make a throwaway dir
 mkdir -p /tmp/aegis-plugin-smoke && cd /tmp/aegis-plugin-smoke
 npm init -y
-npm install @openclaw/plugin-aegis@0.2.0-preview.1
+npm install @happyikas/openclaw-plugin-aegis@0.2.0-preview.1
 
 # Verify the entry surface:
 node --input-type=module -e "
-import('@openclaw/plugin-aegis').then(m => {
+import('@happyikas/openclaw-plugin-aegis').then(m => {
   console.log('exports:', Object.keys(m).sort());
   console.log('default config:', m.DEFAULT_CONFIG);
 });
@@ -176,7 +176,7 @@ If the smoke test passes you're done.
 
 ## 5. Post-publish checklist
 
-- [ ] Confirm npm registry shows the version: <https://www.npmjs.com/package/@openclaw/plugin-aegis>
+- [ ] Confirm npm registry shows the version: <https://www.npmjs.com/package/@happyikas/openclaw-plugin-aegis>
 - [ ] (Optional) Tweet / post the release link.
 - [ ] Update [`docs/releases/OPENCLAW_LOCAL.ko.md`](../releases/OPENCLAW_LOCAL.ko.md) and [`docs/releases/OPENCLAW_CLOUD.ko.md`](../releases/OPENCLAW_CLOUD.ko.md) roadmap tables to mark step 8 ✅ in a follow-up commit.
 - [ ] Open a tracking issue for the next release's E2E test against a running OpenClaw runtime.
@@ -191,7 +191,7 @@ this only if you discover a serious metadata or contents issue
 right after publishing:
 
 ```bash
-npm unpublish @openclaw/plugin-aegis@0.2.0-preview.1
+npm unpublish @happyikas/openclaw-plugin-aegis@0.2.0-preview.1
 ```
 
 After 72 hours, or if any downstream package depends on it,
@@ -202,7 +202,7 @@ issue in the CHANGELOG.
 For a deprecated-but-not-removed flow:
 
 ```bash
-npm deprecate @openclaw/plugin-aegis@0.2.0-preview.1 \
+npm deprecate @happyikas/openclaw-plugin-aegis@0.2.0-preview.1 \
   "Superseded by 0.2.0-preview.2; see CHANGELOG"
 ```
 

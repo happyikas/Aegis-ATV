@@ -1,4 +1,4 @@
-# `@openclaw/plugin-aegis` Changelog
+# `@happyikas/openclaw-plugin-aegis` Changelog
 
 This package versions independently of the `aegis-mvp` Python core
 (see `pyproject.toml` for the core's version). The plugin's
@@ -12,6 +12,15 @@ with the **`-preview.N`** suffix marking releases that lack an
 end-to-end integration test against a running OpenClaw runtime.
 
 ## [0.2.0-preview.2] — 2026-05-09
+
+> **npm scope** — published as `@happyikas/openclaw-plugin-aegis`
+> on npm. Earlier git history shows the planned name as
+> `@openclaw/plugin-aegis`, but the `@openclaw` npm org isn't
+> registered (and may belong to OpenClaw upstream when they
+> register it), so the first actual publish ships under the
+> maintainer's own `@happyikas` scope. If/when OpenClaw publishes
+> their own `@openclaw` npm org, the package republishes there
+> with a redirect note in this CHANGELOG.
 
 Pre-publish completeness review (`PUBLISH_OPENCLAW_PLUGIN.md`)
 identified three blocker-class issues in the `0.2.0-preview.1`

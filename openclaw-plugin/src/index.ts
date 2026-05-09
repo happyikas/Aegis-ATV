@@ -1,5 +1,10 @@
 /**
- * @openclaw/plugin-aegis — entry point.
+ * Aegis ATV plugin for OpenClaw — entry point.
+ *
+ * Published as `@happyikas/openclaw-plugin-aegis` on npm (the
+ * `@openclaw` npm scope is reserved for OpenClaw upstream; if/when
+ * they publish their own `@openclaw` org this package will
+ * republish there).
  *
  * Registers the Aegis ATV `before_tool_call` handler with the
  * OpenClaw plugin runtime. OpenClaw plugins receive an `api` object
@@ -38,7 +43,7 @@ export interface OpenClawPluginApi {
  *
  * Example openclaw user-code:
  *
- *   import { activate } from "@openclaw/plugin-aegis";
+ *   import { activate } from "@happyikas/openclaw-plugin-aegis";
  *   activate(api);
  */
 export function activate(api: OpenClawPluginApi): void {

@@ -1,5 +1,5 @@
 {
-  "name": "@openclaw/plugin-aegis",
+  "name": "@happyikas/openclaw-plugin-aegis",
   "version": "0.2.0-preview.2",
   "description": "OpenClaw plugin that runs every tool call through Aegis ATV's 16-step firewall + cryptographic audit chain. Multi-channel attribution + provider drift detection (preview).",
   "type": "module",
