@@ -5,20 +5,26 @@
 
 OpenClaw plugin that runs every tool call through [Aegis ATV](https://github.com/happyikas/Aegis-ATV)'s 16-step firewall + cryptographic audit chain. Maps Aegis verdicts (`ALLOW` / `REQUIRE_APPROVAL` / `BLOCK`) to OpenClaw's `before_tool_call` return contract, plus param-rewrite for automatic redaction.
 
-> **Status**: Preview (`0.2.0-preview.1`). TypeScript handler + Aegis HTTP client + multi-channel + multi-provider attribution are implemented and unit-tested with mocked responses. End-to-end integration with a running OpenClaw runtime + Aegis sidecar lifts the preview suffix in the next release.
+> **Status**: Preview (`0.2.0-preview.2`). TypeScript handler + Aegis HTTP client + multi-channel + multi-provider attribution are implemented and unit-tested with mocked responses (31 vitest cases). End-to-end integration with a running OpenClaw runtime + Aegis sidecar lifts the preview suffix in the next release.
 
 ## Compatibility
 
 | Plugin version | Aegis sidecar | Notes |
 |----------------|---------------|-------|
-| `0.2.0-preview.1` (this) | `aegis-mvp >= 0.2.0` | POSTs to `/evaluate/openclaw` route; multi-channel + multi-provider attribution |
+| `0.2.0-preview.2` (this) | `aegis-mvp >= 0.2.0` | POSTs to `/evaluate/openclaw` route; multi-channel + multi-provider attribution; pre-publish blocker fixes (manifest version sync, manifest doc accuracy, `prepublishOnly` runs tests, sidecar version-mismatch hint, 12 entry-point tests) |
 
 The plugin's `apiVersion: 1` field in `openclaw.plugin.json` tracks the OpenClaw plugin SDK contract — independent of this package version.
 
 ## Install
 
+This package is currently published under the `preview` npm tag — `npm install @openclaw/plugin-aegis` will not resolve until the first GA release. Use the tag explicitly:
+
 ```bash
-npm install @openclaw/plugin-aegis
+# Latest preview:
+npm install @openclaw/plugin-aegis@preview
+
+# Pin to an exact pre-release version:
+npm install @openclaw/plugin-aegis@0.2.0-preview.2
 ```
 
 You also need the Aegis sidecar service running at `http://localhost:8000` (default). To start it:
@@ -32,29 +38,94 @@ git clone https://github.com/happyikas/Aegis-ATV.git && cd Aegis-ATV
 docker compose up -d
 ```
 
-## Usage
+## Usage — first 30 seconds
+
+A typical OpenClaw plugin lives at `<your-project>/plugins/aegis/` with at least three files:
+
+```
+my-openclaw-bot/
+├── plugins/
+│   └── aegis/
+│       ├── index.ts                  ← entry point (calls activate)
+│       ├── openclaw.plugin.json      ← per-install config
+│       └── package.json              ← declares dependency on this package
+└── ...
+```
+
+**`plugins/aegis/index.ts`** — the entry point OpenClaw loads:
 
 ```ts
 import { activate } from "@openclaw/plugin-aegis";
+import type { OpenClawPluginApi } from "@openclaw/plugin-aegis";
 
-// In your OpenClaw plugin entry point — OpenClaw passes the `api`:
-export default function (api) {
+// OpenClaw calls this default export when activating the plugin.
+export default function (api: OpenClawPluginApi) {
   activate(api);
 }
 ```
 
-That's it. Every `before_tool_call` event now flows through Aegis.
+**`plugins/aegis/openclaw.plugin.json`** — overrides for this install (all fields optional, defaults shown):
 
-### Configuration
+```json
+{
+  "apiVersion": 1,
+  "name": "aegis",
+  "configuration": {
+    "aegisUrl":   "http://localhost:8000",
+    "tenantId":   "my-bot-prod",
+    "timeoutMs":  1500,
+    "failClosed": false
+  }
+}
+```
 
-Per-install overrides via `openclaw.plugin.json`:
+**`plugins/aegis/package.json`** — pins the plugin version:
+
+```json
+{
+  "name": "my-openclaw-bot-aegis-plugin",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@openclaw/plugin-aegis": "^0.2.0-preview"
+  }
+}
+```
+
+That's it. Every `before_tool_call` event in your OpenClaw bot now flows through Aegis.
+
+### What happens at runtime
+
+For a tool call OpenClaw is about to execute:
+
+1. OpenClaw fires `before_tool_call` with `{ tool, params, channel?, provider?, sessionId? }`.
+2. Plugin POSTs an `OpenClawEvaluateRequest` to `<aegisUrl>/evaluate/openclaw`.
+3. Aegis sidecar runs the 16-step firewall + signs the audit record.
+4. Sidecar returns `{ decision: "ALLOW" | "REQUIRE_APPROVAL" | "BLOCK", reason, trace_id, ... }`.
+5. Plugin maps the decision to OpenClaw's return contract:
+   - `ALLOW` (no rewrite) → `undefined` (continue)
+   - `ALLOW` + `sanitized_input` → `{ params: <sanitized> }` (auto-redaction)
+   - `REQUIRE_APPROVAL` → `{ requireApproval: { title, description, severity, timeoutMs, timeoutBehavior } }`
+   - `BLOCK` → `{ block: true, blockReason }`
+
+### Logs you'll see
+
+* On a clean ALLOW: nothing (plugin is silent in the happy path).
+* On a sidecar error with `failClosed: false` (default): one stderr line, e.g.
+  ```
+  [aegis] sidecar error: Aegis /evaluate timed out after 1500ms — continuing (fail-open)
+  ```
+* On a sidecar error with `failClosed: true`: same warning + tool call BLOCKed.
+* On a 404 (sidecar too old): the error message includes a hint to upgrade.
+
+### Configuration reference
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `aegisUrl` | `http://localhost:8000` | Aegis sidecar URL |
-| `tenantId` | `"default"` | Stamped on every audit record (use distinct tenants per channel/team) |
-| `timeoutMs` | `1500` | Sidecar evaluation timeout |
-| `failClosed` | `false` | When true, sidecar errors BLOCK the call. Recommended for regulated industries. |
+| `aegisUrl` | `http://localhost:8000` | Aegis sidecar URL. Use a per-tenant URL when running multiple isolated sidecars. |
+| `tenantId` | `"default"` | Stamped on every audit record (use distinct tenants per channel/team for cleaner `aegis report --by-aid`). |
+| `timeoutMs` | `1500` | AbortController timeout. Independent of fail-open vs fail-closed (which is set by `failClosed`). |
+| `failClosed` | `false` | When `true`, sidecar errors return BLOCK instead of fail-open ALLOW. Recommended for regulated industries. |
 
 ## Verdict mapping
 
@@ -100,7 +171,7 @@ OpenClaw return contract (block/requireApproval/params)
 ## Honest limitations
 
 - **No end-to-end test against real OpenClaw runtime yet** — handler is mock-tested with `vi.fn()` fetch.
-- **No npm publish** — package version is `0.1.0-preview.1`, not yet published.
+- **First npm publish in progress** — published as `0.2.0-preview.2` (the `-preview.N` suffix marks "no E2E test against a running OpenClaw runtime yet"; lifts in the next minor release).
 - **Schema sync** — Aegis Python `EvaluateRequest` / `EvaluateResponse` are mirrored in `src/types.ts` by hand; future work: codegen from Pydantic models.
 - **No streaming verdicts** — single-shot per tool call. Streaming is a future Aegis API addition.
 

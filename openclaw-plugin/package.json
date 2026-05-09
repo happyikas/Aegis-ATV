@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/plugin-aegis",
-  "version": "0.2.0-preview.1",
+  "version": "0.2.0-preview.2",
   "description": "OpenClaw plugin that runs every tool call through Aegis ATV's 16-step firewall + cryptographic audit chain. Multi-channel attribution + provider drift detection (preview).",
   "type": "module",
   "main": "dist/index.js",
@@ -26,7 +26,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run lint && npm test && npm run build"
   },
   "keywords": [
     "openclaw",

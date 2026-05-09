@@ -11,9 +11,54 @@ This project adheres to [Semantic Versioning](https://semver.org/),
 with the **`-preview.N`** suffix marking releases that lack an
 end-to-end integration test against a running OpenClaw runtime.
 
-## [0.2.0-preview.1] — 2026-05-09
+## [0.2.0-preview.2] — 2026-05-09
 
-First public preview release on npm.
+Pre-publish completeness review (`PUBLISH_OPENCLAW_PLUGIN.md`)
+identified three blocker-class issues in the `0.2.0-preview.1`
+release-prep PR. This patch release fixes them before the package
+ever hits npm — `0.2.0-preview.1` is therefore *also* never
+published, only present in repo git history.
+
+### Fixed
+
+* **`openclaw.plugin.json` version drift** — manifest still said
+  `0.1.0-preview.1` while `package.json` was at `0.2.0-preview.1`.
+  Now both at `0.2.0-preview.2` and stay in sync.
+* **`timeoutMs` description was wrong** — said "set to 0 to fail-
+  closed instead", but the actual fail-closed control is the
+  separate `failClosed` boolean. Setting `timeoutMs: 0` would
+  silently fail-OPEN (the opposite of what the doc claimed). The
+  manifest description now accurately separates the timeout value
+  from the post-error policy.
+* **`prepublishOnly` only ran the build, not the tests** — could
+  publish a tarball with a green build but red tests. Now runs
+  `npm run lint && npm test && npm run build`.
+
+### Added
+
+* **Sidecar version-mismatch hint** — when the Aegis sidecar
+  returns 404 on `/evaluate/openclaw`, `AegisSidecarError` now
+  surfaces "sidecar may be too old; @openclaw/plugin-aegis >= 0.2.0
+  requires aegis-mvp >= 0.2.0". Replaces silent fail-open against
+  v0.1.0 sidecars (the wrong default for a security plugin).
+* **`activate()` entry-point tests** (12 new vitest cases) —
+  registration with the right event name, optional-chained
+  `api.config?.()`, DEFAULT_CONFIG / user-config merge, default
+  export shape, public re-export surface. Existing 19 tests for
+  the verdict mapping kept green.
+
+### Documentation
+
+* **README usage section expanded** — concrete first-30-seconds
+  example showing where the plugin entry goes in an OpenClaw
+  project, what `openclaw.plugin.json` looks like in user code,
+  config override syntax, expected logs.
+
+## [0.2.0-preview.1] — 2026-05-09 (never published)
+
+Initially the planned npm release; superseded by `0.2.0-preview.2`
+during pre-publish review (see entry above). All `0.2.0-preview.1`
+features carried forward.
 
 ### Added
 
