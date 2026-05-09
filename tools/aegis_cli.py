@@ -1659,6 +1659,7 @@ def cmd_baseline(args: argparse.Namespace) -> int:
       the next PreToolUse picks up the new manifest.
     """
     from aegis.instruction_baseline import (
+        DEFAULT_MODEL_WEIGHT_PATTERNS,
         diff_baseline,
         load_baseline,
         snapshot,
@@ -1670,6 +1671,16 @@ def cmd_baseline(args: argparse.Namespace) -> int:
         Path(args.baseline) if args.baseline else _default_baseline_path()
     )
 
+    # PR-E (Local OSS LLM track) — resolve which model-weight pattern
+    # set to use. None disables; explicit list overrides default.
+    weight_patterns: tuple[str, ...] | None
+    if getattr(args, "model_weight_paths", None):
+        weight_patterns = tuple(args.model_weight_paths)
+    elif getattr(args, "include_model_weights", False):
+        weight_patterns = DEFAULT_MODEL_WEIGHT_PATTERNS
+    else:
+        weight_patterns = None
+
     if args.action == "init":
         if baseline_path.exists() and not args.force:
             print(
@@ -1679,13 +1690,17 @@ def cmd_baseline(args: argparse.Namespace) -> int:
                 )
             )
             return 1
-        bl = snapshot(root)
+        bl = snapshot(root, model_weight_patterns=weight_patterns)
         write_baseline(bl, baseline_path)
         print(_green(f"\u2713 instruction baseline written → {baseline_path}"))
         print(f"  root:  {root}")
         print(f"  files: {len(bl.files)} tracked")
         for rel in sorted(bl.files):
             print(f"    {bl.files[rel][:12]}…  {rel}")
+        if bl.model_weights:
+            print(f"  model weights: {len(bl.model_weights)} tracked")
+            for rel in sorted(bl.model_weights):
+                print(f"    {bl.model_weights[rel][:12]}…  {rel}")
         print()
         print(
             f"Set AEGIS_INSTRUCTION_BASELINE_PATH={baseline_path} in your env "
@@ -1705,8 +1720,37 @@ def cmd_baseline(args: argparse.Namespace) -> int:
         bl = load_baseline(baseline_path)
         report = diff_baseline(bl, root)
         if report.is_clean:
-            print(_green(f"\u2713 baseline intact ({len(bl.files)} files tracked)"))
+            n_files = len(bl.files)
+            n_weights = len(bl.model_weights)
+            extra = (
+                f" + {n_weights} model weights" if n_weights else ""
+            )
+            print(_green(
+                f"\u2713 baseline intact ({n_files} files tracked{extra})"
+            ))
             return 0
+        # PR-E \u2014 surface model-weight drift first (higher severity).
+        if report.has_model_drift:
+            print(_red(
+                f"\u2717 model-weight drift detected: {report.summary()}"
+            ))
+            for rel in report.added_weights:
+                print(f"  + {rel}  (NEW model file)")
+            for rel in report.removed_weights:
+                print(f"  - {rel}  (REMOVED model file)")
+            for rel, old, new in report.modified_weights:
+                print(f"  ~ {rel}  (MODEL WEIGHT CHANGED)")
+                print(f"      was: {old[:16]}\u2026")
+                print(f"      now: {new[:16]}\u2026")
+            print()
+        if not report.has_instruction_drift:
+            print(
+                "Until reviewed, every PreToolUse is BLOCKed by step309. "
+                "If the change is intentional, run `aegis baseline reattest"
+                "` (add `--include-model-weights` to also re-attest model "
+                "artifacts)."
+            )
+            return 1
         print(_red(f"\u2717 instruction drift detected: {report.summary()}"))
         for rel in report.added:
             print(f"  + {rel}  (NEW)")
@@ -1719,18 +1763,25 @@ def cmd_baseline(args: argparse.Namespace) -> int:
         print()
         print(
             "Until reviewed, every PreToolUse is BLOCKed by step309. "
-            "If the change is intentional, run `aegis baseline reattest`."
+            "If the change is intentional, run `aegis baseline reattest"
+            "` (add `--include-model-weights` to also re-attest model "
+            "artifacts)."
         )
         return 1
 
     if args.action == "reattest":
-        bl = snapshot(root)
+        bl = snapshot(root, model_weight_patterns=weight_patterns)
         write_baseline(bl, baseline_path)
         from aegis.firewall.step309_instruction_drift import reset_baseline_cache
 
         reset_baseline_cache()
+        # PR-E \u2014 re-attest also picks up model-weight changes when
+        # weight_patterns is non-None (i.e., user passed
+        # --include-model-weights).
         print(_green(f"\u2713 baseline re-attested → {baseline_path}"))
         print(f"  files: {len(bl.files)} tracked")
+        if bl.model_weights:
+            print(f"  model weights: {len(bl.model_weights)} tracked")
         return 0
 
     return 2
@@ -5537,6 +5588,31 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="(init) overwrite existing baseline manifest",
+    )
+    bl.add_argument(
+        "--include-model-weights",
+        action="store_true",
+        help=(
+            "PR-E (OpenClaw + Local OSS LLM track) — also baseline "
+            "self-hosted LLM weight files (GGUF / safetensors / etc.) "
+            "under common locations (models/*.gguf, models/*.safetensors). "
+            "Step309 then BLOCKs every PreToolUse if any model file's "
+            "SHA3 changes — catches supply-chain tampering AND silent "
+            "quantization swaps. Use with `init` to capture, with "
+            "`reattest` to update after a deliberate model upgrade."
+        ),
+    )
+    bl.add_argument(
+        "--model-weight-paths",
+        nargs="+",
+        default=None,
+        help=(
+            "PR-E — explicit list of glob patterns to baseline as "
+            "model weights. Overrides --include-model-weights default "
+            "patterns. Use for non-standard model layouts, e.g.: "
+            "--model-weight-paths "
+            "/opt/llama/*.gguf vendor/safetensors/*.bin"
+        ),
     )
     bl.set_defaults(fn=cmd_baseline)
 

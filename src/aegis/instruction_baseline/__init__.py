@@ -34,6 +34,7 @@ from __future__ import annotations
 
 from aegis.instruction_baseline.manifest import (
     DEFAULT_INSTRUCTION_PATHS,
+    DEFAULT_MODEL_WEIGHT_PATTERNS,
     DriftReport,
     InstructionBaseline,
     diff_baseline,
@@ -45,6 +46,7 @@ from aegis.instruction_baseline.manifest import (
 
 __all__ = [
     "DEFAULT_INSTRUCTION_PATHS",
+    "DEFAULT_MODEL_WEIGHT_PATTERNS",
     "DriftReport",
     "InstructionBaseline",
     "diff_baseline",

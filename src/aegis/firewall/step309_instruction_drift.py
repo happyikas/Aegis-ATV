@@ -86,8 +86,38 @@ def run(
         "added": report.added,
         "removed": report.removed,
         "modified": [m[0] for m in report.modified],
+        # PR-E — surface model-weight drift separately so forensic
+        # tooling and `aegis report --explain` can render the higher-
+        # severity category distinctly.
+        "added_weights": report.added_weights,
+        "removed_weights": report.removed_weights,
+        "modified_weights": [m[0] for m in report.modified_weights],
     }
     summary = report.summary()
+
+    # PR-E — model-weight drift is a higher-severity signal (true
+    # supply-chain attack vector for self-hosted LLM deployments) so
+    # we promote it to its own reason category rather than burying it
+    # in the generic "instruction_drift" bucket. Severity ordering is
+    # preserved when both categories drift simultaneously: model
+    # weights take precedence in the reason string.
+    if report.has_model_drift:
+        weight_files: list[str] = []
+        weight_files.extend(report.added_weights)
+        weight_files.extend(report.removed_weights)
+        weight_files.extend(m[0] for m in report.modified_weights)
+        head = ", ".join(weight_files[:3])
+        tail = "…" if len(weight_files) > 3 else ""
+        return StepResult(
+            verdict="BLOCK",
+            reason=(
+                f"model_weight_drift: {summary} ({head}{tail}) — "
+                "run `aegis baseline reattest --include-model-weights` "
+                "if this is a deliberate model upgrade"
+            ),
+            trace=f"step309: model weight drift — {summary}",
+        )
+
     drift_files: list[str] = []
     drift_files.extend(report.added)
     drift_files.extend(report.removed)
