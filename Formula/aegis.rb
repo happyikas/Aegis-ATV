@@ -32,17 +32,41 @@ class Aegis < Formula
     # Claude Code tool call, so a stripped entrypoint is not enough.
     libexec.install Dir["*"]
 
-    # Pre-resolve and lock dependencies inside the cellar.
+    # Pre-resolve and lock dependencies inside the cellar. hatchling
+    # validates pyproject.toml's `readme = "README.md"` against the
+    # project root during editable builds — this works *now* because
+    # README.md / LICENSE / NOTICE were just installed alongside
+    # pyproject.toml. (Homebrew strips them out *after* this method
+    # returns; see `post_install` for the restoration that keeps
+    # later builds working.)
     cd libexec do
       system Formula["uv"].opt_bin/"uv", "sync", "--frozen", "--no-dev"
     end
 
-    # Tiny shim that forwards `aegis` to the uv-managed venv.
+    # Direct venv shim — bypasses `uv run` (which would re-sync the
+    # project on every invocation, including pulling dev deps and
+    # rebuilding the editable wheel). The .venv was already populated
+    # above; pointing the shim at the entry script is faster and side-
+    # steps the metafile-validation problem entirely.
     (bin/"aegis").write <<~SHIM
       #!/usr/bin/env bash
-      exec "#{Formula["uv"].opt_bin}/uv" run --project "#{libexec}" aegis "$@"
+      exec "#{libexec}/.venv/bin/aegis" "$@"
     SHIM
     chmod 0755, bin/"aegis"
+  end
+
+  def post_install
+    # Homebrew auto-extracts README.md / LICENSE / NOTICE / CHANGELOG.md
+    # from the install destination to prefix/ as "metafiles" between
+    # `def install` returning and `def post_install` running. Anything
+    # in the source tree that imports the project (e.g., `uv pip install
+    # -e libexec` from a user's own venv, the firewall hook reading
+    # `pyproject.toml`, or a future `uv sync` for a profile upgrade)
+    # will fail without these files. Mirror them back into libexec so
+    # the source tree remains self-consistent.
+    %w[README.md LICENSE NOTICE CHANGELOG.md].each do |meta|
+      cp(prefix/meta, libexec/meta) if (prefix/meta).exist?
+    end
   end
 
   def caveats
