@@ -2106,6 +2106,18 @@ def cmd_report(args: argparse.Namespace) -> int:
             as_json=bool(getattr(args, "json", False)),
         )
 
+    # ── Multi-agent + multi-LLM cross-grouping (Gap A) ───────────────
+    # When the user passes BOTH --by-aid and --by-provider, OR the
+    # explicit --by-aid-and-provider flag, route to the cross-table
+    # view. This check runs BEFORE the single-dimension routes below,
+    # so combined flags don't fall through.
+    by_aid_and_provider = getattr(args, "by_aid_and_provider", False) or (
+        getattr(args, "by_aid", False)
+        and getattr(args, "by_provider", False)
+    )
+    if by_aid_and_provider:
+        return _cmd_report_by_aid_and_provider(audit_path, since_secs)
+
     # ── PR-C: --by-aid multi-agent breakdown ─────────────────────────
     if getattr(args, "by_aid", False):
         return _cmd_report_by_aid(audit_path, since_secs)
@@ -2550,6 +2562,194 @@ def _cmd_report_by_provider(
     if drift_lines:
         print(_yellow("⚠ Provider-divergence advisor:"))
         for line in drift_lines:
+            print(f"  {line}")
+        print()
+
+    print(f"  🧾  Full signed local audit: {audit_path}")
+    return 0
+
+
+def _cmd_report_by_aid_and_provider(
+    audit_path: Path, since_secs: int | None,
+) -> int:
+    """`aegis report --by-aid-and-provider` — multi-agent + multi-LLM
+    cross-grouping (Gap A).
+
+    For each aid, prints a sub-block per provider it used. The single-
+    dimension --by-aid view collapses across providers; this view
+    keeps the dimensions separate, so you can see "Agent A's BLOCK
+    rate on Claude vs Agent A's BLOCK rate on GPT" at a glance.
+
+    Surfaces a *per-agent* provider-drift banner when an aid's BLOCK
+    rate diverges by ≥3× across the providers it has used (similar
+    to the global ``_compute_provider_drift`` advisor, but scoped to
+    a single aid). This is the multi-LLM-per-multi-agent canary —
+    flags the case where one agent's safety profile shifted after
+    a vendor migration.
+
+    Records without aid bucket under '(no-aid)'; without provider
+    under '(no-provider)'. The bucket pair '(no-aid)' × '(no-
+    provider)' is collapsed to a single row.
+    """
+    cutoff_ns = (
+        int(time.time() - since_secs) * 1_000_000_000 if since_secs else 0
+    )
+
+    # (aid, provider) → counter dict
+    by_pair: dict[tuple[str, str], dict[str, int]] = {}
+    n_total = 0
+
+    with audit_path.open(encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            fields = _extract_audit_fields(rec)
+            ts = int(fields["ts_ns"])  # type: ignore[arg-type]
+            if cutoff_ns and ts and ts < cutoff_ns:
+                continue
+            decision = str(fields["decision"])
+            reason = str(fields["reason"])
+            aid = str(fields.get("aid", "")) or "(no-aid)"
+            provider = str(fields.get("provider", "")) or "(no-provider)"
+            n_total += 1
+
+            counters = by_pair.setdefault((aid, provider), {
+                "n_total": 0,
+                "n_safe": 0,
+                "n_approval": 0,
+                "n_block_destructive": 0,
+                "n_block_poisoned": 0,
+                "n_loop_aborted": 0,
+                "n_redundant": 0,
+            })
+            counters["n_total"] += 1
+
+            if decision == "ALLOW":
+                counters["n_safe"] += 1
+                if "redundant" in reason:
+                    counters["n_redundant"] += 1
+            elif decision == "REQUIRE_APPROVAL":
+                counters["n_approval"] += 1
+                if "loop" in reason or "step336" in reason:
+                    counters["n_loop_aborted"] += 1
+            elif decision == "BLOCK":
+                if "instruction_drift" in reason or "poisoned" in reason:
+                    counters["n_block_poisoned"] += 1
+                else:
+                    counters["n_block_destructive"] += 1
+
+    print("AegisData Agent Risk Report — by aid × provider")
+    print("================================================")
+    if since_secs:
+        print(f"  window:    last {since_secs // 60} min")
+    n_aids = len({aid for aid, _ in by_pair})
+    n_providers = len({p for _, p in by_pair})
+    print(
+        f"  audit log: {audit_path}  ({n_total} entries, "
+        f"{n_aids} aids × {n_providers} providers, "
+        f"{len(by_pair)} pairs)"
+    )
+    print()
+
+    if not by_pair:
+        print(_yellow("  no records in window"))
+        return 0
+
+    # Group by aid, with providers nested under each aid.
+    aids_to_providers: dict[str, list[tuple[str, dict[str, int]]]] = {}
+    for (aid, provider), counters in by_pair.items():
+        aids_to_providers.setdefault(aid, []).append((provider, counters))
+
+    # Per-aid severity weighting (sum across all providers used).
+    def _aid_severity(providers: list[tuple[str, dict[str, int]]]) -> int:
+        total = 0
+        for _, c in providers:
+            total += (
+                c["n_block_destructive"] * 100
+                + c["n_block_poisoned"] * 100
+                + c["n_approval"] * 10
+                + c["n_total"]
+            )
+        return total
+
+    sorted_aids = sorted(
+        aids_to_providers.items(),
+        key=lambda kv: -_aid_severity(kv[1]),
+    )
+
+    # Track per-aid drift advisor lines for the bottom banner.
+    drift_alerts: list[str] = []
+
+    for aid, providers in sorted_aids:
+        # Sort providers within the aid by call count desc.
+        providers_sorted = sorted(
+            providers, key=lambda kv: -kv[1]["n_total"],
+        )
+        aid_total = sum(c["n_total"] for _, c in providers_sorted)
+        n_provs = len(providers_sorted)
+        prov_label = "provider" if n_provs == 1 else "providers"
+        print(f"  ── {aid}  ({aid_total} calls across {n_provs} {prov_label})")
+        for provider, c in providers_sorted:
+            block_rate = (
+                (c["n_block_destructive"] + c["n_block_poisoned"])
+                / max(1, c["n_total"]) * 100
+            )
+            print(
+                f"     • {provider:<30} {c['n_total']:>4} calls  "
+                f"BLOCK {block_rate:>5.1f}%  "
+                f"(✅{c['n_safe']:>3} ⚠️{c['n_approval']:>3} "
+                f"⛔{c['n_block_destructive'] + c['n_block_poisoned']:>3})"
+            )
+
+        # Per-aid drift detection — only when this aid used ≥2 real
+        # providers (excluding (no-provider)) with enough samples.
+        real_providers = [
+            (p, c) for p, c in providers_sorted
+            if p != "(no-provider)" and c["n_total"] >= 5
+        ]
+        if len(real_providers) >= 2:
+            rates = [
+                (p, (c["n_block_destructive"] + c["n_block_poisoned"])
+                 / max(1, c["n_total"]))
+                for p, c in real_providers
+            ]
+            nonzero = [r for _, r in rates if r > 0]
+            if nonzero:
+                max_rate = max(rates, key=lambda kv: kv[1])
+                min_rate = min(rates, key=lambda kv: kv[1])
+                if min_rate[1] > 0:
+                    ratio = max_rate[1] / min_rate[1]
+                    if ratio >= 3.0:
+                        drift_alerts.append(
+                            f"{aid}: {max_rate[0]} BLOCKs at "
+                            f"{max_rate[1] * 100:.1f}% vs {min_rate[0]} "
+                            f"at {min_rate[1] * 100:.1f}% — "
+                            f"{ratio:.1f}× divergence"
+                        )
+                else:
+                    # One provider has 0% BLOCK while others don't —
+                    # the zero-block one is the suspicious side
+                    # (peers BLOCK, this one doesn't).
+                    suspect = min_rate[0]
+                    drift_alerts.append(
+                        f"{aid}: {suspect} BLOCKs at 0.0% while peer "
+                        f"providers BLOCK at up to "
+                        f"{max_rate[1] * 100:.1f}% — investigate"
+                    )
+        print()
+
+    if drift_alerts:
+        print(_yellow(
+            "⚠ Per-agent provider-divergence advisor "
+            "(safety profile shift after vendor migration):"
+        ))
+        for line in drift_alerts:
             print(f"  {line}")
         print()
 
@@ -6098,6 +6298,20 @@ def build_parser() -> argparse.ArgumentParser:
             "agent's verdict distribution diverges across providers, "
             "the provider-divergence advisor flags the gap as a "
             "vendor-switch risk signal."
+        ),
+    )
+    rep.add_argument(
+        "--by-aid-and-provider",
+        action="store_true",
+        help=(
+            "Multi-agent + multi-LLM cross-grouping (Gap A): for each "
+            "aid, print a sub-block per provider it used. Surfaces "
+            "per-agent provider drift (e.g., 'Agent A was high-block "
+            "rate on Claude but dropped sharply after migrating to "
+            "GPT — investigate'). Useful for OpenClaw deployments "
+            "where multiple agents each pick their own LLM (some "
+            "local, some cloud). Also activated implicitly when both "
+            "--by-aid and --by-provider are passed together."
         ),
     )
     rep.set_defaults(fn=cmd_report)
