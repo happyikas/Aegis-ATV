@@ -11,7 +11,14 @@ This project adheres to [Semantic Versioning](https://semver.org/),
 with the **`-preview.N`** suffix marking releases that lack an
 end-to-end integration test against a running OpenClaw runtime.
 
-## [0.2.0-preview.2] — 2026-05-09
+## [0.2.0-preview.2] — 2026-05-09 — published
+
+**Live on npm**:
+<https://www.npmjs.com/package/@happyikas/openclaw-plugin-aegis>
+
+```bash
+npm install @happyikas/openclaw-plugin-aegis@preview
+```
 
 > **npm scope** — published as `@happyikas/openclaw-plugin-aegis`
 > on npm. Earlier git history shows the planned name as
@@ -21,6 +28,17 @@ end-to-end integration test against a running OpenClaw runtime.
 > maintainer's own `@happyikas` scope. If/when OpenClaw publishes
 > their own `@openclaw` npm org, the package republishes there
 > with a redirect note in this CHANGELOG.
+
+> **Deprecation note on `latest`** — npm's first-publish behaviour
+> auto-applied the `latest` dist-tag to `0.2.0-preview.2` alongside
+> the intended `preview` tag (npm requires every published package
+> to have a `latest`, and there's only one version yet). To prevent
+> users from silently installing the prerelease via the unsuffixed
+> `npm install @happyikas/openclaw-plugin-aegis`, the version is
+> annotated via `npm deprecate` with: *"Preview release. Use
+> @preview tag explicitly."* The deprecation will lift on the
+> first GA release (e.g. `0.3.0`) which will become the new
+> `latest`.
 
 Pre-publish completeness review (`PUBLISH_OPENCLAW_PLUGIN.md`)
 identified three blocker-class issues in the `0.2.0-preview.1`
