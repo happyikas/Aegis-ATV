@@ -2131,9 +2131,8 @@ def test_install_target_invalid_choice_rejected() -> None:
     import io
 
     parser = aegis_cli.build_parser()
-    with contextlib.redirect_stderr(io.StringIO()):
-        with pytest.raises(SystemExit):
-            parser.parse_args(["install", "--target", "nonsense-track"])
+    with contextlib.redirect_stderr(io.StringIO()), pytest.raises(SystemExit):
+        parser.parse_args(["install", "--target", "nonsense-track"])
 
 
 def test_install_openclaw_local_stub_returns_zero(
