@@ -374,6 +374,13 @@ See [`tools/README.md`](tools/README.md) for install + tool mapping.
 | [`SHOW_HN.md`](SHOW_HN.md) | Hacker News submission copy + comment-thread playbook |
 | [`TWITTER_THREAD.md`](TWITTER_THREAD.md) | Three X/Twitter thread variants with timing + hashtag guidance |
 
+### Pricing & business model
+
+| Doc | What's in it |
+|---|---|
+| [`PRICING.md`](PRICING.md) | **★ Pricing & tiers** — Solo Free (free forever), Solo Pro $19/mo, Team $39/seat/mo, Enterprise custom. Free / paid boundary, what's never gated, FAQ |
+| [`docs/LICENSE_KEY.md`](docs/LICENSE_KEY.md) | License-key validation design — Ed25519 JWS, offline verification, revocation strategy, feature manifest, CLI surface |
+
 ### Enterprise sales / design partner
 
 | Doc | What's in it |

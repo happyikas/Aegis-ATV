@@ -126,7 +126,8 @@ A. 네. 한국 법인 + 한국어 자료 1070 줄 manual 보유. 글로벌 custo
 시 미국 법인 설립 가능.
 
 **Q. 결제 통화 / 가격은?**
-A. Pilot 무료. Paid 전환 시 \$30K (50 dev) ~ \$200K (1000+ dev) annual.
+A. Pilot 무료. Paid 전환 시 \$30K (50 dev) ~ \$200K (1000+ dev) annual
+(Team / Enterprise tier — 자세한 tier 별 단가 + 무엇이 무료인지: [`PRICING.md`](../PRICING.md)).
 Pilot 첫 customer 는 50 % discount.
 
 ---
