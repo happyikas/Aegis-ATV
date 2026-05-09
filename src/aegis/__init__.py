@@ -1,3 +1,3 @@
-"""AegisData T2 MVP — 2080-D ATV signing & audit sidecar."""
+"""Aegis ATV — Action Firewall + cryptographic audit chain for AI agents."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
