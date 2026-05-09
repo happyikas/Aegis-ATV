@@ -140,6 +140,45 @@ aegis session show --loop-detected --since 7d
 [🔧 Doctor](DOCTOR_MANUAL.ko.md) 의 `aegis forensic <trace>` 로 깊이 들여
 다볼 수 있습니다.
 
+### 4.3 vLLM 서버 측 KV cache + GPU 메트릭 (Local OSS LLM 트랙 한정)
+
+OpenClaw + Local OSS LLM 트랙에서 vLLM 서버를 사용하는 경우, **서버 측
+inference metrics 를 직접** 가져올 수 있습니다 — Cloud LLM 트랙에서는
+영원히 못 보는 영역입니다.
+
+```bash
+# 사람이 읽기 좋은 표
+aegis metrics --vllm-url http://localhost:8000
+
+# 출력 예시:
+# vLLM /metrics  ·  http://localhost:8000
+# ────────────────────────────────────────────
+#   KV cache          42.0%   [moderate]
+#   CPU swap cache     0.0%
+#   Queue            3 running  ·  1 waiting
+#
+#   prompt tokens         482,310  (avg 1170/req)
+#   output tokens          91,204  (avg 222/req)
+#
+#   TTFT  avg            68.9 ms
+#   TPOT  avg            46.6 ms
+# ────────────────────────────────────────────
+
+# fleet-monitor / jq 와 통합하려면
+aegis metrics --json
+```
+
+KV cache pressure band 기준:
+- `low` (<60%) — capacity 여유, throughput 최적
+- `moderate` (60–85%) — 정상
+- `high` (85–95%) — 여유 부족
+- `critical` (>95%) — eviction / thrashing 임박
+
+`critical` 또는 queue waiting > 8 면 `kv-cache-optimizer` advisor 가
+[🔧 Doctor](DOCTOR_MANUAL.ko.md) 의 `aegis advise` 출력에 자동 등장합니다.
+
+자세한 트랙별 가용성: [OPENCLAW_LOCAL.ko.md](../releases/OPENCLAW_LOCAL.ko.md).
+
 ---
 
 ## 5. Security — Verdict 분포·Drift·Advisor signal

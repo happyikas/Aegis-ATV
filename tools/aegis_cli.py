@@ -1009,6 +1009,88 @@ def cmd_health(_: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_metrics(args: argparse.Namespace) -> int:
+    """Scrape self-hosted inference server /metrics and pretty-print.
+
+    Currently supports vLLM (OpenClaw + Local OSS LLM track only).
+    Cloud LLM tracks have no equivalent — returns a friendly hint.
+    """
+    from dataclasses import asdict
+
+    from aegis.inference.vllm_metrics import (
+        VLLMMetricsError,
+        scrape_vllm_metrics,
+    )
+
+    try:
+        snap = scrape_vllm_metrics(
+            args.vllm_url,
+            timeout_s=float(args.timeout),
+        )
+    except VLLMMetricsError as e:
+        print(_red(f"[metrics] {e}"), file=sys.stderr)
+        print(file=sys.stderr)
+        print("  This command targets self-hosted inference servers", file=sys.stderr)
+        print("  (vLLM today; Ollama / TGI in follow-up PRs).", file=sys.stderr)
+        print(file=sys.stderr)
+        print("  If you're on the Claude Code or OpenClaw + Cloud LLM", file=sys.stderr)
+        print("  track, this metric surface is not exposed by the cloud", file=sys.stderr)
+        print("  provider — see docs/releases/OPENCLAW_LOCAL.ko.md §2.", file=sys.stderr)
+        return 1
+
+    if args.json:
+        # Stable, machine-readable shape for fleet-monitor / jq.
+        out = asdict(snap)
+        out["kv_cache_pressure_band"] = snap.kv_cache_pressure_band()
+        out["saturated"] = snap.saturated()
+        print(json.dumps(out, indent=2, sort_keys=True))
+        return 0
+
+    # Human-readable table (default).
+    band_color = {
+        "low": _green,
+        "moderate": _green,
+        "high": _yellow,
+        "critical": _red,
+    }[snap.kv_cache_pressure_band()]
+
+    print(f"vLLM /metrics  ·  {args.vllm_url}")
+    print("─" * 60)
+    print(
+        f"  KV cache         {snap.kv_cache_used_pct * 100:5.1f}%   "
+        f"{band_color(f'[{snap.kv_cache_pressure_band()}]')}"
+    )
+    print(f"  CPU swap cache   {snap.cpu_cache_used_pct * 100:5.1f}%")
+    print(
+        f"  Queue            {snap.requests_running} running"
+        f"  ·  {snap.requests_waiting} waiting"
+    )
+    print()
+    print(
+        f"  prompt tokens    {snap.prompt_tokens_total:>12,}  "
+        f"(avg {snap.avg_prompt_tokens_per_request:.0f}/req)"
+    )
+    print(
+        f"  output tokens    {snap.generation_tokens_total:>12,}  "
+        f"(avg {snap.avg_generation_tokens_per_request:.0f}/req)"
+    )
+    print()
+    print(f"  TTFT  avg        {snap.avg_ttft_seconds * 1000:7.1f} ms")
+    print(f"  TPOT  avg        {snap.avg_tpot_seconds * 1000:7.1f} ms")
+    if snap.spec_decode_efficiency is not None:
+        print()
+        print(
+            f"  spec-decode      "
+            f"{snap.spec_decode_efficiency * 100:5.1f}%  "
+            f"acceptance ({snap.spec_decode_accepted_total:,} / "
+            f"{snap.spec_decode_emitted_total:,})"
+        )
+    print("─" * 60)
+    if snap.saturated():
+        print(_red("  ⚠ inference server saturated — see kv-cache-optimizer advisor"))
+    return 0
+
+
 def cmd_rollback(args: argparse.Namespace) -> int:
     from aegis.rollback.snapshot import bulk_restore, restore
 
@@ -4828,6 +4910,39 @@ def build_parser() -> argparse.ArgumentParser:
         "health",
         help="🔧 ATV Doctor — Aegis self-health check (firewall hook, audit log, key, drift).",
     ).set_defaults(fn=cmd_health)
+
+    mt = sub.add_parser(
+        "metrics",
+        help=(
+            "📊 ATV Live (OpenClaw + Local OSS LLM track) — scrape "
+            "self-hosted inference server /metrics and print KV cache "
+            "/ throughput / queue-depth snapshot. "
+            "Currently supports vLLM; Ollama / TGI follow."
+        ),
+    )
+    mt.add_argument(
+        "--vllm-url",
+        default="http://localhost:8000",
+        help=(
+            "vLLM server base URL (default: http://localhost:8000). "
+            "/metrics is appended automatically."
+        ),
+    )
+    mt.add_argument(
+        "--timeout",
+        type=float,
+        default=2.0,
+        help="HTTP timeout in seconds (default: 2.0).",
+    )
+    mt.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "Emit a single JSON object instead of the human-readable "
+            "table. Useful for piping into jq / fleet-monitor."
+        ),
+    )
+    mt.set_defaults(fn=cmd_metrics)
 
     rb = sub.add_parser(
         "rollback",
