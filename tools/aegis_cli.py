@@ -2730,6 +2730,62 @@ def _cmd_install_rescue() -> int:
     return 0
 
 
+def _cmd_install_openclaw_stub(target: str) -> int:
+    """Print a friendly roadmap message for the two preview release
+    tracks (openclaw-local / openclaw-cloud) and exit cleanly.
+
+    The Claude Code track is the current GA release; the OpenClaw
+    tracks are documented in docs/releases/<TRACK>.ko.md but the
+    actual @openclaw/plugin-aegis TypeScript plugin lands in a
+    separate PR series (3-4 weeks). Until then this stub keeps the
+    --target flag wired up so users get the expected --help output
+    and a clear "what's coming" pointer instead of an installer that
+    silently does nothing or crashes.
+    """
+    track_meta = {
+        "openclaw-local": {
+            "label": "OpenClaw + Local OSS LLM",
+            "doc": "docs/releases/OPENCLAW_LOCAL.ko.md",
+            "eta": "2026 H2",
+            "headline": (
+                "air-gapped agentic AI with model-weight baseline + "
+                "logit-level forensic + GPU/KV-cache server metrics"
+            ),
+        },
+        "openclaw-cloud": {
+            "label": "OpenClaw + Cloud LLM API",
+            "doc": "docs/releases/OPENCLAW_CLOUD.ko.md",
+            "eta": "2026 H1",
+            "headline": (
+                "multi-channel agent ops (Telegram/Discord/Slack/Web) "
+                "with multi-provider drift detection"
+            ),
+        },
+    }
+    meta = track_meta[target]
+    print()
+    print(_yellow(f"  Aegis ATV — {meta['label']} (Preview)"))
+    print()
+    print(f"  Status:    Preview, GA expected {meta['eta']}")
+    print(f"  Headline:  {meta['headline']}")
+    print()
+    print("  This release track is documented but the underlying")
+    print(f"  @openclaw/plugin-aegis plugin is not yet shipping.")
+    print(f"  See {meta['doc']} for the preview spec, scope, and")
+    print(f"  per-feature roadmap.")
+    print()
+    print("  In the meantime, the same Aegis core (16-step firewall,")
+    print("  audit chain, Coach/Live/Doctor) is fully usable on the")
+    print("  Claude Code track:")
+    print()
+    print(_green("    aegis install --target claude-code --mode local"))
+    print()
+    print("  Subscribe to releases to get notified when this track GA's:")
+    print("    https://github.com/happyikas/Aegis-ATV/releases")
+    print()
+    return 0
+
+
 def cmd_install(args: argparse.Namespace) -> int:
     """Idempotently install Aegis hooks into ``~/.claude/settings.json``.
 
@@ -2763,6 +2819,14 @@ def cmd_install(args: argparse.Namespace) -> int:
     # AEGIS_APPROVE_AS_BLOCK=0, etc.). No-op if no backup exists.
     if getattr(args, "rescue", False):
         return _cmd_install_rescue()
+
+    # Three release tracks (claude-code / openclaw-local / openclaw-cloud).
+    # Only claude-code is GA right now — the OpenClaw tracks print a
+    # roadmap message and exit cleanly, pointing the user at
+    # docs/releases/<TRACK>.ko.md for the preview specification.
+    target = getattr(args, "target", "claude-code")
+    if target in ("openclaw-local", "openclaw-cloud"):
+        return _cmd_install_openclaw_stub(target)
 
     mode = args.mode
     profile = getattr(args, "profile", "free")
@@ -5323,6 +5387,23 @@ def build_parser() -> argparse.ArgumentParser:
     cl.set_defaults(fn=cmd_cache_lint)
 
     inst = sub.add_parser("install", help="Install hooks into ~/.claude/settings.json")
+    inst.add_argument(
+        "--target",
+        choices=["claude-code", "openclaw-local", "openclaw-cloud"],
+        default="claude-code",
+        help=(
+            "Release track to install. "
+            "claude-code (GA): patches ~/.claude/settings.json with the "
+            "Aegis PreToolUse hook + slash commands (current default). "
+            "openclaw-local (Preview): OpenClaw + self-hosted LLM "
+            "(vLLM/Ollama) for air-gapped operation. "
+            "openclaw-cloud (Preview): OpenClaw + cloud LLM (Anthropic/"
+            "OpenAI/Google) for multi-channel agent ops. "
+            "Preview tracks print a roadmap message — see "
+            "docs/releases/README.md for details. "
+            "default: claude-code"
+        ),
+    )
     inst.add_argument(
         "--mode",
         choices=["sidecar", "local"],

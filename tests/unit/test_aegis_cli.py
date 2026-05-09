@@ -2102,3 +2102,103 @@ def test_session_start_script_is_aegis_owned() -> None:
         fp in candidate
         for candidate in aegis_cli._AEGIS_HOOK_FINGERPRINTS
     )
+
+
+# ── Three release tracks (--target flag) ─────────────────────────────
+
+
+def test_install_target_arg_parses_three_choices() -> None:
+    """--target accepts only the 3 sanctioned release tracks. Default
+    is claude-code (current GA behaviour preserved)."""
+    parser = aegis_cli.build_parser()
+
+    args = parser.parse_args(["install"])
+    assert args.target == "claude-code"
+
+    args = parser.parse_args(["install", "--target", "claude-code"])
+    assert args.target == "claude-code"
+
+    args = parser.parse_args(["install", "--target", "openclaw-local"])
+    assert args.target == "openclaw-local"
+
+    args = parser.parse_args(["install", "--target", "openclaw-cloud"])
+    assert args.target == "openclaw-cloud"
+
+
+def test_install_target_invalid_choice_rejected() -> None:
+    """Argparse must reject unknown release-track names."""
+    import contextlib
+    import io
+
+    parser = aegis_cli.build_parser()
+    with contextlib.redirect_stderr(io.StringIO()):
+        with pytest.raises(SystemExit):
+            parser.parse_args(["install", "--target", "nonsense-track"])
+
+
+def test_install_openclaw_local_stub_returns_zero(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """openclaw-local is Preview — stub must exit 0 and print the
+    track label + roadmap pointer + fallback to claude-code."""
+    rc = aegis_cli._cmd_install_openclaw_stub("openclaw-local")
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "OpenClaw + Local OSS LLM" in captured.out
+    assert "Preview" in captured.out
+    assert "docs/releases/OPENCLAW_LOCAL.ko.md" in captured.out
+    # Falls back to recommending the GA track
+    assert "claude-code" in captured.out
+
+
+def test_install_openclaw_cloud_stub_returns_zero(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """openclaw-cloud is Preview — same stub behaviour as Local."""
+    rc = aegis_cli._cmd_install_openclaw_stub("openclaw-cloud")
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "OpenClaw + Cloud LLM API" in captured.out
+    assert "Preview" in captured.out
+    assert "docs/releases/OPENCLAW_CLOUD.ko.md" in captured.out
+
+
+def test_install_openclaw_target_routes_to_stub(
+    isolated_install: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`aegis install --target openclaw-local` must NOT touch
+    settings.json — it must short-circuit to the stub."""
+    import argparse
+    settings_path = isolated_install / ".claude" / "settings.json"
+    # Pre-condition: no settings.json yet
+    assert not settings_path.exists()
+
+    rc = aegis_cli.cmd_install(argparse.Namespace(
+        target="openclaw-local",
+        force=False, mode="local", judge=None, embedding=None,
+        rescue=False, profile="free", no_commands=False,
+    ))
+    assert rc == 0
+    # Stub must NOT have created settings.json — that would be an
+    # accidental Claude Code install under the Preview track.
+    assert not settings_path.exists()
+    captured = capsys.readouterr()
+    assert "Preview" in captured.out
+
+
+def test_install_default_target_is_claude_code(
+    isolated_install: Path,
+) -> None:
+    """When --target is omitted, the install must behave exactly as
+    before — i.e. patch settings.json (current GA Claude Code track).
+    This guards against breaking existing users on upgrade."""
+    import argparse
+    rc = aegis_cli.cmd_install(argparse.Namespace(
+        # No `target` attribute at all — getattr default kicks in
+        force=False, mode="local", judge=None, embedding=None,
+        rescue=False, profile="free", no_commands=False,
+    ))
+    assert rc == 0
+    assert (isolated_install / ".claude" / "settings.json").exists()

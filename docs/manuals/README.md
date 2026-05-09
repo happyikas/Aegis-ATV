@@ -91,6 +91,18 @@ aegis health                      # Aegis 자체 헬스
 
 ---
 
+## 어떤 릴리스 트랙 매뉴얼을 봐야 할까
+
+위 3개 기능 매뉴얼 (Coach / Live / Doctor) 은 **모든 릴리스 트랙에서 동일하게**
+적용됩니다. 자기 환경에 맞는 트랙은 별도 가이드:
+
+- [📋 docs/releases/](../releases/README.md) — 3개 트랙 1페이지 비교 + 결정 매트릭스
+  - 🟢 [Claude Code](../releases/CLAUDE_CODE.ko.md) (GA)
+  - 🟡 [OpenClaw + Cloud LLM API](../releases/OPENCLAW_CLOUD.ko.md) (Preview)
+  - 🟡 [OpenClaw + Local OSS LLM](../releases/OPENCLAW_LOCAL.ko.md) (Preview)
+
+---
+
 ## 영문 / 다른 언어
 
 이 디렉터리의 매뉴얼은 **한국어 정본** 입니다. 영문 / 다른 언어 매뉴얼은

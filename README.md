@@ -9,9 +9,21 @@
 
 > **Every Claude Code tool call gets a cryptographic audit line.** SHA3-chained, Ed25519-signed, on local disk only. Tamper-evident with one CLI command. Plus a 16-step ATV-2080-v1 firewall that BLOCKs / requires approval / ALLOWs before the tool runs. 0 cloud calls by default, ~5-minute install.
 
-## Three named features
+## Three release tracks
 
-Aegis ships as three named features built on the same firewall + audit chain:
+Aegis ATV ships in three release tracks. Pick the one that matches your environment:
+
+| Track | Status | Best for | Install |
+|-------|--------|----------|---------|
+| 🟢 **Claude Code** | **GA** (v0.1.0) | Solo developer using Claude Code daily | `aegis install --target claude-code` |
+| 🟡 **OpenClaw + Cloud LLM** | Preview | Multi-channel agent ops (Telegram/Discord/Slack), provider flexibility | `aegis install --target openclaw-cloud` |
+| 🟡 **OpenClaw + Local OSS LLM** | Preview | Air-gapped, data-residency-critical, regulated industries | `aegis install --target openclaw-local` |
+
+Detailed track docs (Korean): [`docs/releases/`](docs/releases/README.md) — 1-page decision matrix + per-track manual.
+
+## Three named features (work across all tracks)
+
+Aegis is packaged around three named features built on the same firewall + audit chain:
 
 | | What it does | Run |
 |---|---|---|
