@@ -785,6 +785,13 @@ def handle_pretool(stdin: Any, stdout: Any) -> int:
         "sidechain_tool_call_count": int(sb.get("sidechain_tool_call_count", 0.0)),
         "explain": explain_block,
     }
+    # PR-D OpenClaw multi-channel + provider attribution. Both fields
+    # are stamped only when non-empty so Claude Code (single-channel
+    # terminal, single-provider Anthropic) audit lines stay clean.
+    if inp.header.channel:
+        audit_record["channel"] = inp.header.channel
+    if inp.header.provider:
+        audit_record["provider"] = inp.header.provider
     _append_audit(audit_record)
 
     # Burn-in Shadow recording (opt-in via AEGIS_BURNIN_SHADOW=1).

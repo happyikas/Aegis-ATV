@@ -176,6 +176,19 @@ class ATVHeader(BaseModel):
     policy_id: str | None = None           # active firewall policy fingerprint
     attestation_key_id: str | None = None  # which Ed25519 key signed
 
+    # ── PR-D OpenClaw multi-channel attribution ─────────────────────
+    # Identifier of the *input channel* that triggered this tool call:
+    # "telegram", "discord", "slack", "cli", "web", or any custom string
+    # the OpenClaw plugin author chose. Empty for Claude Code (single-
+    # channel terminal). Audit record stamps this so `aegis report
+    # --by-channel` can group multi-channel agent ops.
+    channel: str | None = None
+    # LLM provider that produced the tool_use intent: "anthropic-claude-3-5",
+    # "openai-gpt-4o", "google-gemini-1.5", "local-llama-3.1-8b", etc.
+    # Coach 's provider-drift detector (roadmap #16) compares the same
+    # tool call across providers to surface RLHF / safety differences.
+    provider: str | None = None
+
     @model_validator(mode="after")
     def _fill_patent_aliases(self) -> ATVHeader:
         """Populate patent-aligned identifiers from legacy fields when

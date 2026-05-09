@@ -12,15 +12,23 @@ Stages, per patent v7.10 §5 + §5A:
     step 360  sign + append to audit   (M9)
     ATMU.transition → committed        (M10, after sign)
     step 370  exec-gate annotation     (M9)
+
+PR-D: ``POST /evaluate/openclaw`` — companion route accepting the
+flat schema that ``@openclaw/plugin-aegis`` posts. The plugin doesn't
+know Aegis's internal ATVInput shape; this adapter receives a friendly
+flat body and constructs ATVInput before calling _evaluate_impl.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json as _json
+import time
 import uuid
 from typing import Any
 
 from fastapi import APIRouter
+from pydantic import BaseModel, Field
 
 from aegis.atmu import (
     IntentLog,
@@ -41,7 +49,72 @@ from aegis.cost import (
 from aegis.firewall import step350_approval, step360_audit, step370_exec
 from aegis.firewall.core import run_firewall
 from aegis.firewall.step320_blast import TOOL_BLAST_TABLE, UNKNOWN_TOOL_BLAST
-from aegis.schema import ATVInput, Verdict
+from aegis.schema import ATVHeader, ATVInput, Verdict
+
+
+class OpenClawEvaluateRequest(BaseModel):
+    """Flat request shape posted by ``@openclaw/plugin-aegis``.
+
+    Mirrors ``openclaw-plugin/src/types.ts:AegisEvaluateRequest`` so
+    the plugin author writes idiomatic TypeScript without learning
+    Aegis's internal 30-subfield ATVInput. The adapter on this side
+    constructs the full ATVInput from the flat shape.
+
+    The plugin's TS contract uses snake_case field names (matching
+    Pydantic conventions) so deserialization is direct.
+    """
+
+    tool_name: str
+    tool_input: dict[str, Any] = Field(default_factory=dict)
+    tenant_id: str = "openclaw"
+    session_id: str | None = None
+    invocation_id: str | None = None
+    provider: str | None = None
+    channel: str | None = None
+    user_prompt: str | None = None
+    recent_turns: list[dict[str, Any]] | None = None
+
+
+def _build_atv_from_openclaw(
+    req: OpenClawEvaluateRequest,
+) -> ATVInput:
+    """Adapter: ``OpenClawEvaluateRequest`` → ``ATVInput``.
+
+    Maps the plugin's flat fields onto the structured ATV header +
+    body. Fields the plugin doesn't expose (ATS scalars, AID
+    transitions, encryption metadata) are left at their schema
+    defaults — the firewall steps that read them treat zeros as
+    "not measured" and degrade gracefully.
+    """
+    aid = req.session_id or req.invocation_id or "openclaw-default"
+    trace_id = req.invocation_id or uuid.uuid4().hex
+    span_id = uuid.uuid4().hex
+    ts_ns = time.time_ns()
+
+    header = ATVHeader(
+        trace_id=trace_id,
+        span_id=span_id,
+        tenant_id=req.tenant_id,
+        aid=aid,
+        timestamp_ns=ts_ns,
+        # PR-D — first-class multi-channel + provider attribution.
+        channel=req.channel,
+        provider=req.provider,
+        # Patent-aligned identifiers — explicit so the validator
+        # doesn't have to guess.
+        session_id=aid,
+        agent_instance_id=aid,
+    )
+
+    return ATVInput(
+        header=header,
+        tool_name=req.tool_name,
+        tool_args_json=_json.dumps(req.tool_input, sort_keys=True, default=str),
+        # OpenClaw plugin can later carry plan_text via user_prompt,
+        # though it's a coarse mapping (the prompt is *what the user
+        # asked*, not *the agent's plan*).
+        plan_text=(req.user_prompt or "")[:500],
+    )
 
 
 def _evaluate_impl(
@@ -234,6 +307,22 @@ def make_router(
 
     @r.post("/evaluate", response_model=Verdict)
     def evaluate(inp: ATVInput) -> Verdict:
+        return _evaluate_impl(
+            inp, key=key, db=db, log=log,
+            intent_log=intent_log, burnin_controller=burnin_controller,
+            cost_ledger=cost_ledger, encrypted_journal=encrypted_journal,
+            burn_in_id=burn_in_id,
+        )
+
+    @r.post("/evaluate/openclaw", response_model=Verdict)
+    def evaluate_openclaw(req: OpenClawEvaluateRequest) -> Verdict:
+        """Companion route for ``@openclaw/plugin-aegis``.
+
+        Plugin doesn't know ATVInput's full schema; it posts the flat
+        :class:`OpenClawEvaluateRequest` shape. This route adapts and
+        forwards to the same firewall pipeline as ``/evaluate``.
+        """
+        inp = _build_atv_from_openclaw(req)
         return _evaluate_impl(
             inp, key=key, db=db, log=log,
             intent_log=intent_log, burnin_controller=burnin_controller,

@@ -74,9 +74,11 @@ describe("evaluate()", () => {
     );
   });
 
-  it("trims trailing slash from aegisUrl", async () => {
+  it("trims trailing slash from aegisUrl and posts to /evaluate/openclaw", async () => {
     const fetchImpl = vi.fn(async (url: string) => {
-      expect(url).toBe("http://localhost:8000/evaluate");
+      // PR-D — plugin posts to the OpenClaw-specific adapter route,
+      // not to /evaluate (which expects the full ATVInput shape).
+      expect(url).toBe("http://localhost:8000/evaluate/openclaw");
       return new Response(
         JSON.stringify({ decision: "ALLOW", reason: "", trace_id: "t" }),
         { status: 200, headers: { "content-type": "application/json" } },
