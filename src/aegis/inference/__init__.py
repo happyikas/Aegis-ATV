@@ -22,6 +22,11 @@ Planned (separate PRs):
   without DCGM.
 """
 
+from aegis.inference.logit_metrics import (
+    DEFAULT_LOW_CONFIDENCE_THRESHOLD,
+    LogitMetrics,
+    parse_vllm_logprobs,
+)
 from aegis.inference.vllm_metrics import (
     InferenceMetrics,
     VLLMMetricsError,
@@ -30,8 +35,11 @@ from aegis.inference.vllm_metrics import (
 )
 
 __all__ = [
+    "DEFAULT_LOW_CONFIDENCE_THRESHOLD",
     "InferenceMetrics",
+    "LogitMetrics",
     "VLLMMetricsError",
     "parse_prometheus_metrics",
+    "parse_vllm_logprobs",
     "scrape_vllm_metrics",
 ]

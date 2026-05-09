@@ -2426,6 +2426,53 @@ def _format_ts(ts_ns: int) -> str:
     return dt.strftime("%Y-%m-%d %H:%M:%S.") + f"{int((secs % 1) * 1000):03d}"
 
 
+def _render_logit_metrics(payload: object) -> None:
+    """PR-G — render logit-metrics block under a forensic timeline row.
+
+    Stays silent when the audit record has no logit_metrics field
+    (Cloud LLM tracks always; Local OSS LLM tracks until vLLM
+    --return-logprobs is wired up). Renders three lines on a hit:
+    confidence band, mean / min logprob, sample of low-confidence
+    tokens.
+    """
+    if not isinstance(payload, dict) or not payload:
+        return
+    try:
+        from aegis.inference.logit_metrics import LogitMetrics
+        m = LogitMetrics.from_dict(payload)
+    except (ImportError, ValueError, TypeError):
+        return
+    if m.n_tokens <= 0:
+        return
+
+    band = m.confidence_band()
+    band_color = {
+        "high": _green,
+        "moderate": _green,
+        "low": _yellow,
+        "critical": _red,
+        "unknown": _yellow,
+    }[band]
+    print(
+        f"                  └─ logits: {m.n_tokens} tokens, "
+        f"band {band_color(f'[{band}]')} "
+        f"(mean={m.mean_logprob:.3f}, min={m.min_logprob:.3f})"
+    )
+    if m.n_low_confidence_tokens:
+        print(
+            f"                     low-confidence: "
+            f"{m.n_low_confidence_tokens}/"
+            f"{m.n_tokens} tokens "
+            f"(< {m.low_confidence_threshold:.2f})"
+        )
+    if m.sample_low_confidence_tokens:
+        sample_str = ", ".join(
+            f"{tok!r}({lp:.2f})"
+            for tok, lp in m.sample_low_confidence_tokens[:3]
+        )
+        print(f"                     sample:         {sample_str}")
+
+
 def _decision_glyph(decision: str) -> str:
     return {
         "ALLOW": "✅ ALLOW           ",
@@ -2615,6 +2662,12 @@ def cmd_forensic(args: argparse.Namespace) -> int:
         if isinstance(gate, dict) and gate.get("invoked"):
             gate_reason = str(gate.get("reason", ""))[:60]
             print(f"                  └─ advisor: invoked ({gate_reason})")
+
+        # PR-G — logit-level forensic. Only renders when the user
+        # passed --logits AND the audit record has the data (vLLM
+        # --return-logprobs path, Local OSS LLM track only).
+        if getattr(args, "logits", False):
+            _render_logit_metrics(explain.get("logit_metrics"))
 
     # Summary footer.
     print()
@@ -5848,6 +5901,18 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "emit a single JSON object {selector, count, records[]} for "
             "downstream tooling (jq / spreadsheet / blog post)"
+        ),
+    )
+    fr.add_argument(
+        "--logits",
+        action="store_true",
+        help=(
+            "OpenClaw + Local OSS LLM (PR-G): show per-record logit "
+            "metrics (mean / min logprob, low-confidence token count + "
+            "sample) when present in the audit record's "
+            "explain.logit_metrics block. Cloud LLM tracks have no "
+            "logit data — this flag is a no-op for them. Wire vLLM's "
+            "--return-logprobs into your sidecar to populate the data."
         ),
     )
     fr.set_defaults(fn=cmd_forensic)
