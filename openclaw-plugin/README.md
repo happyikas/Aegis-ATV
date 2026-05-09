@@ -1,11 +1,19 @@
 # @openclaw/plugin-aegis
 
 [![npm](https://img.shields.io/npm/v/@openclaw/plugin-aegis.svg)](https://www.npmjs.com/package/@openclaw/plugin-aegis)
-[![license](https://img.shields.io/badge/license-Apache--2.0-blue)](../LICENSE)
+[![license](https://img.shields.io/badge/license-Apache--2.0-blue)](./LICENSE)
 
 OpenClaw plugin that runs every tool call through [Aegis ATV](https://github.com/happyikas/Aegis-ATV)'s 16-step firewall + cryptographic audit chain. Maps Aegis verdicts (`ALLOW` / `REQUIRE_APPROVAL` / `BLOCK`) to OpenClaw's `before_tool_call` return contract, plus param-rewrite for automatic redaction.
 
-> **Status**: Preview (skeleton). The TypeScript handler + Aegis HTTP client are implemented and unit-tested with mocked responses. End-to-end integration with a running OpenClaw runtime + Aegis sidecar is the next milestone.
+> **Status**: Preview (`0.2.0-preview.1`). TypeScript handler + Aegis HTTP client + multi-channel + multi-provider attribution are implemented and unit-tested with mocked responses. End-to-end integration with a running OpenClaw runtime + Aegis sidecar lifts the preview suffix in the next release.
+
+## Compatibility
+
+| Plugin version | Aegis sidecar | Notes |
+|----------------|---------------|-------|
+| `0.2.0-preview.1` (this) | `aegis-mvp >= 0.2.0` | POSTs to `/evaluate/openclaw` route; multi-channel + multi-provider attribution |
+
+The plugin's `apiVersion: 1` field in `openclaw.plugin.json` tracks the OpenClaw plugin SDK contract — independent of this package version.
 
 ## Install
 
@@ -16,8 +24,11 @@ npm install @openclaw/plugin-aegis
 You also need the Aegis sidecar service running at `http://localhost:8000` (default). To start it:
 
 ```bash
-git clone https://github.com/happyikas/Aegis-ATV.git
-cd Aegis-ATV
+pip install aegis-mvp>=0.2.0
+docker compose -f $(python -c "import aegis;import pathlib;print(pathlib.Path(aegis.__file__).parent.parent.parent/'docker-compose.yml')") up -d
+
+# OR clone the repo if you want to run from source:
+git clone https://github.com/happyikas/Aegis-ATV.git && cd Aegis-ATV
 docker compose up -d
 ```
 
@@ -93,14 +104,25 @@ OpenClaw return contract (block/requireApproval/params)
 - **Schema sync** — Aegis Python `EvaluateRequest` / `EvaluateResponse` are mirrored in `src/types.ts` by hand; future work: codegen from Pydantic models.
 - **No streaming verdicts** — single-shot per tool call. Streaming is a future Aegis API addition.
 
-## Roadmap (Issue tracker)
+## Roadmap
 
-- [ ] End-to-end test against `docker compose up` Aegis sidecar
-- [ ] Publish `@openclaw/plugin-aegis` to npm
-- [ ] Codegen TypeScript types from Aegis Pydantic schema
-- [ ] OpenClaw multi-channel attribution → ATV `header.channel` integration test
-- [ ] Streaming verdicts (mid-tool-call cancellation)
-- [ ] ClawHub marketplace listing
+| Item | Status |
+|------|--------|
+| Initial skeleton + handler + 19 vitest tests | ✅ shipped in `0.1.0-preview.1` (skeleton, never published) |
+| `/evaluate/openclaw` adapter route | ✅ shipped in this release |
+| Multi-channel attribution (`channel` field) | ✅ shipped in this release |
+| Multi-provider attribution (`provider` field) | ✅ shipped in this release |
+| End-to-end test against `docker compose up` Aegis sidecar | 🟡 next release (lifts the preview suffix) |
+| Codegen TypeScript types from Aegis Pydantic schema | 🟡 future |
+| Streaming verdicts (mid-tool-call cancellation) | 🔴 future Aegis API addition |
+| ClawHub marketplace listing | 🔴 follow-up |
+
+## What's new in `0.2.0-preview.1`
+
+* The plugin now POSTs to `/evaluate/openclaw` (the new adapter route added in `aegis-mvp 0.2.0`) instead of the legacy `/evaluate` (which expects the full ATVInput shape). This closes the schema mismatch that was present in the never-published `0.1.0-preview.1` skeleton.
+* Multi-channel + multi-provider attribution flow into the Aegis audit record. Combined with `aegis report --by-channel` and `aegis report --by-provider`, this is the foundation for cross-channel and cross-provider safety drift detection.
+
+See [CHANGELOG.md](./CHANGELOG.md) for the full version history.
 
 ## License
 
