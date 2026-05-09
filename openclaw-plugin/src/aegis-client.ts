@@ -71,8 +71,8 @@ export async function evaluate(
       const isOldSidecar404 =
         response.status === 404 && url.endsWith("/evaluate/openclaw");
       const hint = isOldSidecar404
-        ? " — sidecar may be too old; @openclaw/plugin-aegis " +
-          ">= 0.2.0 requires aegis-mvp >= 0.2.0 (which adds the " +
+        ? " — sidecar may be too old; this plugin (>= 0.2.0) " +
+          "requires aegis-mvp >= 0.2.0 (which adds the " +
           "/evaluate/openclaw route). Run `pip install --upgrade " +
           "aegis-mvp` and restart the sidecar."
         : "";

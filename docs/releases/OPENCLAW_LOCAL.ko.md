@@ -56,7 +56,7 @@
                    ▼
 ┌─────────────────────────────────────────────────┐
 │  OpenClaw agent (Node.js / TypeScript)          │
-│  + @openclaw/plugin-aegis  ←  Aegis 통합 지점   │
+│  + @happyikas/openclaw-plugin-aegis  ← Aegis   │
 └──────────────────┬──────────────────────────────┘
                    ▼ before_tool_call
 ┌─────────────────────────────────────────────────┐

@@ -1,7 +1,14 @@
-# @openclaw/plugin-aegis
+# @happyikas/openclaw-plugin-aegis
 
-[![npm](https://img.shields.io/npm/v/@openclaw/plugin-aegis.svg)](https://www.npmjs.com/package/@openclaw/plugin-aegis)
+[![npm](https://img.shields.io/npm/v/@happyikas/openclaw-plugin-aegis.svg)](https://www.npmjs.com/package/@happyikas/openclaw-plugin-aegis)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](./LICENSE)
+
+> **Note on the npm scope** — published under `@happyikas` (the
+> Aegis ATV maintainer's npm scope) until OpenClaw publishes an
+> official `@openclaw` npm org. If/when that happens, the package
+> will republish to `@openclaw/plugin-aegis` with a redirect note
+> here. For now, all install commands use `@happyikas/openclaw-
+> plugin-aegis`.
 
 OpenClaw plugin that runs every tool call through [Aegis ATV](https://github.com/happyikas/Aegis-ATV)'s 16-step firewall + cryptographic audit chain. Maps Aegis verdicts (`ALLOW` / `REQUIRE_APPROVAL` / `BLOCK`) to OpenClaw's `before_tool_call` return contract, plus param-rewrite for automatic redaction.
 
@@ -17,14 +24,14 @@ The plugin's `apiVersion: 1` field in `openclaw.plugin.json` tracks the OpenClaw
 
 ## Install
 
-This package is currently published under the `preview` npm tag — `npm install @openclaw/plugin-aegis` will not resolve until the first GA release. Use the tag explicitly:
+This package is currently published under the `preview` npm tag — `npm install @happyikas/openclaw-plugin-aegis` will not resolve under the default `latest` tag until the first GA release. Use the tag explicitly:
 
 ```bash
 # Latest preview:
-npm install @openclaw/plugin-aegis@preview
+npm install @happyikas/openclaw-plugin-aegis@preview
 
 # Pin to an exact pre-release version:
-npm install @openclaw/plugin-aegis@0.2.0-preview.2
+npm install @happyikas/openclaw-plugin-aegis@0.2.0-preview.2
 ```
 
 You also need the Aegis sidecar service running at `http://localhost:8000` (default). To start it:
@@ -55,8 +62,8 @@ my-openclaw-bot/
 **`plugins/aegis/index.ts`** — the entry point OpenClaw loads:
 
 ```ts
-import { activate } from "@openclaw/plugin-aegis";
-import type { OpenClawPluginApi } from "@openclaw/plugin-aegis";
+import { activate } from "@happyikas/openclaw-plugin-aegis";
+import type { OpenClawPluginApi } from "@happyikas/openclaw-plugin-aegis";
 
 // OpenClaw calls this default export when activating the plugin.
 export default function (api: OpenClawPluginApi) {
@@ -87,7 +94,7 @@ export default function (api: OpenClawPluginApi) {
   "private": true,
   "type": "module",
   "dependencies": {
-    "@openclaw/plugin-aegis": "^0.2.0-preview"
+    "@happyikas/openclaw-plugin-aegis": "^0.2.0-preview"
   }
 }
 ```
