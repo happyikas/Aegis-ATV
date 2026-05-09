@@ -821,6 +821,7 @@ def test_extract_audit_fields_local_schema() -> None:
     rec = {
         "ts_ns": 12345,
         "tool": "Bash",
+        "aid": "session-abc",
         "decision": "BLOCK",
         "reason": "rule:git_destructive",
     }
@@ -830,6 +831,7 @@ def test_extract_audit_fields_local_schema() -> None:
         "reason": "rule:git_destructive",
         "tool": "Bash",
         "ts_ns": 12345,
+        "aid": "session-abc",
     }
 
 

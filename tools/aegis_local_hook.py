@@ -760,23 +760,32 @@ def handle_pretool(stdin: Any, stdout: Any) -> int:
             if advice_dict is not None:
                 explain_block["action_advice"] = advice_dict
 
-    _append_audit(
-        {
-            "ts_ns": time.time_ns(),
-            "tool": tool_name,
-            "aid": inp.header.aid,
-            # v2.7 PR-ψ-retrospective — stamp invocation_id so the
-            # PostToolUse hook can locate the matching PreToolUse
-            # advice and compare predicted vs actual outcome.
-            "invocation_id": event.get("invocation_id", "") or "",
-            "decision": decision,
-            "reason": reason,
-            "trace_id": inp.header.trace_id,
-            "latency_ms": round(elapsed_ms, 3),
-            "mode": "local",
-            "explain": explain_block,
-        }
-    )
+    # PR-A multi-agent attribution — promoted from the
+    # session_behavior dict (where the adapter put them) to first-class
+    # audit-record keys so `aegis report --by-aid` / `aegis cost
+    # --by-aid` can group on them without diving into the explain
+    # block. is_sidechain is a bool per-call; the subagent_count
+    # fields are running totals over the session.
+    sb = inp.session_behavior or {}
+    audit_record: dict[str, Any] = {
+        "ts_ns": time.time_ns(),
+        "tool": tool_name,
+        "aid": inp.header.aid,
+        # v2.7 PR-ψ-retrospective — stamp invocation_id so the
+        # PostToolUse hook can locate the matching PreToolUse
+        # advice and compare predicted vs actual outcome.
+        "invocation_id": event.get("invocation_id", "") or "",
+        "decision": decision,
+        "reason": reason,
+        "trace_id": inp.header.trace_id,
+        "latency_ms": round(elapsed_ms, 3),
+        "mode": "local",
+        "is_sidechain": bool(sb.get("sidechain_is_active", 0.0)),
+        "sidechain_event_count": int(sb.get("sidechain_event_count", 0.0)),
+        "sidechain_tool_call_count": int(sb.get("sidechain_tool_call_count", 0.0)),
+        "explain": explain_block,
+    }
+    _append_audit(audit_record)
 
     # Burn-in Shadow recording (opt-in via AEGIS_BURNIN_SHADOW=1).
     # Records the (ATVInput, verdict) pair for later M13 v2 retraining.
