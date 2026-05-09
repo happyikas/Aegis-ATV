@@ -11,6 +11,33 @@ This project adheres to [Semantic Versioning](https://semver.org/),
 with the **`-preview.N`** suffix marking releases that lack an
 end-to-end integration test against a running OpenClaw runtime.
 
+## [Unreleased]
+
+### Added
+
+* **End-to-end integration test** (`tests/e2e/sidecar.e2e.test.ts`) —
+  boots the real Aegis Python sidecar in a subprocess and runs the
+  plugin's `handleBeforeToolCall` against it over HTTP. Covers ALLOW,
+  REQUIRE_APPROVAL (sensitive-path Read), BLOCK (cloud_destructive),
+  multi-channel attribution round-trip, multi-provider attribution
+  round-trip, and audit-chain anchor (atv_id + Ed25519 signature
+  present in the verdict body). Lifts the gate that earlier CHANGELOG
+  entries described as "no end-to-end test against a running OpenClaw
+  runtime + Aegis sidecar has been performed" — the OpenClaw runtime
+  side is still simulated (we don't `npm install openclaw` in CI),
+  but the plugin → sidecar half is now proven against the real Python
+  firewall pipeline.
+* **`npm run test:e2e`** script + dedicated `vitest.e2e.config.ts`
+  with longer hook/test timeouts for sidecar boot.
+* **CI `e2e` job** in `.github/workflows/openclaw-plugin.yml` —
+  installs uv + Python 3.11 + Aegis sidecar deps, then runs the
+  vitest E2E suite. Triggers on changes to `src/aegis/api/evaluate.py`
+  in addition to `openclaw-plugin/**` so a sidecar-side schema break
+  is caught before merge.
+
+The next release that lifts the `-preview` suffix will land once
+this test runs green on CI for ≥ 7 days without flake.
+
 ## [0.2.0-preview.2] — 2026-05-09 — published
 
 **Live on npm**:
