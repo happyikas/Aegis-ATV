@@ -833,6 +833,7 @@ def test_extract_audit_fields_local_schema() -> None:
         "ts_ns": 12345,
         "aid": "session-abc",
         "channel": "",
+        "provider": "",
     }
 
 

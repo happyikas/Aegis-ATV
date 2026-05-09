@@ -1864,6 +1864,17 @@ def _extract_audit_fields(rec: dict[str, object]) -> dict[str, object]:
                 channel = header.get("channel")
     channel_str = str(channel or "")
 
+    # PR-F — surface provider for `aegis report --by-provider` and the
+    # provider-drift advisor. Same dual-schema lookup as channel.
+    provider = rec.get("provider")
+    if not provider:
+        payload = rec.get("payload")
+        if isinstance(payload, dict):
+            header = payload.get("header")
+            if isinstance(header, dict):
+                provider = header.get("provider")
+    provider_str = str(provider or "")
+
     return {
         "decision": decision_str,
         "reason": reason_str,
@@ -1871,6 +1882,7 @@ def _extract_audit_fields(rec: dict[str, object]) -> dict[str, object]:
         "ts_ns": ts_int,
         "aid": aid_str,
         "channel": channel_str,
+        "provider": provider_str,
     }
 
 
@@ -2101,6 +2113,10 @@ def cmd_report(args: argparse.Namespace) -> int:
     # ── PR-D: --by-channel OpenClaw multi-channel breakdown ──────────
     if getattr(args, "by_channel", False):
         return _cmd_report_by_channel(audit_path, since_secs)
+
+    # ── PR-F: --by-provider OpenClaw multi-provider breakdown ────────
+    if getattr(args, "by_provider", False):
+        return _cmd_report_by_provider(audit_path, since_secs)
 
     cutoff_ns = int(time.time() - since_secs) * 1_000_000_000 if since_secs else 0
 
@@ -2408,6 +2424,223 @@ def _cmd_report_by_channel(
 
     print(f"  🧾  Full signed local audit: {audit_path}")
     return 0
+
+
+def _cmd_report_by_provider(
+    audit_path: Path, since_secs: int | None,
+) -> int:
+    """`aegis report --by-provider` — OpenClaw multi-provider breakdown.
+
+    Companion to ``--by-aid`` and ``--by-channel``. Provider is the
+    LLM that produced the tool_use intent (anthropic-claude /
+    openai-gpt-4o / google-gemini / local-llama-3.1-8b / etc.).
+    Records without a provider field bucket under ``(no-provider)``.
+
+    On top of the standard per-provider counters, this view computes
+    a **provider-drift advisor signal** when 2+ providers are present
+    in the window: if any provider's BLOCK rate diverges by ≥3× from
+    the cross-provider median, surface a yellow banner.
+
+    Why this matters: vendor switching is a real cost-cutting move
+    operators make ("openai is cheaper this month, switch to it"),
+    but RLHF / safety tuning differs across providers — the same
+    prompt may BLOCK on Anthropic and ALLOW on OpenAI. The drift
+    advisor catches "you saved 30% on cost but doubled your BLOCK
+    rate — investigate" before it becomes a real incident.
+    """
+    cutoff_ns = (
+        int(time.time() - since_secs) * 1_000_000_000 if since_secs else 0
+    )
+
+    by_provider: dict[str, dict[str, int]] = {}
+    n_total = 0
+
+    with audit_path.open(encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            fields = _extract_audit_fields(rec)
+            ts = int(fields["ts_ns"])  # type: ignore[arg-type]
+            if cutoff_ns and ts and ts < cutoff_ns:
+                continue
+            decision = str(fields["decision"])
+            reason = str(fields["reason"])
+            provider = str(fields.get("provider", "")) or "(no-provider)"
+            n_total += 1
+
+            counters = by_provider.setdefault(provider, {
+                "n_total": 0,
+                "n_safe": 0,
+                "n_approval": 0,
+                "n_block_destructive": 0,
+                "n_block_poisoned": 0,
+                "n_loop_aborted": 0,
+                "n_redundant": 0,
+            })
+            counters["n_total"] += 1
+
+            if decision == "ALLOW":
+                counters["n_safe"] += 1
+                if "redundant" in reason:
+                    counters["n_redundant"] += 1
+            elif decision == "REQUIRE_APPROVAL":
+                counters["n_approval"] += 1
+                if "loop" in reason or "step336" in reason:
+                    counters["n_loop_aborted"] += 1
+            elif decision == "BLOCK":
+                if "instruction_drift" in reason or "poisoned" in reason:
+                    counters["n_block_poisoned"] += 1
+                else:
+                    counters["n_block_destructive"] += 1
+
+    print("AegisData Agent Risk Report — by provider")
+    print("=========================================")
+    if since_secs:
+        print(f"  window:    last {since_secs // 60} min")
+    print(
+        f"  audit log: {audit_path}  ({n_total} entries, "
+        f"{len(by_provider)} providers)"
+    )
+    print()
+
+    if not by_provider:
+        print(_yellow("  no records in window"))
+        return 0
+
+    # PR-F drift advisor — only meaningful when 2+ real providers
+    # are present. (no-provider) bucket is excluded from the
+    # divergence calculation since it's a *missing-data* category,
+    # not a real provider.
+    drift_lines = _compute_provider_drift(by_provider)
+
+    # Severity weighting — same as --by-aid for visual parity.
+    def _severity(c: dict[str, int]) -> int:
+        return (
+            c["n_block_destructive"] * 100
+            + c["n_block_poisoned"] * 100
+            + c["n_approval"] * 10
+            + c["n_total"]
+        )
+
+    sorted_providers = sorted(
+        by_provider.items(), key=lambda kv: -_severity(kv[1]),
+    )
+
+    for provider, c in sorted_providers:
+        block_rate = (
+            (c["n_block_destructive"] + c["n_block_poisoned"])
+            / max(1, c["n_total"]) * 100
+        )
+        print(f"  ── {provider}  (BLOCK rate: {block_rate:.1f}%)")
+        print(f"     ✅  {c['n_safe']:>4} safe tool calls auto-approved")
+        print(f"     ⚠️   {c['n_approval']:>4} required approval")
+        print(f"     ⛔  {c['n_block_destructive']:>4} destructive blocked")
+        print(f"     ⛔  {c['n_block_poisoned']:>4} poisoned blocked")
+        print(f"     💸  {c['n_redundant']:>4} redundant deduplicated")
+        print(f"     🔁  {c['n_loop_aborted']:>4} loops aborted")
+        print(f"     ─── total: {c['n_total']}")
+        print()
+
+    if drift_lines:
+        print(_yellow("⚠ Provider-divergence advisor:"))
+        for line in drift_lines:
+            print(f"  {line}")
+        print()
+
+    print(f"  🧾  Full signed local audit: {audit_path}")
+    return 0
+
+
+def _compute_provider_drift(
+    by_provider: dict[str, dict[str, int]],
+    *,
+    min_calls_per_provider: int = 5,
+    divergence_multiplier: float = 3.0,
+) -> list[str]:
+    """PR-F provider-drift advisor (CLI side).
+
+    Compares per-provider BLOCK rates pairwise and surfaces outliers
+    when ``max_rate / min_rate >= divergence_multiplier``. Returns
+    human-readable lines (caller prints them).
+
+    Stays silent when:
+
+    * Only one real provider (nothing to compare).
+    * Any candidate provider has < ``min_calls_per_provider`` calls
+      (sample size too small for meaningful comparison).
+    * The max/min ratio across providers is below the multiplier.
+
+    The pairwise max/min comparison handles the n=2 case correctly
+    (median-vs-individual collapses into "always 1×" for n=2). For
+    n>=3 it surfaces the same outliers a median-based detector would.
+    """
+    real_providers = {
+        name: c for name, c in by_provider.items()
+        if name != "(no-provider)" and c["n_total"] >= min_calls_per_provider
+    }
+    if len(real_providers) < 2:
+        return []
+
+    # BLOCK rate per provider (destructive + poisoned out of total).
+    rates: dict[str, float] = {}
+    for name, c in real_providers.items():
+        n_block = c["n_block_destructive"] + c["n_block_poisoned"]
+        rates[name] = n_block / max(1, c["n_total"])
+
+    max_rate = max(rates.values())
+    nonzero_rates = [r for r in rates.values() if r > 0]
+
+    # Edge case: nobody blocked. Nothing meaningful to flag.
+    if max_rate <= 0:
+        return []
+
+    # Edge case: some providers have 0% but at least one has > 0%.
+    # The zero-block provider is the suspicious one — its peers are
+    # BLOCKing but it isn't, suggesting it may be skipping safety
+    # checks the peers enforce.
+    if len(nonzero_rates) < len(rates):
+        zero_block_providers = [
+            name for name, r in rates.items() if r == 0
+        ]
+        peer_max = max_rate
+        return [
+            f"{name} BLOCKs at 0.0% while peers BLOCK at up to "
+            f"{peer_max * 100:.1f}% — investigate provider-specific "
+            "safety differences"
+            for name in sorted(zero_block_providers)
+        ]
+
+    # All providers have non-zero rates. Compare max to min.
+    min_rate = min(nonzero_rates)
+    ratio = max_rate / max(min_rate, 1e-9)
+    if ratio < divergence_multiplier:
+        return []
+
+    out: list[str] = []
+    for name, rate in sorted(rates.items(), key=lambda kv: -kv[1]):
+        # Flag the high outliers (rates >= multiplier × min_rate).
+        if rate >= min_rate * divergence_multiplier and rate > min_rate:
+            out.append(
+                f"{name} BLOCKs at {rate * 100:.1f}% — "
+                f"{rate / min_rate:.1f}× the lowest-blocking peer "
+                f"({min_rate * 100:.1f}%); investigate provider-"
+                "specific safety differences"
+            )
+        # And flag the low outliers (rates that the highs are >= multiplier of).
+        elif max_rate >= rate * divergence_multiplier and rate < max_rate:
+            out.append(
+                f"{name} BLOCKs at {rate * 100:.1f}% — "
+                f"only {rate / max_rate:.2f}× the highest-blocking "
+                f"peer ({max_rate * 100:.1f}%); may be skipping "
+                "safety checks peers enforce"
+            )
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -5798,6 +6031,20 @@ def build_parser() -> argparse.ArgumentParser:
             "(Claude Code track) are bucketed under '(no-channel)'. "
             "Useful when one OpenClaw deployment serves multiple chat "
             "platforms and you want per-channel BLOCK / approval rates."
+        ),
+    )
+    rep.add_argument(
+        "--by-provider",
+        action="store_true",
+        help=(
+            "OpenClaw multi-provider breakdown (PR-F): print one risk-"
+            "summary block per LLM provider (anthropic-claude / "
+            "openai-gpt-4o / google-gemini / local-llama / etc.). "
+            "Records without a provider field bucket under "
+            "'(no-provider)'. Surfaces provider-drift — when the same "
+            "agent's verdict distribution diverges across providers, "
+            "the provider-divergence advisor flags the gap as a "
+            "vendor-switch risk signal."
         ),
     )
     rep.set_defaults(fn=cmd_report)
