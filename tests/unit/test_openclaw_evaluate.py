@@ -11,7 +11,6 @@ Two surfaces under test:
 
 from __future__ import annotations
 
-import argparse
 import json
 from pathlib import Path
 
@@ -23,7 +22,6 @@ from aegis.api.evaluate import (
 )
 from aegis.schema import ATVHeader, ATVInput
 from tools import aegis_cli
-
 
 # ── _build_atv_from_openclaw — adapter shape correctness ────────────
 
