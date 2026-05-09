@@ -1,8 +1,93 @@
 # Changelog
 
-All notable changes to AegisData MVP. Format follows
+All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
+
+## [0.2.0] — 2026-05-09  ·  Coach / Live / Doctor + three release tracks
+
+First substantive iteration on the Personal MVP since the v0.1.0
+public release. No breaking changes: every existing command behaves
+exactly as before. Net addition: ~3,500 lines of feature work + docs
+across PRs #119–#129.
+
+### Added
+
+* **🏋️ ATV Coach / 📊 ATV Live / 🔧 ATV Doctor product feature buckets**
+  — same firewall + audit chain core, three named user-facing features.
+  All CLI subcommands tagged with bucket emoji in `aegis --help`.
+  Korean canonical user manuals: [`docs/manuals/`](docs/manuals/).
+  (PR #126)
+* **Three release tracks** — `aegis install --target {claude-code,
+  openclaw-local,openclaw-cloud}`. claude-code is GA; the two OpenClaw
+  tracks are Preview with friendly install stubs pointing at
+  [`docs/releases/`](docs/releases/). (PR #127)
+* **`@openclaw/plugin-aegis` TypeScript plugin skeleton** — under
+  `openclaw-plugin/`. Maps OpenClaw `before_tool_call` to Aegis
+  ALLOW/BLOCK/REQUIRE_APPROVAL/PARAM-REWRITE verdicts. Configurable
+  fail-open vs fail-closed on sidecar errors. 19 vitest tests; new
+  GitHub Actions workflow `openclaw-plugin.yml`. (PR #128)
+* **vLLM `/metrics` Prometheus scraper** — new `aegis metrics --vllm-url`
+  CLI under `📊 ATV Live`, plus `src/aegis/inference/` module with
+  `InferenceMetrics` dataclass + `scrape_vllm_metrics()`. KV cache
+  utilization, queue depth, TTFT/TPOT histograms, speculative-decoding
+  efficiency. 28 pytest tests with real vLLM 0.6.x fixture. Cloud LLM
+  tracks return a friendly "this surface is not exposed" hint. (PR #129)
+* **5 Claude Code custom slash commands** — `/aegis-report`,
+  `/aegis-verify`, `/aegis-advise`, `/aegis-forensic`, `/aegis-help`.
+  Auto-installed by `aegis install` into `~/.claude/commands/`.
+  (PR #121)
+* **SessionStart welcome hint** — first-session onboarding via the
+  Claude Code SessionStart hook. Idempotent via `~/.aegis/.welcomed`
+  marker; opt-out via `AEGIS_WELCOME_DISABLE=1`. (PR #125)
+* **Three release-track docs** — `docs/releases/CLAUDE_CODE.ko.md`,
+  `OPENCLAW_LOCAL.ko.md`, `OPENCLAW_CLOUD.ko.md` + 1-page decision
+  matrix in `docs/releases/README.md`. (PR #127)
+* **Three feature-bucket manuals (Korean canonical)** — `docs/manuals/
+  COACH_MANUAL.ko.md`, `LIVE_MANUAL.ko.md`, `DOCTOR_MANUAL.ko.md` +
+  index. (PR #126)
+* **Integration analyses** — `docs/integrations/openclaw.md` (430
+  lines, "best fit" verdict drove PRs #128/#129) +
+  `docs/integrations/paperclip.md` (361 lines, "doesn't fit" verdict).
+  (PRs #117, #118)
+* **5-min screencast script** — `docs/launch/screencast-v0.1.0.md`.
+  (PR #123)
+* **README rebrand** — cryptographic-audit lead + side-by-side comparison
+  table vs Claude Code's built-in flags + "Three release tracks" hero
+  section. (PRs #119, #124, #126, #127)
+
+### Changed
+
+* Subcommand `--help` strings now prefix with bucket emoji (🏋️ Coach
+  / 📊 Live / 🔧 Doctor) so the product structure is visible in the
+  default `aegis --help` output. No CLI behaviour change.
+* `aegis install` default target preserved (`claude-code`) — existing
+  users see no change. New `--target` flag is opt-in.
+
+### Deferred (Preview / Roadmap)
+
+* `@openclaw/plugin-aegis` end-to-end test against running OpenClaw
+  runtime (handler is mock-tested only).
+* `@openclaw/plugin-aegis` npm publish (version `0.1.0-preview.1`).
+* vLLM scraper `--watch` continuous mode (single-shot only).
+* vLLM `InferenceMetrics` → ATV vector integration (CLI-only today).
+* Ollama / TGI inference adapters.
+* Model-weight hash baseline (step309 OpenClaw variant).
+* Logit-level forensic.
+
+### Notes
+
+* PR #127 introduces three release tracks but the OpenClaw plugin
+  package (`openclaw-plugin/`) is independently versioned at
+  `0.1.0-preview.1` — the Aegis Python core's v0.2.0 is unrelated to
+  the plugin's npm version.
+
+## [0.1.0] — 2026-04-30  ·  Personal MVP public release
+
+Initial public release of the Personal MVP under Apache-2.0. Renamed
+the project from "AegisData T2 MVP" (versioning track 4.x, v2.x) to
+"Aegis ATV" (versioning track 0.x, target 1.0). The 4.x history below
+covers the pre-public T2 sidecar work that this MVP builds on.
 
 ## [4.4.0] — 2026-04-29  ·  TEE-rooted attestation deployment (Claim 58)
 
