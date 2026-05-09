@@ -15,7 +15,6 @@ from aegis.inference.vllm_metrics import (
     scrape_vllm_metrics,
 )
 
-
 # ── Fixture: a realistic vLLM /metrics payload ──────────────────────
 
 
@@ -264,18 +263,16 @@ def test_scrape_500_response_raises() -> None:
     with patch(
         "urllib.request.urlopen",
         return_value=_mock_urlopen(status=500),
-    ):
-        with pytest.raises(VLLMMetricsError, match="HTTP 500"):
-            scrape_vllm_metrics("http://localhost:8000")
+    ), pytest.raises(VLLMMetricsError, match="HTTP 500"):
+        scrape_vllm_metrics("http://localhost:8000")
 
 
 def test_scrape_network_failure_raises() -> None:
     with patch(
         "urllib.request.urlopen",
         side_effect=urllib.error.URLError("connection refused"),
-    ):
-        with pytest.raises(VLLMMetricsError, match="unreachable"):
-            scrape_vllm_metrics("http://localhost:8000")
+    ), pytest.raises(VLLMMetricsError, match="unreachable"):
+        scrape_vllm_metrics("http://localhost:8000")
 
 
 def test_scrape_empty_url_raises() -> None:
@@ -289,9 +286,8 @@ def test_scrape_unparseable_payload_raises() -> None:
     with patch(
         "urllib.request.urlopen",
         return_value=_mock_urlopen(payload="<html>404 Not Found</html>"),
-    ):
-        with pytest.raises(VLLMMetricsError, match="no recognised vllm"):
-            scrape_vllm_metrics("http://localhost:8000")
+    ), pytest.raises(VLLMMetricsError, match="no recognised vllm"):
+        scrape_vllm_metrics("http://localhost:8000")
 
 
 def test_inference_module_exports_public_api() -> None:
@@ -299,7 +295,11 @@ def test_inference_module_exports_public_api() -> None:
     aegis CLI and any future advisors."""
     from aegis.inference import (
         InferenceMetrics as PublicMetrics,
+    )
+    from aegis.inference import (
         VLLMMetricsError as PublicError,
+    )
+    from aegis.inference import (
         scrape_vllm_metrics as public_scrape,
     )
     assert PublicMetrics is InferenceMetrics
