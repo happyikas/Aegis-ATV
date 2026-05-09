@@ -832,6 +832,7 @@ def test_extract_audit_fields_local_schema() -> None:
         "tool": "Bash",
         "ts_ns": 12345,
         "aid": "session-abc",
+        "channel": "",
     }
 
 

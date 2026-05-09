@@ -1802,12 +1802,24 @@ def _extract_audit_fields(rec: dict[str, object]) -> dict[str, object]:
                 aid = header.get("aid") or header.get("session_id")
     aid_str = str(aid or "")
 
+    # PR-D — surface channel from both flat (local hook) and nested
+    # (sidecar payload.header) audit-record schemas.
+    channel = rec.get("channel")
+    if not channel:
+        payload = rec.get("payload")
+        if isinstance(payload, dict):
+            header = payload.get("header")
+            if isinstance(header, dict):
+                channel = header.get("channel")
+    channel_str = str(channel or "")
+
     return {
         "decision": decision_str,
         "reason": reason_str,
         "tool": tool_str,
         "ts_ns": ts_int,
         "aid": aid_str,
+        "channel": channel_str,
     }
 
 
@@ -2035,6 +2047,10 @@ def cmd_report(args: argparse.Namespace) -> int:
     if getattr(args, "by_aid", False):
         return _cmd_report_by_aid(audit_path, since_secs)
 
+    # ── PR-D: --by-channel OpenClaw multi-channel breakdown ──────────
+    if getattr(args, "by_channel", False):
+        return _cmd_report_by_channel(audit_path, since_secs)
+
     cutoff_ns = int(time.time() - since_secs) * 1_000_000_000 if since_secs else 0
 
     n_total = 0
@@ -2222,6 +2238,114 @@ def _cmd_report_by_aid(
         flag = " [sidechain]" if aid in aids_with_sidechain else ""
         aid_display = aid[:32] + flag
         print(f"  ── {aid_display}")
+        print(f"     ✅  {c['n_safe']:>4} safe tool calls auto-approved")
+        print(f"     ⚠️   {c['n_approval']:>4} required approval")
+        print(f"     ⛔  {c['n_block_destructive']:>4} destructive blocked")
+        print(f"     ⛔  {c['n_block_poisoned']:>4} poisoned blocked")
+        print(f"     💸  {c['n_redundant']:>4} redundant deduplicated")
+        print(f"     🔁  {c['n_loop_aborted']:>4} loops aborted")
+        print(f"     ─── total: {c['n_total']}")
+        print()
+
+    print(f"  🧾  Full signed local audit: {audit_path}")
+    return 0
+
+
+def _cmd_report_by_channel(
+    audit_path: Path, since_secs: int | None,
+) -> int:
+    """`aegis report --by-channel` — OpenClaw multi-channel risk breakdown.
+
+    Companion to ``--by-aid``. Channel is the input surface that
+    triggered the tool call: ``telegram`` / ``discord`` / ``slack`` /
+    ``cli`` / ``web`` / custom. Records without a channel field
+    (Claude Code track) bucket under ``(no-channel)``.
+
+    Useful when one OpenClaw deployment serves multiple chat
+    platforms — surfaces per-channel BLOCK / approval rates so the
+    operator spots a compromised channel quickly.
+    """
+    cutoff_ns = (
+        int(time.time() - since_secs) * 1_000_000_000 if since_secs else 0
+    )
+
+    by_channel: dict[str, dict[str, int]] = {}
+    n_total = 0
+
+    with audit_path.open(encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            fields = _extract_audit_fields(rec)
+            ts = int(fields["ts_ns"])  # type: ignore[arg-type]
+            if cutoff_ns and ts and ts < cutoff_ns:
+                continue
+            decision = str(fields["decision"])
+            reason = str(fields["reason"])
+            channel = str(fields.get("channel", "")) or "(no-channel)"
+            n_total += 1
+
+            counters = by_channel.setdefault(channel, {
+                "n_total": 0,
+                "n_safe": 0,
+                "n_approval": 0,
+                "n_block_destructive": 0,
+                "n_block_poisoned": 0,
+                "n_loop_aborted": 0,
+                "n_redundant": 0,
+            })
+            counters["n_total"] += 1
+
+            if decision == "ALLOW":
+                counters["n_safe"] += 1
+                if "redundant" in reason:
+                    counters["n_redundant"] += 1
+            elif decision == "REQUIRE_APPROVAL":
+                counters["n_approval"] += 1
+                if "loop" in reason or "step336" in reason:
+                    counters["n_loop_aborted"] += 1
+            elif decision == "BLOCK":
+                if "instruction_drift" in reason or "poisoned" in reason:
+                    counters["n_block_poisoned"] += 1
+                else:
+                    counters["n_block_destructive"] += 1
+
+    print("AegisData Agent Risk Report — by channel")
+    print("========================================")
+    if since_secs:
+        print(f"  window:    last {since_secs // 60} min")
+    print(
+        f"  audit log: {audit_path}  ({n_total} entries, "
+        f"{len(by_channel)} channels)"
+    )
+    print()
+
+    if not by_channel:
+        print(_yellow("  no records in window"))
+        return 0
+
+    # Severity weighting matches --by-aid for visual parity. The
+    # channel with the most BLOCKs lands at the top.
+    def _severity(c: dict[str, int]) -> int:
+        return (
+            c["n_block_destructive"] * 100
+            + c["n_block_poisoned"] * 100
+            + c["n_approval"] * 10
+            + c["n_total"]
+        )
+
+    sorted_channels = sorted(
+        by_channel.items(), key=lambda kv: -_severity(kv[1]),
+    )
+
+    for channel, c in sorted_channels:
+        print(f"  ── {channel}")
         print(f"     ✅  {c['n_safe']:>4} safe tool calls auto-approved")
         print(f"     ⚠️   {c['n_approval']:>4} required approval")
         print(f"     ⛔  {c['n_block_destructive']:>4} destructive blocked")
@@ -5586,6 +5710,18 @@ def build_parser() -> argparse.ArgumentParser:
             "Shows the same emoji counts the default report has, but "
             "attributed to each agent. Sub-agent rows (Claude Code Task "
             "subagents) are flagged with [sidechain]."
+        ),
+    )
+    rep.add_argument(
+        "--by-channel",
+        action="store_true",
+        help=(
+            "OpenClaw multi-channel breakdown (PR-D): print one risk-"
+            "summary block per `channel` (telegram / discord / slack / "
+            "cli / web / custom). Records without a channel field "
+            "(Claude Code track) are bucketed under '(no-channel)'. "
+            "Useful when one OpenClaw deployment serves multiple chat "
+            "platforms and you want per-channel BLOCK / approval rates."
         ),
     )
     rep.set_defaults(fn=cmd_report)

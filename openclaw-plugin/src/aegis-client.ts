@@ -46,7 +46,13 @@ export async function evaluate(
   const timer = setTimeout(() => controller.abort(), config.timeoutMs);
 
   try {
-    const url = `${trimSlash(config.aegisUrl)}/evaluate`;
+    // PR-D — POST to the OpenClaw-specific adapter route. Aegis
+    // sidecar's `/evaluate` accepts the full ATVInput shape (used by
+    // sidecar-internal callers); `/evaluate/openclaw` accepts this
+    // plugin's flat request shape and builds ATVInput on the server
+    // side. Keeping these as separate routes means we never have to
+    // teach the plugin about Aegis's 30-subfield internal schema.
+    const url = `${trimSlash(config.aegisUrl)}/evaluate/openclaw`;
     const response = await fetchImpl(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
