@@ -62,8 +62,23 @@ export async function evaluate(
 
     if (!response.ok) {
       const body = await safeReadText(response);
+      // PR-I (Gap 9) — surface a clear hint when the sidecar is too
+      // old to know the /evaluate/openclaw route. The plugin's
+      // 0.2.0-preview.x requires aegis-mvp >= 0.2.0; an older sidecar
+      // returns 404 (route not registered) and would otherwise
+      // silently fail-open, which is exactly the wrong behaviour for
+      // a security plugin.
+      const isOldSidecar404 =
+        response.status === 404 && url.endsWith("/evaluate/openclaw");
+      const hint = isOldSidecar404
+        ? " — sidecar may be too old; @openclaw/plugin-aegis " +
+          ">= 0.2.0 requires aegis-mvp >= 0.2.0 (which adds the " +
+          "/evaluate/openclaw route). Run `pip install --upgrade " +
+          "aegis-mvp` and restart the sidecar."
+        : "";
       throw new AegisSidecarError(
-        `Aegis /evaluate returned ${response.status}: ${body.slice(0, 200)}`,
+        `Aegis /evaluate returned ${response.status}: ` +
+          `${body.slice(0, 200)}${hint}`,
       );
     }
 

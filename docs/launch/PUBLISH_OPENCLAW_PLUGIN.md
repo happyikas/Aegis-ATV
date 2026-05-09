@@ -106,18 +106,47 @@ node_modules or test fixtures), revisit the `files` field in
 
 ## 3. Publish to npm
 
-```bash
-# Publish (will prompt for 2FA TOTP):
-npm publish
+> ⚠️ **Pre-release versions require `--tag`** — versions with a
+> hyphen suffix (`-preview.N`, `-rc.N`, `-beta.N`) MUST be published
+> with `npm publish --tag <name>`. Without `--tag`, npm rejects the
+> publish (since v9). Even if the publish succeeded, omitting the
+> tag would set the pre-release as the default `latest` install
+> for anyone running `npm install @openclaw/plugin-aegis`, which
+> is exactly what we don't want for a preview release.
 
-# OR with --dry-run first to verify metadata:
-npm publish --dry-run
+```bash
+# Pre-release: tag as `preview` so users opt in explicitly.
+# Will prompt for 2FA TOTP.
+npm publish --tag preview
+
+# After the GA release lifts the -preview suffix, the same package
+# publishes with the default tag (`npm publish` is sufficient).
+```
+
+`--dry-run` first to verify metadata + see what files would ship:
+
+```bash
+npm publish --dry-run --tag preview
 ```
 
 Successful publish prints:
 
 ```
-+ @openclaw/plugin-aegis@0.2.0-preview.1
++ @openclaw/plugin-aegis@0.2.0-preview.2
+```
+
+After publish, users install with the explicit tag:
+
+```bash
+# Pre-release install (this is what your README documents):
+npm install @openclaw/plugin-aegis@preview
+# (resolves to the highest version tagged `preview`)
+
+# Pin to the exact pre-release:
+npm install @openclaw/plugin-aegis@0.2.0-preview.2
+
+# Default install (after GA):
+npm install @openclaw/plugin-aegis
 ```
 
 ---
