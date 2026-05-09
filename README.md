@@ -343,6 +343,10 @@ See [`tools/README.md`](tools/README.md) for install + tool mapping.
 
 ## Documentation
 
+### Roadmap
+
+[`ROADMAP.md`](ROADMAP.md) tracks what's in flight, what's next, and what's recently shipped — mirrored from the GitHub issues + PRs surface so a public reader has a stable URL to watch.
+
 ### Getting started
 
 | Doc | What's in it |
