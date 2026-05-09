@@ -601,6 +601,13 @@ def _cmd_cost_summary(args: argparse.Namespace) -> int:
               "tool call; restart Claude Code or run `aegis status` first)")
         return 0
 
+    # PR-C — multi-agent breakdown view. Shows ONLY the per-aid
+    # column, expanded and sorted, so an operator running multiple
+    # agents (Telegram bot per channel, Claude Code subagents,
+    # OpenClaw multi-provider) sees attribution at a glance.
+    if getattr(args, "by_aid", False):
+        return _cmd_cost_summary_by_aid(s, audit_path, top=int(args.top))
+
     print(f"AegisData cost summary  ({audit_path})")
     print("=" * 60)
     print(f"  records:           {s.n_records_total:>8,}  "
@@ -636,6 +643,78 @@ def _cmd_cost_summary(args: argparse.Namespace) -> int:
             print(f"    aid={ev['aid'][:20]:<20}  tool={ev['tool']:<12}  "
                   f"${ev['from_dollars']:.4f} → ${ev['to_dollars']:.4f}  "
                   f"(+${ev['delta']:.4f})")
+    return 0
+
+
+def _cmd_cost_summary_by_aid(
+    summary: Any, audit_path: Path, *, top: int = 10,
+) -> int:
+    """Multi-agent cost breakdown — `aegis cost summary --by-aid`.
+
+    Shows the per-aid (per-agent / per-session) breakdown that the
+    default summary view buries at the bottom of a much larger
+    report. Designed for the multi-agent scenarios (Claude Code
+    subagents, OpenClaw multi-channel, custom agents on the same
+    sidecar) where attribution per aid is the primary signal an
+    operator wants.
+
+    Sort: descending by max cumulative $ — the aid that spent the
+    most appears first.
+    """
+    print(f"AegisData cost summary — by aid  ({audit_path})")
+    print("=" * 68)
+    if not summary.per_session:
+        print(_yellow(
+            "  no per-aid data — audit log has no `aid` field on any "
+            "record. Run `aegis install --mode local` to wire up the "
+            "PreToolUse hook (which stamps aid)."
+        ))
+        return 0
+
+    sessions = summary.per_session
+    total = len(sessions)
+    if top > 0 and total > top:
+        sessions = sessions[:top]
+        print(f"  (top {top} of {total} aids — use `--top 0` to see all)")
+    else:
+        print(f"  ({total} aids total)")
+    print()
+    print(
+        f"  {'aid':<32}  {'calls':>5}  "
+        f"{'max $':>9}  {'esc':>4}  {'window':>8}"
+    )
+    print("  " + "─" * 64)
+    for ss in sessions:
+        aid_short = ss.aid[:32] if len(ss.aid) > 32 else ss.aid
+        # Wall-clock duration of the aid's activity in this audit log.
+        if ss.first_seen_ns and ss.last_seen_ns:
+            dur_min = max(
+                0, (ss.last_seen_ns - ss.first_seen_ns) // 60_000_000_000,
+            )
+            window = f"{int(dur_min)}m"
+        else:
+            window = "-"
+        print(
+            f"  {aid_short:<32}  {ss.n_calls:>5}  "
+            f"${ss.max_cumulative_dollars:>8.4f}  "
+            f"{ss.n_escalations:>4}  {window:>8}"
+        )
+    print("  " + "─" * 64)
+
+    # Roll-up totals across the visible aids.
+    sum_calls = sum(ss.n_calls for ss in sessions)
+    sum_max_dollars = sum(ss.max_cumulative_dollars for ss in sessions)
+    sum_esc = sum(ss.n_escalations for ss in sessions)
+    print(
+        f"  {'(visible total)':<32}  {sum_calls:>5}  "
+        f"${sum_max_dollars:>8.4f}  "
+        f"{sum_esc:>4}"
+    )
+    print()
+    print(
+        "  Tip: `aegis forensic <aid>` for the full timeline of "
+        "any aid above."
+    )
     return 0
 
 
@@ -1714,11 +1793,21 @@ def _extract_audit_fields(rec: dict[str, object]) -> dict[str, object]:
     except (TypeError, ValueError):
         ts_int = 0
 
+    aid = rec.get("aid")
+    if not aid:
+        payload = rec.get("payload")
+        if isinstance(payload, dict):
+            header = payload.get("header")
+            if isinstance(header, dict):
+                aid = header.get("aid") or header.get("session_id")
+    aid_str = str(aid or "")
+
     return {
         "decision": decision_str,
         "reason": reason_str,
         "tool": tool_str,
         "ts_ns": ts_int,
+        "aid": aid_str,
     }
 
 
@@ -1942,6 +2031,10 @@ def cmd_report(args: argparse.Namespace) -> int:
             as_json=bool(getattr(args, "json", False)),
         )
 
+    # ── PR-C: --by-aid multi-agent breakdown ─────────────────────────
+    if getattr(args, "by_aid", False):
+        return _cmd_report_by_aid(audit_path, since_secs)
+
     cutoff_ns = int(time.time() - since_secs) * 1_000_000_000 if since_secs else 0
 
     n_total = 0
@@ -2026,6 +2119,119 @@ def cmd_report(args: argparse.Namespace) -> int:
         for tag, c in top:
             print(f"    {c:>4} × {tag}")
 
+    return 0
+
+
+def _cmd_report_by_aid(
+    audit_path: Path, since_secs: int | None,
+) -> int:
+    """`aegis report --by-aid` — per-agent risk breakdown.
+
+    Same emoji-led counters as the default report, but bucketed by
+    aid (agent / session). Adds a [sidechain] tag to aids that have
+    any sub-agent activity (Claude Code Task tool, OpenClaw nested
+    plugin call). Designed for multi-agent ops where an operator
+    needs to spot which specific aid is racking up BLOCKs.
+    """
+    cutoff_ns = (
+        int(time.time() - since_secs) * 1_000_000_000 if since_secs else 0
+    )
+
+    # aid → counters
+    by_aid: dict[str, dict[str, int]] = {}
+    aids_with_sidechain: set[str] = set()
+    n_total = 0
+
+    with audit_path.open(encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            fields = _extract_audit_fields(rec)
+            ts = int(fields["ts_ns"])  # type: ignore[arg-type]
+            if cutoff_ns and ts and ts < cutoff_ns:
+                continue
+            decision = str(fields["decision"])
+            reason = str(fields["reason"])
+            aid = str(fields.get("aid", "")) or "(no-aid)"
+            n_total += 1
+
+            counters = by_aid.setdefault(aid, {
+                "n_total": 0,
+                "n_safe": 0,
+                "n_approval": 0,
+                "n_block_destructive": 0,
+                "n_block_poisoned": 0,
+                "n_loop_aborted": 0,
+                "n_redundant": 0,
+            })
+            counters["n_total"] += 1
+
+            if decision == "ALLOW":
+                counters["n_safe"] += 1
+                if "redundant" in reason:
+                    counters["n_redundant"] += 1
+            elif decision == "REQUIRE_APPROVAL":
+                counters["n_approval"] += 1
+                if "loop" in reason or "step336" in reason:
+                    counters["n_loop_aborted"] += 1
+            elif decision == "BLOCK":
+                if "instruction_drift" in reason or "poisoned" in reason:
+                    counters["n_block_poisoned"] += 1
+                else:
+                    counters["n_block_destructive"] += 1
+
+            # PR-A multi-agent attribution — flag aids with any
+            # sidechain (subagent) activity.
+            if rec.get("is_sidechain"):
+                aids_with_sidechain.add(aid)
+
+    print("AegisData Agent Risk Report — by aid")
+    print("====================================")
+    if since_secs:
+        # since_secs comes from _parse_window_secs which we don't
+        # have the raw string for at this depth — just print seconds.
+        print(f"  window:    last {since_secs // 60} min")
+    print(f"  audit log: {audit_path}  ({n_total} entries, {len(by_aid)} aids)")
+    print()
+
+    if not by_aid:
+        print(_yellow("  no records in window"))
+        return 0
+
+    # Sort aids by total severity (BLOCKs heavily weighted), so the
+    # operator's eye lands on the most-suspicious aid first.
+    def _severity(c: dict[str, int]) -> int:
+        return (
+            c["n_block_destructive"] * 100
+            + c["n_block_poisoned"] * 100
+            + c["n_approval"] * 10
+            + c["n_total"]
+        )
+
+    sorted_aids = sorted(
+        by_aid.items(), key=lambda kv: -_severity(kv[1]),
+    )
+
+    for aid, c in sorted_aids:
+        flag = " [sidechain]" if aid in aids_with_sidechain else ""
+        aid_display = aid[:32] + flag
+        print(f"  ── {aid_display}")
+        print(f"     ✅  {c['n_safe']:>4} safe tool calls auto-approved")
+        print(f"     ⚠️   {c['n_approval']:>4} required approval")
+        print(f"     ⛔  {c['n_block_destructive']:>4} destructive blocked")
+        print(f"     ⛔  {c['n_block_poisoned']:>4} poisoned blocked")
+        print(f"     💸  {c['n_redundant']:>4} redundant deduplicated")
+        print(f"     🔁  {c['n_loop_aborted']:>4} loops aborted")
+        print(f"     ─── total: {c['n_total']}")
+        print()
+
+    print(f"  🧾  Full signed local audit: {audit_path}")
     return 0
 
 
@@ -4767,6 +4973,25 @@ def build_parser() -> argparse.ArgumentParser:
         "(default: 0.10).",
     )
     co_sum.add_argument("--json", action="store_true", help="Emit JSON instead of a table.")
+    co_sum.add_argument(
+        "--by-aid",
+        action="store_true",
+        help=(
+            "Show ONLY the per-aid (per-agent / per-session) cost "
+            "breakdown, expanded to all aids and sorted descending. "
+            "Designed for multi-agent ops (Telegram bot per channel, "
+            "Claude Code subagents, OpenClaw multi-provider, etc.)."
+        ),
+    )
+    co_sum.add_argument(
+        "--top",
+        type=int,
+        default=10,
+        help=(
+            "(--by-aid) Show only the top N aids by max cumulative $. "
+            "Default 10. Use --top 0 for all aids."
+        ),
+    )
     co_sum.set_defaults(fn=cmd_cost)
     co_rep = co_sub.add_parser(
         "replay",
@@ -5350,6 +5575,17 @@ def build_parser() -> argparse.ArgumentParser:
             "single line of JSON to stdout, instead of the human-readable "
             "rendering. Schema = the audit record itself, stable for "
             "jq / CI integration."
+        ),
+    )
+    rep.add_argument(
+        "--by-aid",
+        action="store_true",
+        help=(
+            "Multi-agent breakdown: print one risk-summary block per aid "
+            "(per-agent / per-session) instead of a single global aggregate. "
+            "Shows the same emoji counts the default report has, but "
+            "attributed to each agent. Sub-agent rows (Claude Code Task "
+            "subagents) are flagged with [sidechain]."
         ),
     )
     rep.set_defaults(fn=cmd_report)

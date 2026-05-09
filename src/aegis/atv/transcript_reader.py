@@ -53,6 +53,14 @@ class TranscriptContext:
     estimates because it can't see Anthropic's cache discounts.
     ``cumulative_billed_dollars`` is the cache-aware estimate that
     matches what Anthropic actually charges (within a few %).
+
+    ``current_event_is_sidechain`` and ``sidechain_event_count`` are
+    Claude Code subagent attribution (PR-A of multi-agent work).
+    Claude Code's Task tool spawns a sub-conversation with
+    ``isSidechain: true`` events sharing the parent session_id; this
+    flag lets ``aegis report`` / ``aegis cost`` distinguish "main
+    thread tool call" from "subagent tool call" without needing a
+    separate session id.
     """
 
     last_assistant_message: str = ""
@@ -64,6 +72,12 @@ class TranscriptContext:
     novelty_score: float = 0.0
     behavior_metrics: dict[str, float] = field(default_factory=dict)
     mcp_signals: dict[str, float] = field(default_factory=dict)
+
+    # PR-A multi-agent attribution
+    current_event_is_sidechain: bool = False
+    sidechain_event_count: int = 0
+    sidechain_tool_call_count: int = 0
+    last_parent_uuid: str = ""
 
 
 def read_transcript_context(
@@ -107,6 +121,16 @@ def read_transcript_context(
     user_messages = 0
     assistant_messages = 0
 
+    # PR-A subagent attribution — tracked per event during the loop.
+    # ``last_assistant_is_sidechain`` reflects the most-recent
+    # assistant turn (the one whose tool_use block we're about to
+    # evaluate); ``sidechain_event_count`` is a simple total over
+    # the whole transcript window.
+    last_assistant_is_sidechain = False
+    last_assistant_parent_uuid = ""
+    sidechain_event_count = 0
+    sidechain_tool_call_count = 0
+
     for line in raw.splitlines():
         line = line.strip()
         if not line:
@@ -118,8 +142,20 @@ def read_transcript_context(
         # Claude Code transcript is well-typed. Field names may vary by
         # version; we look for the common ones.
         kind = ev.get("type") or ev.get("role") or ""
+        # PR-A — Claude Code's Task tool stamps `isSidechain: true` on
+        # every event coming from a subagent. The flag is per-event
+        # (not per-session), so we track it for both assistant and
+        # tool_use kinds.
+        ev_is_sidechain = bool(ev.get("isSidechain", False))
+        if ev_is_sidechain:
+            sidechain_event_count += 1
         if kind in ("assistant", "model_response", "claude"):
             assistant_messages += 1
+            # The most-recent assistant turn determines whether the
+            # *next* tool call is from a subagent or the main thread.
+            last_assistant_is_sidechain = ev_is_sidechain
+            if ev_is_sidechain:
+                last_assistant_parent_uuid = str(ev.get("parentUuid", ""))
             # Claude Code's real schema nests message.{content,usage}.
             # Tests + legacy callers may pass content/usage at the top
             # level, so we look in both places.
@@ -152,6 +188,8 @@ def read_transcript_context(
                         )
                         tinput = blk.get("input") or blk.get("tool_input") or {}
                         tool_calls.append({"name": name, "input": tinput})
+                        if ev_is_sidechain:
+                            sidechain_tool_call_count += 1
                         if name.lower().startswith(("mcp__", "mcp:")):
                             mcp_call_count += 1
                         elif name in ("Bash", "shell", "execute_shell"):
@@ -196,6 +234,8 @@ def read_transcript_context(
             name = ev.get("name") or ev.get("tool_name") or ""
             tinput = ev.get("input") or ev.get("tool_input") or {}
             tool_calls.append({"name": name, "input": tinput})
+            if ev_is_sidechain:
+                sidechain_tool_call_count += 1
             if name.lower().startswith(("mcp__", "mcp:")):
                 mcp_call_count += 1
             elif name in ("Bash", "shell", "execute_shell"):
@@ -263,6 +303,10 @@ def read_transcript_context(
         novelty_score=novelty,
         behavior_metrics=behavior,
         mcp_signals=mcp_signals,
+        current_event_is_sidechain=last_assistant_is_sidechain,
+        sidechain_event_count=sidechain_event_count,
+        sidechain_tool_call_count=sidechain_tool_call_count,
+        last_parent_uuid=last_assistant_parent_uuid,
     )
 
 

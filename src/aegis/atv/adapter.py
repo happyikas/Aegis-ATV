@@ -206,7 +206,15 @@ def from_claude_code_payload_enhanced(
         agent_state_text=ctx.last_assistant_message,
         plan_text=ctx.current_plan or base.plan_text,
     )
-    merged_session_behavior = {**ctx.behavior_metrics, **drift_keys}
+    # PR-A subagent attribution — surface as numeric session_behavior
+    # signals so existing dashboards / step340 / `aegis report` see them
+    # without needing a schema bump.
+    subagent_keys: dict[str, float] = {
+        "sidechain_is_active": 1.0 if ctx.current_event_is_sidechain else 0.0,
+        "sidechain_event_count": float(ctx.sidechain_event_count),
+        "sidechain_tool_call_count": float(ctx.sidechain_tool_call_count),
+    }
+    merged_session_behavior = {**ctx.behavior_metrics, **drift_keys, **subagent_keys}
 
     return base.model_copy(update={
         "agent_state_text": ctx.last_assistant_message,
