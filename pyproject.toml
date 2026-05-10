@@ -50,6 +50,14 @@ local-llm = [
 [project.scripts]
 aegis = "tools.aegis_cli:main"
 
+[project.urls]
+Homepage      = "https://github.com/happyikas/Aegis-ATV"
+Repository    = "https://github.com/happyikas/Aegis-ATV"
+Issues        = "https://github.com/happyikas/Aegis-ATV/issues"
+Changelog     = "https://github.com/happyikas/Aegis-ATV/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/happyikas/Aegis-ATV#documentation"
+Roadmap       = "https://github.com/happyikas/Aegis-ATV/blob/main/ROADMAP.md"
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",
@@ -67,6 +75,34 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/aegis", "tools"]
+
+[tool.hatch.build.targets.sdist]
+# Slim sdist: keep source + policies + minimal docs, drop the
+# pre-rendered media kit (PDFs, GIFs, audio, screenshots) and the
+# large .npz baseline. Users who want those clone the GitHub repo;
+# `pip install aegis-mvp` should be fast and ~1 MB, not 17 MB.
+include = [
+    "/src",
+    "/tools",
+    "/policies",
+    "/scripts",
+    "/Dockerfile",
+    "/docker-compose.yml",
+    "/pyproject.toml",
+    "/README.md",
+    "/LICENSE",
+    "/NOTICE",
+    "/CHANGELOG.md",
+    "/PRICING.md",
+    "/ROADMAP.md",
+    "/SECURITY.md",
+    "/.env.example",
+]
+exclude = [
+    "**/__pycache__",
+    "**/*.pyc",
+    "**/.DS_Store",
+]
 
 [tool.ruff]
 line-length = 100
