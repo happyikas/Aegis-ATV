@@ -28,6 +28,17 @@ We aim to:
   (firewall bypass, audit forgery, key extraction). Lower-severity
   issues may take longer; we will keep you informed.
 
+## Threat model
+
+The full per-asset / per-threat / per-mitigation walk is in
+[`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md). Read that first if
+you're a third-party auditor — §8 there is a concrete checklist of
+tests to run, and §7 lists residual gaps we already know about (so
+you can spend your time on novel issues).
+
+The summary table below is the *short* version of the in-scope
+areas; the threat model has the full mapping with PR references.
+
 ## In scope
 
 | Area | Examples |
