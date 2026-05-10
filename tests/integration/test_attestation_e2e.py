@@ -144,7 +144,8 @@ def test_tee_quote_503_when_provider_none(aegis_app: FastAPI, monkeypatch) -> No
     client = TestClient(aegis_app)
     r = client.get("/attestation/tee-quote")
     assert r.status_code == 503
-    assert "TEE attestation not available" in r.json()["detail"]
+    # PR #159 — error envelope is now structured.
+    assert "TEE attestation not available" in r.json()["error"]["message"]
 
 
 def test_tee_quote_report_data_binds_burn_in_id(aegis_app: FastAPI, monkeypatch) -> None:
