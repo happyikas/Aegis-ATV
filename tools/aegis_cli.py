@@ -5668,6 +5668,8 @@ def cmd_audit(args: argparse.Namespace) -> int:
         return 0
 
     if args.action == "rotate":
+        from aegis.audit.rotation import slot_path
+
         if not audit_path.exists():
             print(_yellow(f"no active audit log at {audit_path}"))
             return 0
@@ -5679,10 +5681,15 @@ def cmd_audit(args: argparse.Namespace) -> int:
                 f"max_bytes={max_bytes()})"
             ))
             return 0
+        # The rotated file may be `.1.gz` (post-PR) or `.1` (legacy /
+        # gzip step failed). Report whichever is actually on disk so
+        # the operator sees the real filename.
+        new_path = slot_path(audit_path, new_top)
+        new_name = new_path.name if new_path else f"{audit_path.name}.{new_top}"
         print(_green(
             f"✓ rotated {audit_path.name} "
             f"({size_before // 1024} KB) → "
-            f"{audit_path.name}.{new_top}"
+            f"{new_name}"
         ))
         files = list_rotation_chain(audit_path)
         for f in files:
@@ -5695,8 +5702,91 @@ def cmd_audit(args: argparse.Namespace) -> int:
         ns = argparse.Namespace(audit=str(audit_path))
         return cmd_verify_audit(ns)
 
+    if args.action == "status":
+        return _cmd_audit_status(audit_path, json_out=getattr(args, "json", False))
+
+    if args.action == "prune":
+        return _cmd_audit_prune(audit_path, keep=int(args.keep))
+
     print(_red(f"unknown action: {args.action}"), file=sys.stderr)
     return 2
+
+
+def _cmd_audit_status(audit_path: Path, *, json_out: bool) -> int:
+    """`aegis audit status` — operator-friendly summary of disk usage.
+
+    Renders a human table by default; ``--json`` emits the raw dict
+    from :func:`aegis.audit.rotation.status` for jq / fleet-monitor
+    consumption.
+    """
+    from aegis.audit.rotation import status as rotation_status
+
+    s = rotation_status(audit_path)
+
+    if json_out:
+        print(json.dumps(s, indent=2, sort_keys=True, default=str))
+        return 0
+
+    active_kb = int(s["active_bytes"]) // 1024  # type: ignore[arg-type]
+    threshold_mb = int(s["threshold_bytes"]) // (1024 * 1024)  # type: ignore[arg-type]
+    total_kb = int(s["total_bytes"]) // 1024  # type: ignore[arg-type]
+    keep = int(s["max_rotations"])  # type: ignore[arg-type]
+    rotate_daily = bool(s["rotate_daily"])
+    slots = s["rotation_slots"]
+    assert isinstance(slots, list)
+
+    print(f"audit log:        {s['active_path']}")
+    if s["active_exists"]:
+        print(f"active size:      {active_kb} KB")
+    else:
+        print(f"active size:      {_yellow('(file absent — never written, or just rotated)')}")
+    print(f"rotation cap:     {threshold_mb} MB per slot, "
+          f"keep last {keep} slot(s)")
+    if rotate_daily:
+        print(f"daily rotation:   {_green('on')} (UTC midnight trigger)")
+    print(f"total disk used:  {total_kb} KB across active + rotations")
+    print()
+
+    if not slots:
+        print(_yellow("  no rotated files yet"))
+    else:
+        print(f"  {'slot':<6}  {'format':<10}  {'size (KB)':>10}  path")
+        print("  " + "─" * 70)
+        for slot in slots:
+            assert isinstance(slot, dict)
+            n = slot["n"]
+            fmt = "gzip" if slot["compressed"] else "plain (legacy)"
+            size_kb = int(slot["bytes"]) // 1024  # type: ignore[arg-type]
+            print(f"  .{n:<5}  {fmt:<10}  {size_kb:>10}  {slot['path']}")
+    return 0
+
+
+def _cmd_audit_prune(audit_path: Path, *, keep: int) -> int:
+    """`aegis audit prune --keep N` — drop rotation slots above N.
+
+    Operator surface for "free disk space immediately, even though
+    we're not at the size threshold yet". Useful before a backup,
+    before disk runs out, or to trim retention without lowering
+    ``AEGIS_AUDIT_MAX_ROTATIONS`` permanently.
+
+    Never touches the active file. ``keep=0`` removes every rotation.
+    """
+    from aegis.audit.rotation import prune as do_prune
+
+    if keep < 0:
+        print(_red(f"--keep must be >= 0, got {keep}"), file=sys.stderr)
+        return 2
+
+    removed = do_prune(audit_path, keep=keep)
+    if not removed:
+        print(_yellow(
+            f"no rotated files above slot {keep} — nothing to prune"
+        ))
+        return 0
+    print(_green(f"✓ pruned {len(removed)} rotated file(s):"))
+    for p in removed:
+        print(f"    {p.name}")
+    return 0
 
 
 def cmd_cost_record(args: argparse.Namespace) -> int:
@@ -6508,20 +6598,30 @@ def build_parser() -> argparse.ArgumentParser:
 
     au = sub.add_parser(
         "audit",
-        help="Inspect / rotate / verify the local audit log + rotations",
+        help="Inspect / rotate / prune / verify the local audit log + rotations",
     )
     au.add_argument(
         "action",
-        choices=["list", "rotate", "verify"],
+        choices=["list", "rotate", "verify", "status", "prune"],
         help=(
-            "list: table of audit files with sizes + record counts; "
+            "list:   table of audit files with sizes + record counts; "
             "rotate: manually trigger size-based rotation; "
-            "verify: walk the full rotation chain and check SHA3 integrity."
+            "verify: walk the full rotation chain and check SHA3 integrity; "
+            "status: operator summary of disk usage, compression, retention; "
+            "prune:  drop rotation slots above --keep (free disk space)."
         ),
     )
     au.add_argument(
         "--audit", default=None,
         help="audit log path (default: $AEGIS_LOCAL_AUDIT or ~/.aegis/audit.jsonl)",
+    )
+    au.add_argument(
+        "--keep", type=int, default=1,
+        help="(prune) retain rotation slots .1..N, drop the rest (default: 1)",
+    )
+    au.add_argument(
+        "--json", action="store_true",
+        help="(status) emit a JSON object instead of the human table",
     )
     au.set_defaults(fn=cmd_audit)
 
