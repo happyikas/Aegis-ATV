@@ -5813,6 +5813,117 @@ def cmd_cost_record(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_soak(args: argparse.Namespace) -> int:
+    """``aegis soak`` and ``aegis bench`` — load test harness.
+
+    ``aegis soak`` is the long-form (default 24h) production sign-
+    off command. ``aegis bench`` is the same harness with shorter
+    defaults (5 min / 50 RPS / fail-fast on first chain break) for
+    CI smoke + dev-loop validation.
+
+    The harness lives at :mod:`aegis.soak`; this function is just
+    the CLI glue (parse args → ``SoakConfig`` → ``run_soak`` →
+    print).
+    """
+    import asyncio
+
+    from aegis.soak import (
+        SoakConfig,
+        SoakThresholds,
+        _format_result_human,
+        run_soak,
+        write_result_json,
+    )
+
+    duration_s = _parse_duration(args.duration)
+    rate = _parse_rate(args.rate)
+
+    thresholds = SoakThresholds(
+        max_error_rate=float(args.max_error_rate),
+        max_p99_latency_ms=float(args.max_p99_ms),
+        require_clean_chain=not args.no_chain_check,
+        min_throughput_rps=float(args.min_throughput),
+    )
+    config = SoakConfig(
+        target_url=args.target,
+        duration_s=duration_s,
+        rate_per_s=rate,
+        concurrency=int(args.concurrency),
+        timeout_s=float(args.timeout),
+        seed=int(args.seed),
+        chain_verify_interval_s=float(args.chain_interval),
+        thresholds=thresholds,
+    )
+
+    print(f"target:          {config.target_url}")
+    print(f"duration:        {duration_s:.0f}s")
+    print(f"rate:            {rate:.2f}/s")
+    print(f"concurrency:     {config.concurrency}")
+    print("thresholds:")
+    print(f"  max error:     {thresholds.max_error_rate * 100:.2f}%")
+    print(f"  max p99:       {thresholds.max_p99_latency_ms:.0f}ms")
+    print(f"  chain check:   {'on' if thresholds.require_clean_chain else 'off'}")
+    if thresholds.min_throughput_rps > 0:
+        print(f"  min throughput:{thresholds.min_throughput_rps:.2f}/s")
+    print()
+    print("running ...")
+
+    def _progress(r: object) -> None:
+        # Lightweight live-progress printer.
+        from aegis.soak import SoakResult
+        if not isinstance(r, SoakResult):
+            return
+        elapsed = (time.time_ns() - r.started_at_ns) / 1e9
+        print(
+            f"  [{int(elapsed):>5}s] sent={r.n_requested} "
+            f"errors={r.n_errors} "
+            f"p99={r.latency.percentile(0.99):.1f}ms",
+            flush=True,
+        )
+
+    try:
+        result = asyncio.run(run_soak(
+            config,
+            log_progress_fn=_progress,
+        ))
+    except KeyboardInterrupt:
+        print(_yellow("\nsoak interrupted"))
+        return 130
+
+    print()
+    print(_format_result_human(result))
+
+    if args.output:
+        out_path = Path(args.output)
+        write_result_json(result, out_path)
+        print()
+        print(f"  JSON written: {out_path}")
+
+    return 0 if result.pass_overall else 1
+
+
+def _parse_duration(raw: str) -> float:
+    """Parse e.g. ``"24h"``, ``"30m"``, ``"3600"`` → seconds."""
+    raw = raw.strip().lower()
+    if raw.endswith("h"):
+        return float(raw[:-1]) * 3600
+    if raw.endswith("m"):
+        return float(raw[:-1]) * 60
+    if raw.endswith("s"):
+        return float(raw[:-1])
+    return float(raw)
+
+
+def _parse_rate(raw: str) -> float:
+    """Parse e.g. ``"10/s"``, ``"600/min"``, ``"50"`` → requests/sec."""
+    raw = raw.strip().lower()
+    if "/s" in raw:
+        return float(raw.replace("/s", ""))
+    if "/min" in raw or "/m" in raw:
+        return float(raw.replace("/min", "").replace("/m", "")) / 60.0
+    return float(raw)
+
+
 def cmd_cost_import(args: argparse.Namespace) -> int:
     if args.source == "transcript":
         from aegis.cost.transcript import import_into_wal
@@ -6624,6 +6735,98 @@ def build_parser() -> argparse.ArgumentParser:
         help="(status) emit a JSON object instead of the human table",
     )
     au.set_defaults(fn=cmd_audit)
+
+    # ── `aegis soak` and `aegis bench` — load test harness ──────────
+    # Two parsers sharing one handler. Defaults differ (soak is the
+    # 24h sign-off; bench is the 5min CI smoke).
+    def _add_soak_args(parser: argparse.ArgumentParser, *, smoke: bool) -> None:
+        parser.add_argument(
+            "--target", default="http://localhost:8000",
+            help="Sidecar base URL (default: http://localhost:8000)",
+        )
+        parser.add_argument(
+            "--duration", default="5m" if smoke else "24h",
+            help=(
+                "Total wall-clock duration (e.g. '24h', '30m', '300'). "
+                f"Default: {'5m (bench)' if smoke else '24h (soak)'}"
+            ),
+        )
+        parser.add_argument(
+            "--rate", default="50/s" if smoke else "10/s",
+            help=(
+                "Request rate (e.g. '10/s', '600/min', '50'). "
+                f"Default: {'50/s (bench)' if smoke else '10/s (soak)'}"
+            ),
+        )
+        parser.add_argument(
+            "--concurrency", type=int, default=8 if smoke else 16,
+            help="Worker pool size (default: 8 bench / 16 soak)",
+        )
+        parser.add_argument(
+            "--timeout", type=float, default=5.0,
+            help="Per-request timeout in seconds (default: 5.0)",
+        )
+        parser.add_argument(
+            "--seed", type=int, default=42,
+            help="RNG seed for reproducible payload mix (default: 42)",
+        )
+        parser.add_argument(
+            "--chain-interval", type=float, default=60.0 if smoke else 600.0,
+            help=(
+                "Audit-chain verify cadence in seconds "
+                f"(default: {'60 (bench)' if smoke else '600 (soak)'})"
+            ),
+        )
+        parser.add_argument(
+            "--max-error-rate", type=float, default=0.01,
+            help="Pass/fail: max allowed error rate (default: 0.01 = 1%%)",
+        )
+        parser.add_argument(
+            "--max-p99-ms", type=float, default=500.0,
+            help="Pass/fail: max p99 latency in ms (default: 500)",
+        )
+        parser.add_argument(
+            "--min-throughput", type=float, default=0.0,
+            help=(
+                "Pass/fail: min completed RPS (0 = no floor, default). "
+                "Catches backpressure that silently caps the harness."
+            ),
+        )
+        parser.add_argument(
+            "--no-chain-check", action="store_true",
+            help=(
+                "Skip the periodic audit-chain verification. "
+                "Use only when targeting a sidecar without chain access."
+            ),
+        )
+        parser.add_argument(
+            "--output",
+            help=(
+                "Write the JSON result to this path (atomic). "
+                "Useful for CI gates and fleet-monitor ingestion."
+            ),
+        )
+
+    soak_p = sub.add_parser(
+        "soak",
+        help=(
+            "Load test the sidecar — 24h-default duration, configurable "
+            "rate. Periodic audit-chain verification mid-run. Pass/fail "
+            "by error rate + p99 latency + chain integrity."
+        ),
+    )
+    _add_soak_args(soak_p, smoke=False)
+    soak_p.set_defaults(fn=cmd_soak)
+
+    bench_p = sub.add_parser(
+        "bench",
+        help=(
+            "Same harness as `aegis soak`, scaled down to 5min/50 RPS — "
+            "intended for CI smoke + dev-loop validation."
+        ),
+    )
+    _add_soak_args(bench_p, smoke=True)
+    bench_p.set_defaults(fn=cmd_soak)
 
     sc = sub.add_parser(
         "sidecar",
