@@ -38,6 +38,14 @@ class PhaseMetrics:
     false_negatives: int = 0
     human_overrides: int = 0
     human_total_decisions: int = 0
+    # Gap C (#146) — verdict counters for live provider-divergence
+    # detection at the L5 (per-aid × provider) layer. Populated by
+    # ``BurnInController.observe`` *without* needing ground-truth
+    # labels (which is why these are separate from
+    # true_positives/false_positives above). Default-zero is
+    # backward-compatible with serialized records from before Gap C.
+    block_count: int = 0
+    decision_count: int = 0
 
     @property
     def tpr(self) -> float:
@@ -59,6 +67,21 @@ class PhaseMetrics:
         return (
             self.human_overrides / self.human_total_decisions
             if self.human_total_decisions
+            else 0.0
+        )
+
+    @property
+    def block_rate(self) -> float:
+        """Fraction of observed verdicts that were BLOCK.
+
+        Gap C (#146): used by the live provider-divergence advisor
+        to compare a per-(aid, provider) baseline against its peers
+        sharing the same aid. Zero when no decisions have been
+        observed yet.
+        """
+        return (
+            self.block_count / self.decision_count
+            if self.decision_count
             else 0.0
         )
 
