@@ -22,7 +22,6 @@ from aegis.inference.registry import (
     load_registry,
 )
 
-
 # ── default path ──────────────────────────────────────────────────
 
 

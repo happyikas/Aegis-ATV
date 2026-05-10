@@ -18,7 +18,6 @@ from aegis.inference.multi_scrape import (
 from aegis.inference.registry import EndpointConfig, InferenceRegistry
 from aegis.inference.vllm_metrics import InferenceMetrics, VLLMMetricsError
 
-
 # ── fixtures ──────────────────────────────────────────────────────
 
 
