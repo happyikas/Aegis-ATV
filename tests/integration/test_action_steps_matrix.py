@@ -382,6 +382,30 @@ def _hook_audit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     aegis_local_hook.ADVISOR_ENABLED = True
     aegis_local_hook.ATMU_DISABLED = True
     aegis_local_hook._CALIBRATION_SINGLETON = None
+
+    # Activate a synthetic Pro license so the advisor gate
+    # (LICENSE_KEY.md §9 step 6) opens. The boot-once sentinel is
+    # flipped so the gate's lazy disk-init doesn't wipe this in-memory
+    # claim. Same pattern as ``demo/advisor_demo.py``.
+    import time as _t
+
+    from aegis.license import set_active_license
+    from aegis.license.verify import LicenseClaims
+
+    set_active_license(LicenseClaims(
+        tier="pro",
+        iss="https://license.test.example",
+        sub="action-steps-matrix-test",
+        aud="aegis-mvp",
+        iat=int(_t.time()) - 60,
+        exp=int(_t.time()) + 60 * 60 * 24 * 365,
+        license_id="lic_TEST_ACTION_STEPS",
+        seats=1,
+        features=(),
+        burnin_bind=None,
+        kid="aegis-license-TEST",
+    ))
+    monkeypatch.setattr(aegis_local_hook, "_license_booted", True)
     return audit
 
 

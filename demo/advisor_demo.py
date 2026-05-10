@@ -186,6 +186,31 @@ def run_session(audit_path: Path) -> None:
     # Reload the gate calibration cache in case prior tests poisoned it.
     aegis_local_hook._CALIBRATION_SINGLETON = None
 
+    # The advisor pipeline is Pro+ (LICENSE_KEY.md §9 step 6). The
+    # demo is a Pro-tier showcase; activate a synthetic Pro license in
+    # memory so the runtime gate (``advisor.full``) opens. We also
+    # mark the hook's boot-once sentinel as done so its lazy disk
+    # init won't wipe the in-memory state.
+    import time as _t
+
+    from aegis.license import set_active_license
+    from aegis.license.verify import LicenseClaims
+
+    set_active_license(LicenseClaims(
+        tier="pro",
+        iss="https://license.demo.example",
+        sub="advisor-demo",
+        aud="aegis-mvp",
+        iat=int(_t.time()) - 60,
+        exp=int(_t.time()) + 60 * 60 * 24 * 365,
+        license_id="lic_DEMO_ADVISOR",
+        seats=1,
+        features=(),
+        burnin_bind=None,
+        kid="aegis-license-DEMO",
+    ))
+    aegis_local_hook._license_booted = True
+
     # Reset the step336 loop detector — prior tests in the same
     # process may have seeded its window with same-session_id calls,
     # which would inflate the loop count and skew the demo's

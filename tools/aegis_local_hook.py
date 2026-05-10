@@ -515,6 +515,40 @@ def _should_invoke_advisor(
     return False, "no critical signals"
 
 
+# Boot-once sentinel for the license gate (LICENSE_KEY.md §9 step 6).
+# The hook is a fresh process per Claude Code call, so initialising
+# the in-memory active license from disk exactly once on the first
+# advisor invocation is enough — it avoids both per-call disk I/O AND
+# the test/demo footgun where re-init wipes a license that was set
+# via :func:`aegis.license.set_active_license`.
+_license_booted: bool = False
+
+
+def _license_grants_advisor_full() -> bool:
+    """Return True iff the active license grants ``advisor.full``.
+
+    First call per process: if no claims are active in memory, load
+    ``~/.aegis/license.jwt`` (or ``$AEGIS_LICENSE_PATH``). Subsequent
+    calls trust the in-memory state — callers that pre-set a license
+    via ``set_active_license`` (demos, tests, sidecar reloads) keep
+    control. Any exception is treated as "feature unavailable" so the
+    firewall path is never crashed by an auxiliary license failure.
+    """
+    global _license_booted
+    try:
+        from aegis.license import (
+            get_active_claims,
+            has_feature,
+            init_active_from_disk,
+        )
+        if not _license_booted and get_active_claims() is None:
+            init_active_from_disk()
+        _license_booted = True
+        return has_feature("advisor.full")
+    except Exception:  # noqa: BLE001 — defensive
+        return False
+
+
 def _compute_action_advice(
     *,
     inp: Any,
@@ -534,6 +568,19 @@ def _compute_action_advice(
     ``AEGIS_ADVISOR_PROVIDER`` (default ``dummy`` → heuristic).
     """
     if not ADVISOR_ENABLED:
+        return None
+    # License gate (LICENSE_KEY.md §9 step 6). The 8-advisor pipeline
+    # is a Pro+ feature; without an active license that grants
+    # ``advisor.full``, fall back silently to None (same observable
+    # behavior as ADVISOR_ENABLED=0). This catches the case where a
+    # Pro install + later license expiry: ADVISOR_ENABLED stays True
+    # in the hook env, but the license is gone, so the advisor must
+    # be inactive.
+    #
+    # Defensive: any error in the license module must NOT crash the
+    # hook. Per the docs/THREAT_MODEL.md §5 P-3 contract, the
+    # firewall path is never blocked by an auxiliary failure.
+    if not _license_grants_advisor_full():
         return None
     try:
         from aegis.atv.temporal import load_recent_history

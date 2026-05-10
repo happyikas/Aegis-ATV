@@ -33,6 +33,77 @@ def _isolated_audit(
     return audit
 
 
+@pytest.fixture
+def _pro_license_active(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Install a valid Pro license on disk so the advisor pipeline's
+    license gate (PR — LICENSE_KEY.md §9 step 6) returns True.
+
+    Tests that exercise the advisor surface must request this fixture
+    AND set ``ADVISOR_ENABLED=True`` — both are required for the
+    pipeline to fire under the post-step-6 gating contract. Solo
+    Free + ADVISOR_ENABLED=True now silently no-ops (intentional).
+
+    Implementation mirrors ``tests/unit/license/test_install_gate.py``
+    — uses the test issuer keypair from the license conftest to mint
+    a JWS, writes it to a tmp ``license.jwt``, points
+    ``AEGIS_LICENSE_PATH`` at it.
+    """
+    import base64
+    import json as _json
+    import time
+    import uuid
+
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PrivateKey,
+    )
+
+    from aegis.license import keys as license_keys
+
+    # Mint a fresh issuer keypair for this test + patch the runtime
+    # pinned dict to trust it.
+    priv = Ed25519PrivateKey.generate()
+    kid = "test-pro-license-fixture"
+    new_keys = dict(license_keys.ISSUER_PUBLIC_KEYS)
+    new_keys[kid] = priv.public_key()
+    monkeypatch.setattr(license_keys, "ISSUER_PUBLIC_KEYS", new_keys)
+
+    def _b64url(data: bytes) -> str:
+        return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+    iat = int(time.time()) - 60
+    exp = iat + 365 * 86400
+    header = {"alg": "EdDSA", "typ": "JWT", "kid": kid}
+    payload = {
+        "iss": "https://license.test.example",
+        "sub": f"user-{uuid.uuid4().hex[:8]}",
+        "aud": "aegis-mvp",
+        "tier": "pro",
+        "iat": iat,
+        "exp": exp,
+        "license_id": f"lic_pro_{uuid.uuid4().hex[:8]}",
+        "seats": 1,
+    }
+    h_b64 = _b64url(_json.dumps(header, separators=(",", ":")).encode())
+    p_b64 = _b64url(_json.dumps(payload, separators=(",", ":")).encode())
+    sig = priv.sign(f"{h_b64}.{p_b64}".encode("ascii"))
+    token = f"{h_b64}.{p_b64}.{_b64url(sig)}"
+
+    license_path = tmp_path / "license.jwt"
+    license_path.write_text(token)
+    monkeypatch.setenv("AEGIS_LICENSE_PATH", str(license_path))
+    monkeypatch.setenv("AEGIS_LICENSE_LOG_PATH", str(tmp_path / "license.log"))
+    # Reset the boot-once sentinel + in-memory state so the gate's
+    # lazy disk-init picks up THIS fixture's license (not a leftover
+    # from a prior test in the same process).
+    from aegis.license import set_active_license
+
+    set_active_license(None)
+    monkeypatch.setattr(aegis_local_hook, "_license_booted", False)
+    return None
+
+
 def _run(payload: dict | str) -> tuple[int, str, str]:
     raw = payload if isinstance(payload, str) else json.dumps(payload)
     stdin = io.StringIO(raw)
@@ -472,7 +543,9 @@ def test_advisor_gate_skips_routine_allow(
 
 
 def test_advisor_gate_fires_on_non_allow_verdict(
-    _isolated_audit: Path, monkeypatch: pytest.MonkeyPatch
+    _isolated_audit: Path,
+    _pro_license_active: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A BLOCK verdict is the textbook critical moment — gate fires and
     records the verdict-derived reason. action_advice is then composed
@@ -502,7 +575,9 @@ def test_advisor_gate_fires_on_non_allow_verdict(
 
 
 def test_advisor_always_env_bypasses_gate(
-    _isolated_audit: Path, monkeypatch: pytest.MonkeyPatch
+    _isolated_audit: Path,
+    _pro_license_active: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``AEGIS_ADVISOR_ALWAYS=1`` forces the advisor on every call —
     useful for burn-in collection / debugging."""
@@ -579,6 +654,7 @@ def test_advisor_failure_does_not_block_tool_call(
 
 def test_advisor_stderr_includes_action_step_verbs(
     _isolated_audit: Path,
+    _pro_license_active: None,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -607,6 +683,7 @@ def test_advisor_stderr_includes_action_step_verbs(
 
 def test_advisor_stderr_includes_advisor_recommendations(
     _isolated_audit: Path,
+    _pro_license_active: None,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -645,6 +722,7 @@ def test_advisor_stderr_includes_advisor_recommendations(
 
 def test_advisor_gate_fires_on_m12_cost_divergence(
     _isolated_audit: Path,
+    _pro_license_active: None,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
