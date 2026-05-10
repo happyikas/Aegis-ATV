@@ -1318,6 +1318,177 @@ def _cmd_metrics_multi(args: argparse.Namespace) -> int:
     return 0
 
 
+# ──────────────────────────────────────────────────────────────────
+# `aegis license` — Solo Pro / Team / Enterprise gate (issue #149)
+#
+# This is the CLI side of `src/aegis/license/`. Five actions:
+#
+#   activate <path>   — verify + persist `~/.aegis/license.jwt`
+#   status            — print active tier + license_id + expiry
+#   deactivate        — remove the file, revert to Solo Free
+#   verify <path>     — validate without activating (CI / dry-run)
+#   refresh           — opt-in CRL fetch (placeholder until issuer
+#                       service ships; see docs/LICENSE_KEY.md §3)
+#
+# All five are *no-ops* against the runtime today: no other code
+# path calls `has_feature()` yet, so activating a license doesn't
+# change behavior. The CLI exists so we can ship the issuer service
+# and start onboarding paying design partners *without* a runtime
+# code change blocking them. Wiring `--profile pro/cloud` etc. to
+# the gate is a separate follow-up PR per feature.
+# ──────────────────────────────────────────────────────────────────
+
+
+def cmd_license(args: argparse.Namespace) -> int:
+    """Dispatch on `args.action`."""
+    action = getattr(args, "action", None)
+    if action == "activate":
+        return _cmd_license_activate(args)
+    if action == "status":
+        return _cmd_license_status(args)
+    if action == "deactivate":
+        return _cmd_license_deactivate(args)
+    if action == "verify":
+        return _cmd_license_verify(args)
+    if action == "refresh":
+        return _cmd_license_refresh(args)
+    print(_red(f"[license] unknown action: {action!r}"), file=sys.stderr)
+    return 1
+
+
+def _cmd_license_activate(args: argparse.Namespace) -> int:
+    from aegis.license import LicenseVerifyError, activate_from_path
+
+    src = Path(args.path)
+    if not src.exists():
+        print(_red(f"[license] file not found: {src}"), file=sys.stderr)
+        return 1
+    try:
+        claims = activate_from_path(src)
+    except LicenseVerifyError as e:
+        print(
+            _red(f"[license] activate failed: {e.reason} — {e}"),
+            file=sys.stderr,
+        )
+        print(
+            "  License file at " + str(src) + " was NOT installed; "
+            "the runtime is in Solo Free mode.",
+            file=sys.stderr,
+        )
+        return 1
+    print(_green(f"✅ activated tier={claims.tier} license_id={claims.license_id}"))
+    print(f"   expires in {claims.expires_in_seconds // 86400}d")
+    print(f"   features: {len(claims.features) or '(tier defaults)'}")
+    return 0
+
+
+def _cmd_license_status(args: argparse.Namespace) -> int:
+    from aegis.license import (
+        init_active_from_disk,
+        license_path,
+    )
+
+    # Reload from disk so `status` always reflects what's persisted.
+    claims = init_active_from_disk()
+    path = license_path()
+
+    if claims is None:
+        print("license:    Solo Free (no key)")
+        print(f"file:       {path}  ({'exists but invalid' if path.exists() else 'absent'})")
+        if path.exists():
+            print()
+            print(
+                "  The license file exists but failed verification — "
+                "run `aegis license verify <path>` to see why."
+            )
+        return 0
+
+    print(f"tier:       {claims.tier}")
+    print(f"license_id: {claims.license_id}")
+    print(f"issuer kid: {claims.kid}")
+    print(f"seats:      {claims.seats}")
+    days = claims.expires_in_seconds // 86400
+    print(f"expires in: {days}d")
+    print(f"file:       {path}")
+    if claims.burnin_bind:
+        print(f"burnin_bind: {claims.burnin_bind[:16]}...")
+    explicit = (
+        f"explicit allow-list ({len(claims.features)} entries)"
+        if claims.features
+        else "(tier defaults)"
+    )
+    print(f"features:   {explicit}")
+    return 0
+
+
+def _cmd_license_deactivate(args: argparse.Namespace) -> int:
+    from aegis.license import deactivate
+
+    removed = deactivate()
+    if removed:
+        print(_green("✅ license removed; runtime is now Solo Free"))
+    else:
+        print(_yellow("[license] no license to remove (already Solo Free)"))
+    return 0
+
+
+def _cmd_license_verify(args: argparse.Namespace) -> int:
+    """Validate a license file without activating it. Useful for CI
+    pipelines that want to verify a key the issuer just minted, and
+    for the `--dry-run` UX before the user commits to activate."""
+    from aegis.license import LicenseVerifyError, verify_license
+
+    src = Path(args.path)
+    if not src.exists():
+        print(_red(f"[license] file not found: {src}"), file=sys.stderr)
+        return 1
+    token = src.read_text(encoding="utf-8").strip()
+    try:
+        claims = verify_license(token)
+    except LicenseVerifyError as e:
+        print(_red(f"❌ verify failed: {e.reason}"))
+        print(f"   {e}")
+        return 1
+    print(_green(
+        f"✅ verify OK: tier={claims.tier} "
+        f"license_id={claims.license_id} expires_in="
+        f"{claims.expires_in_seconds // 86400}d"
+    ))
+    return 0
+
+
+def _cmd_license_refresh(args: argparse.Namespace) -> int:
+    """Opt-in CRL refresh. Not yet implemented — the issuer service
+    that publishes the CRL doesn't exist yet. The command is shipped
+    in v0.2.x so the operator's muscle memory works once the issuer
+    service launches.
+
+    Per `docs/LICENSE_KEY.md §3 Layer B`, when this lights up it
+    fetches a small JSON CRL from the issuer endpoint and caches it
+    at `~/.aegis/license-crl.json`. The CRL fetch is the *only*
+    network call a paid-tier install ever makes; the default Solo
+    Free install never fetches anything.
+    """
+    print(_yellow(
+        "[license] refresh is not yet active — the issuer CRL endpoint"
+    ))
+    print(
+        "          doesn't exist yet (issuer service ships in a separate"
+    )
+    print(
+        "          PR). The Solo Free contract still holds: 0 outbound"
+    )
+    print(
+        "          requests on the default install."
+    )
+    print()
+    print(
+        "          Track issuer-service rollout: "
+        "https://github.com/happyikas/Aegis-ATV/issues/149"
+    )
+    return 0
+
+
 def cmd_rollback(args: argparse.Namespace) -> int:
     from aegis.rollback.snapshot import bulk_restore, restore
 
@@ -6072,6 +6243,61 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     mt.set_defaults(fn=cmd_metrics)
+
+    # ── `aegis license <action>` — Solo Pro / Team / Enterprise gate ──
+    lic = sub.add_parser(
+        "license",
+        help=(
+            "Activate / inspect / verify a Solo Pro / Team / Enterprise "
+            "license. Solo Free needs no license — these commands are "
+            "for paying tiers. See PRICING.md and docs/LICENSE_KEY.md."
+        ),
+    )
+    lic_sub = lic.add_subparsers(dest="action", required=True)
+
+    lic_activate = lic_sub.add_parser(
+        "activate",
+        help="Verify a license file and install it as the active license.",
+    )
+    lic_activate.add_argument(
+        "path", type=str,
+        help="Path to a JWS license token file (typically supplied by the issuer service).",
+    )
+
+    lic_sub.add_parser(
+        "status",
+        help=(
+            "Print the active tier + license_id + expiry. "
+            "Solo Free if no key is installed."
+        ),
+    )
+
+    lic_sub.add_parser(
+        "deactivate",
+        help="Remove the active license file; revert to Solo Free.",
+    )
+
+    lic_verify = lic_sub.add_parser(
+        "verify",
+        help=(
+            "Validate a license file *without* activating. "
+            "Useful for CI / dry-run before commit."
+        ),
+    )
+    lic_verify.add_argument(
+        "path", type=str, help="Path to a JWS license token file.",
+    )
+
+    lic_sub.add_parser(
+        "refresh",
+        help=(
+            "(Opt-in) Refresh the certificate-revocation list. "
+            "Not yet active — issuer service pending. See "
+            "docs/LICENSE_KEY.md §3."
+        ),
+    )
+
+    lic.set_defaults(fn=cmd_license)
 
     rb = sub.add_parser(
         "rollback",
