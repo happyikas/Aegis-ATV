@@ -70,40 +70,55 @@ class TestRotate:
     def test_simple_rotate_renames_to_dot_one(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
     ) -> None:
+        """Post-compression: rotation produces audit.jsonl.1.gz (not the
+        legacy plain .1). The active file is gone. Reading goes through
+        ``slot_path()`` which transparently picks up the .gz."""
         monkeypatch.setenv("AEGIS_AUDIT_MAX_ROTATIONS", "3")
+        from aegis.audit.rotation import open_rotation_text, slot_path
         f = tmp_path / "audit.jsonl"
         f.write_text("first\n")
         n = rotate(f)
         assert n == 1
-        assert (tmp_path / "audit.jsonl.1").exists()
+        slot1 = slot_path(f, 1)
+        assert slot1 is not None
+        assert slot1.name == "audit.jsonl.1.gz"
+        # Decompresses cleanly back to the original line.
+        assert "".join(open_rotation_text(slot1)).strip() == "first"
         assert not f.exists()
 
     def test_multiple_rotations_shift_correctly(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
     ) -> None:
         monkeypatch.setenv("AEGIS_AUDIT_MAX_ROTATIONS", "3")
+        from aegis.audit.rotation import open_rotation_text, slot_path
         f = tmp_path / "audit.jsonl"
         # Three rotations: each writes a fresh file then rotates.
         for i in range(3):
             f.write_text(f"batch-{i}\n")
             rotate(f)
-        # State: .1=batch-2, .2=batch-1, .3=batch-0
-        assert (tmp_path / "audit.jsonl.1").read_text() == "batch-2\n"
-        assert (tmp_path / "audit.jsonl.2").read_text() == "batch-1\n"
-        assert (tmp_path / "audit.jsonl.3").read_text() == "batch-0\n"
+        # State: .1=batch-2, .2=batch-1, .3=batch-0 — each compressed.
+        for n, expected in [(1, "batch-2"), (2, "batch-1"), (3, "batch-0")]:
+            p = slot_path(f, n)
+            assert p is not None
+            assert p.suffix == ".gz"
+            assert "".join(open_rotation_text(p)).strip() == expected
 
     def test_oldest_evicted_at_capacity(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
     ) -> None:
         monkeypatch.setenv("AEGIS_AUDIT_MAX_ROTATIONS", "2")
+        from aegis.audit.rotation import open_rotation_text, slot_path
         f = tmp_path / "audit.jsonl"
         for i in range(3):
             f.write_text(f"batch-{i}\n")
             rotate(f)
-        # Only .1 and .2 exist; oldest (batch-0, would have been .3) is gone.
-        assert (tmp_path / "audit.jsonl.1").read_text() == "batch-2\n"
-        assert (tmp_path / "audit.jsonl.2").read_text() == "batch-1\n"
-        assert not (tmp_path / "audit.jsonl.3").exists()
+        # Only slots 1 and 2 retained; slot 3 (batch-0) evicted.
+        s1 = slot_path(f, 1)
+        s2 = slot_path(f, 2)
+        s3 = slot_path(f, 3)
+        assert s1 is not None and "".join(open_rotation_text(s1)).strip() == "batch-2"
+        assert s2 is not None and "".join(open_rotation_text(s2)).strip() == "batch-1"
+        assert s3 is None    # neither .3 nor .3.gz
 
     def test_list_rotation_chain_oldest_first(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
@@ -115,9 +130,10 @@ class TestRotate:
             rotate(f)
         f.write_text("active\n")
         chain = list_rotation_chain(f)
-        # Names: .3, .2, .1, audit.jsonl
+        # Names: .3.gz, .2.gz, .1.gz, audit.jsonl
         assert [p.name for p in chain] == [
-            "audit.jsonl.3", "audit.jsonl.2", "audit.jsonl.1", "audit.jsonl",
+            "audit.jsonl.3.gz", "audit.jsonl.2.gz", "audit.jsonl.1.gz",
+            "audit.jsonl",
         ]
 
     def test_should_rotate_threshold_check(
@@ -194,22 +210,31 @@ class TestCrossFileChain:
     def test_verify_chain_detects_tamper_in_rotated_file(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
     ) -> None:
-        """A mutated record in audit.jsonl.2 must be caught by the
-        cross-file walker — not just by walking the active file."""
+        """A mutated record in a rotated (gzipped) file must be caught
+        by the cross-file walker — not just by walking the active file.
+        We tamper the .2.gz directly: decompress, mutate one record's
+        msg, recompress. The signature in this_hash no longer matches
+        the recomputed payload."""
+        import gzip
+
+        from aegis.audit.rotation import slot_path
         monkeypatch.setenv("AEGIS_AUDIT_MAX_BYTES", "300")
         monkeypatch.setenv("AEGIS_AUDIT_MAX_ROTATIONS", "5")
         f = tmp_path / "audit.jsonl"
         for i in range(40):
             append(f, {"i": i, "msg": f"hello {i}"})
 
-        # Tamper with audit.jsonl.2 (a rotated file)
-        rot2 = rotation_path(f, 2)
-        assert rot2.exists()
-        lines = rot2.read_text().strip().splitlines()
+        rot2 = slot_path(f, 2)
+        assert rot2 is not None
+        assert rot2.suffix == ".gz"
+
+        with gzip.open(rot2, "rt", encoding="utf-8") as fh:
+            lines = [ln.strip() for ln in fh if ln.strip()]
         rec = json.loads(lines[0])
         rec["msg"] = "TAMPERED"
         lines[0] = json.dumps(rec)
-        rot2.write_text("\n".join(lines) + "\n")
+        with gzip.open(rot2, "wt", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
 
         ok, broken, _ = verify_chain(f)
         assert ok is False
@@ -223,7 +248,15 @@ class TestCrossFileChain:
 def test_total_size_sums_active_and_rotations(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
+    """Post-compression: rotated slots are gzipped, so total bytes is
+    smaller than the plain-text sum. The contract is that ``total_size``
+    sums whatever's actually on disk — including the .gz files. We
+    don't assert an exact total because gzip's exact output is
+    implementation-specific; we assert ``active`` + ``rotated``
+    contributions are both non-zero, and the active file's size shows
+    up untouched."""
     monkeypatch.setenv("AEGIS_AUDIT_MAX_ROTATIONS", "3")
+    from aegis.audit.rotation import slot_path
     f = tmp_path / "audit.jsonl"
     f.write_text("a" * 100)
     rotate(f)
@@ -231,8 +264,15 @@ def test_total_size_sums_active_and_rotations(
     rotate(f)
     f.write_text("c" * 300)
 
-    # .2: 100, .1: 200, active: 300 → total 600
-    assert total_size(f) == 600
+    s1 = slot_path(f, 1)
+    s2 = slot_path(f, 2)
+    assert s1 is not None and s1.suffix == ".gz"
+    assert s2 is not None and s2.suffix == ".gz"
+    # Active file is plain → exactly 300 bytes contributed.
+    # Each rotated file is gzipped → some non-zero bytes.
+    rotated_bytes = s1.stat().st_size + s2.stat().st_size
+    assert total_size(f) == 300 + rotated_bytes
+    assert rotated_bytes > 0
 
 
 # ─────────────────────────────────────────────────────────────────────

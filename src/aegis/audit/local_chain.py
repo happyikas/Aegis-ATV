@@ -76,15 +76,46 @@ def _hash_record(prev_hash: str, record: dict[str, Any]) -> str:
 
 
 def _last_hash_in_file(path: Path) -> str | None:
-    """Tail-read one file. Returns its last ``this_hash`` or None.
+    """Read one file and return its last ``this_hash``, or None.
 
-    Cheap: reads the last 4 KB and parses the trailing JSON line.
+    For plain (uncompressed) files: tail-reads the last 4 KB so the
+    cost is constant regardless of file size.
+
+    For gzip-compressed rotation files: there's no random access, so
+    we decompress the whole file and walk it. Compressed rotations are
+    typically <10 MB after gzip (50 MB plain → ~6 MB gz), so this is
+    still cheap. The slow path only fires when the *active* file is
+    empty or missing (just-rotated state) and we need the most-recent
+    rotation's last hash; in steady state ``_last_hash`` returns from
+    the active file's tail and never touches a .gz.
+
     Returns ``None`` (not GENESIS_HASH) when the file is missing,
     empty, or has no parseable trailing record — :func:`_last_hash`
     uses None to fall through to the next-most-recent rotation.
     """
     if not path.exists() or path.stat().st_size == 0:
         return None
+
+    from aegis.audit.rotation import is_compressed, open_rotation_text
+
+    if is_compressed(path):
+        # Walk the whole decompressed stream; remember the last
+        # parseable this_hash we saw.
+        last: str | None = None
+        for raw in open_rotation_text(path):
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            h = rec.get("this_hash")
+            if isinstance(h, str) and h:
+                last = h
+        return last
+
+    # Plain text file — fast tail read.
     try:
         with path.open("rb") as fh:
             try:
@@ -113,19 +144,23 @@ def _last_hash(path: Path) -> str:
 
     The chain crosses file boundaries: if the active file is empty (we
     just rotated, or this is the first call ever), we fall back to
-    ``audit.jsonl.1`` so the new file's first record carries a
-    ``prev_hash`` matching the rotated file's last record. Without
-    this, every rotation would inject a GENESIS_HASH break and
-    ``aegis verify-audit`` would fail at the file boundary.
+    the most-recent rotation slot (``.1.gz`` or legacy ``.1``) so the
+    new file's first record carries a ``prev_hash`` matching the
+    rotated file's last record. Without this, every rotation would
+    inject a GENESIS_HASH break and ``aegis verify-audit`` would fail
+    at the file boundary.
     """
     h = _last_hash_in_file(path)
     if h is not None:
         return h
 
-    # Active file is empty / missing → look at the most-recent rotation.
-    from aegis.audit.rotation import rotation_path
+    # Active file is empty / missing → look at the most-recent
+    # rotation slot (.1.gz preferred, .1 legacy fallback).
+    from aegis.audit.rotation import slot_path
 
-    fallback = rotation_path(path, 1)
+    fallback = slot_path(path, 1)
+    if fallback is None:
+        return GENESIS_HASH
     h = _last_hash_in_file(fallback)
     return h if h is not None else GENESIS_HASH
 
@@ -267,23 +302,25 @@ def verify_chain(path: Path) -> tuple[bool, int, int]:
 
 
 def _first_record_prev_hash(path: Path) -> str | None:
-    """Read the very first record's ``prev_hash`` (cheap — one line)."""
+    """Read the very first record's ``prev_hash`` (cheap — one line).
+
+    Transparently handles gzip-compressed rotation files via
+    :func:`open_rotation_text`.
+    """
     if not path.exists() or path.stat().st_size == 0:
         return None
-    try:
-        with path.open(encoding="utf-8") as fh:
-            for raw in fh:
-                line = raw.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    return None
-                p = rec.get("prev_hash")
-                return p if isinstance(p, str) else None
-    except OSError:
-        pass
+    from aegis.audit.rotation import open_rotation_text
+
+    for raw in open_rotation_text(path):
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            return None
+        p = rec.get("prev_hash")
+        return p if isinstance(p, str) else None
     return None
 
 
@@ -291,6 +328,10 @@ def _verify_file_chain(
     path: Path, expected_prev: str, base_index: int,
 ) -> tuple[bool, int, int]:
     """Walk one file's chain. Returns (ok, broken_global_index, n_in_file).
+
+    Transparently handles gzip-compressed rotation files (post-Gap-B
+    compression PR) and legacy plain-text rotations via
+    :func:`open_rotation_text`.
 
     Signature handling: if a public key is loadable, every record
     that carries a ``signature`` field is verified against it. A
@@ -312,34 +353,35 @@ def _verify_file_chain(
     except Exception:  # noqa: BLE001 — verifier is best-effort
         public_key = None
 
+    from aegis.audit.rotation import open_rotation_text
+
     n_in_file = 0
-    with path.open(encoding="utf-8") as fh:
-        for raw in fh:
-            line = raw.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                return False, base_index + n_in_file, n_in_file
-            if rec.get("prev_hash") != expected_prev:
-                return False, base_index + n_in_file, n_in_file
-            recomputed = _hash_record(rec["prev_hash"], rec)
-            if recomputed != rec.get("this_hash"):
+    for raw in open_rotation_text(path):
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            return False, base_index + n_in_file, n_in_file
+        if rec.get("prev_hash") != expected_prev:
+            return False, base_index + n_in_file, n_in_file
+        recomputed = _hash_record(rec["prev_hash"], rec)
+        if recomputed != rec.get("this_hash"):
+            return False, base_index + n_in_file, n_in_file
+
+        # Signature check — only when both a key is configured AND
+        # the record carries a signature. Missing signature is
+        # tolerated; bad signature breaks the chain.
+        sig = rec.get("signature")
+        if public_key is not None and isinstance(sig, str) and sig:
+            from aegis.audit.signing import verify_hash_signature
+
+            if not verify_hash_signature(
+                rec["this_hash"], sig, public_key,
+            ):
                 return False, base_index + n_in_file, n_in_file
 
-            # Signature check — only when both a key is configured AND
-            # the record carries a signature. Missing signature is
-            # tolerated; bad signature breaks the chain.
-            sig = rec.get("signature")
-            if public_key is not None and isinstance(sig, str) and sig:
-                from aegis.audit.signing import verify_hash_signature
-
-                if not verify_hash_signature(
-                    rec["this_hash"], sig, public_key,
-                ):
-                    return False, base_index + n_in_file, n_in_file
-
-            expected_prev = rec["this_hash"]
-            n_in_file += 1
+        expected_prev = rec["this_hash"]
+        n_in_file += 1
     return True, -1, n_in_file
