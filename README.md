@@ -390,6 +390,14 @@ See [`tools/README.md`](tools/README.md) for install + tool mapping.
 | Doc | What's in it |
 |---|---|
 | [`docs/RELEASE_PIPELINE.md`](docs/RELEASE_PIPELINE.md) | Release runbook — PyPI trusted publisher + GHCR multi-arch image. Tag-triggered, no API tokens. Dry-run paths, rollback, sdist size budget |
+| [`docs/SOAK_TEST.md`](docs/SOAK_TEST.md) | Production sign-off load-test runbook — `aegis soak` (24h) / `aegis bench` (5min CI). Pass/fail thresholds, hardware sizing, common failure modes, sign-off template |
+
+### Security
+
+| Doc | What's in it |
+|---|---|
+| [`SECURITY.md`](SECURITY.md) | Vulnerability reporting policy + in-scope / out-of-scope summary |
+| [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) | **★ Full threat model** — roles + trust boundaries, STRIDE walk with PR-referenced mitigations, cross-cutting design properties, cryptographic primitives + assumptions, residual gaps acknowledged, **§8 third-party auditor checklist** |
 
 ### Enterprise sales / design partner
 
