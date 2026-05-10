@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -106,7 +107,76 @@ def test_parse_window_secs(spec: str, secs: int) -> None:
 
 
 @pytest.fixture
-def isolated_install(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+def _install_license_active(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Iterator[None]:
+    """Activate a Team-tier license on disk for the duration of the test.
+
+    The new install gate (LICENSE_KEY.md §9 steps 5 + 7) refuses
+    ``--mode sidecar`` without ``sidecar.multi-tenant`` and
+    ``--profile pro/cloud`` without ``advisor.full``. Tests in this file
+    pre-date the gate; rather than adding a sidecar / pro license check
+    to every install test, we install a Team license up-front so the
+    gate is transparent and existing assertions still hold.
+
+    Team includes both ``sidecar.multi-tenant`` and ``advisor.full`` —
+    sufficient to pass every install path these tests exercise.
+    """
+    import base64
+    import time as _time
+
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PrivateKey,
+    )
+
+    from aegis import license as license_mod
+    from aegis.license import keys as keys_mod
+
+    priv = Ed25519PrivateKey.generate()
+    kid = "aegis-license-AEGIS-CLI-TEST-KEY"
+    new_keys = dict(keys_mod.ISSUER_PUBLIC_KEYS)
+    new_keys[kid] = priv.public_key()
+    monkeypatch.setattr(keys_mod, "ISSUER_PUBLIC_KEYS", new_keys)
+
+    def _b64url(data: bytes) -> str:
+        return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+    iat = int(_time.time()) - 60
+    payload = {
+        "iss": "https://license.test.example",
+        "sub": "user_TEST",
+        "aud": "aegis-mvp",
+        "tier": "team",
+        "iat": iat,
+        "exp": iat + 60 * 60 * 24 * 365,
+        "license_id": "lic_AEGIS_CLI_TEST_01",
+        "seats": 5,
+    }
+    header = {"alg": "EdDSA", "typ": "JWT", "kid": kid}
+    h_b64 = _b64url(json.dumps(header, separators=(",", ":")).encode())
+    p_b64 = _b64url(json.dumps(payload, separators=(",", ":")).encode())
+    sig = priv.sign(f"{h_b64}.{p_b64}".encode("ascii"))
+    token = f"{h_b64}.{p_b64}.{_b64url(sig)}"
+
+    license_path = tmp_path / "license.jwt"
+    license_path.write_text(token)
+    monkeypatch.setenv("AEGIS_LICENSE_PATH", str(license_path))
+    monkeypatch.setenv(
+        "AEGIS_LICENSE_LOG_PATH", str(tmp_path / "license.log")
+    )
+    # Ensure the in-memory active license is clean before / after so the
+    # gate's init_active_from_disk() call is the source of truth.
+    license_mod.set_active_license(None)
+    yield
+    license_mod.set_active_license(None)
+
+
+@pytest.fixture
+def isolated_install(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    _install_license_active: None,
+) -> Path:
     """Redirect SETTINGS_PATH, hook scripts, and plugin manifest into tmp dirs.
 
     cmd_install reads/writes module-level constants, so tests must
@@ -264,7 +334,9 @@ def test_main_dispatches_via_argv(
 
 @pytest.fixture
 def isolated_install_phase5(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    _install_license_active: None,
 ) -> Path:
     """Like ``isolated_install`` but also patches the local-hook + Stop-hook
     + plugin-manifest paths so a per-test sandbox is fully self-contained.

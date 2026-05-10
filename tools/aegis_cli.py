@@ -4130,6 +4130,100 @@ def _cmd_install_openclaw_stub(target: str) -> int:
     return 0
 
 
+def _install_license_gate_ok(*, mode: str, profile: str) -> bool:
+    """License gate for ``aegis install`` (LICENSE_KEY.md §9 steps 5 + 7).
+
+    Returns True when the install can proceed. Returns False AND prints
+    a structured message to stderr when the active license doesn't
+    grant the requested tier's feature. The free / local path always
+    returns True (no gate).
+
+    Gates:
+      * ``--mode sidecar`` → requires ``sidecar.multi-tenant`` (Team+)
+      * ``--mode local --profile pro/cloud`` → requires ``advisor.full`` (Pro+)
+
+    The license is reloaded from disk at this check so a freshly-
+    activated key takes effect without restarting the shell.
+    """
+    # Free path: no gate.
+    free_install = mode == "local" and profile == "free"
+    if free_install:
+        return True
+
+    # Defensive: any error loading the license module/state must NOT
+    # break install. Treat unreadable license state as Solo Free; the
+    # gate refuses the requested upgrade with the standard message.
+    try:
+        from aegis.license import get_active_tier, has_feature, init_active_from_disk
+        init_active_from_disk()
+    except Exception:  # noqa: BLE001 — defensive
+        # Fall through with safe defaults.
+        def has_feature(_: str) -> bool:  # type: ignore[no-redef]
+            return False
+
+        def get_active_tier() -> str:  # type: ignore[no-redef]
+            return "free"
+
+    if mode == "sidecar":
+        if has_feature("sidecar.multi-tenant"):
+            return True
+        active = get_active_tier()
+        print(
+            _red(
+                "  --mode sidecar requires a Team or Enterprise license."
+            ),
+            file=sys.stderr,
+        )
+        print(
+            f"  Active tier: {active}. To proceed:",
+            file=sys.stderr,
+        )
+        print(
+            "    • `aegis license activate <key.jwt>` (Team / Enterprise key), OR",
+            file=sys.stderr,
+        )
+        print(
+            "    • `aegis install --mode local` (Solo Free / Pro in-process hook)",
+            file=sys.stderr,
+        )
+        print(
+            "  See PRICING.md for tier breakdown.",
+            file=sys.stderr,
+        )
+        return False
+
+    if mode == "local" and profile in ("pro", "cloud"):
+        if has_feature("advisor.full"):
+            return True
+        active = get_active_tier()
+        print(
+            _red(
+                f"  --profile {profile} requires a Pro / Team / Enterprise license."
+            ),
+            file=sys.stderr,
+        )
+        print(
+            f"  Active tier: {active}. To proceed:",
+            file=sys.stderr,
+        )
+        print(
+            "    • `aegis license activate <key.jwt>` (Pro / Team / Enterprise), OR",
+            file=sys.stderr,
+        )
+        print(
+            "    • `aegis install --mode local --profile free` "
+            "(the unconditional Solo Free tier)",
+            file=sys.stderr,
+        )
+        print(
+            "  See PRICING.md for tier breakdown.",
+            file=sys.stderr,
+        )
+        return False
+
+    return True
+
+
 def cmd_install(args: argparse.Namespace) -> int:
     """Idempotently install Aegis hooks into ``~/.claude/settings.json``.
 
@@ -4174,6 +4268,17 @@ def cmd_install(args: argparse.Namespace) -> int:
 
     mode = args.mode
     profile = getattr(args, "profile", "free")
+
+    # ── License gate ──────────────────────────────────────────────
+    # Per docs/LICENSE_KEY.md §9 steps 5 + 7. Refuse paid tiers when
+    # the active license doesn't grant the feature. This check runs
+    # *before* the auto-pull step so we never waste time downloading
+    # GGUF models the user can't legally activate.
+    #
+    # Solo Free path: profile=free + mode=local. No license needed,
+    # no check fires. The fast path is unaffected.
+    if not _install_license_gate_ok(mode=mode, profile=profile):
+        return 1
     if mode == "local":
         if profile not in VALID_LOCAL_PROFILES:
             print(
