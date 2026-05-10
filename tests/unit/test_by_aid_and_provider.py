@@ -408,3 +408,156 @@ def test_default_off() -> None:
     parser = aegis_cli.build_parser()
     args = parser.parse_args(["report"])
     assert args.by_aid_and_provider is False
+
+
+# ── PR-L Gap B (#145) — --with-live cross-reference ───────────────
+
+
+def test_with_live_arg_parses() -> None:
+    parser = aegis_cli.build_parser()
+    args = parser.parse_args([
+        "report", "--by-aid-and-provider", "--with-live",
+    ])
+    assert args.with_live is True
+
+
+def test_with_live_default_off() -> None:
+    parser = aegis_cli.build_parser()
+    args = parser.parse_args(["report", "--by-aid-and-provider"])
+    assert args.with_live is False
+
+
+def test_with_live_no_registry_emits_skip_note(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Report runs successfully when --with-live is set but no
+    inference.toml exists; emits a single yellow note instead of
+    failing."""
+    audit = _write_audit(tmp_path, [
+        _rec(aid="A", provider="anthropic", decision="ALLOW"),
+    ])
+    # Point the registry env at a path that doesn't exist.
+    monkeypatch.setenv(
+        "AEGIS_INFERENCE_REGISTRY", str(tmp_path / "missing.toml"),
+    )
+    rc = aegis_cli._cmd_report_by_aid_and_provider(
+        audit, since_secs=None, with_live=True,
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "no inference.toml found" in out
+    # Aid block still rendered.
+    assert "A" in out
+
+
+def test_with_live_renders_metrics_under_aid_block(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the registry has the agent and the scrape succeeds, the
+    aid block gets a 'live: KV=...' line."""
+    audit = _write_audit(tmp_path, [
+        _rec(aid="agent-a", provider="anthropic", decision="ALLOW"),
+    ])
+    # Write a registry that points at a fake URL; we'll mock the
+    # scrape function so no real network traffic happens.
+    reg = tmp_path / "inference.toml"
+    reg.write_text(
+        '[endpoints.agent-a]\n'
+        'provider = "vllm"\n'
+        'metrics_url = "http://test/metrics"\n'
+    )
+    monkeypatch.setenv("AEGIS_INFERENCE_REGISTRY", str(reg))
+
+    from unittest.mock import patch
+
+    from aegis.inference.vllm_metrics import InferenceMetrics
+
+    fake = InferenceMetrics(
+        captured_at_ns=1, kv_cache_used_pct=0.87,
+        requests_running=2, requests_waiting=0,
+    )
+    with patch(
+        "aegis.inference.multi_scrape.scrape_vllm_metrics",
+        return_value=fake,
+    ):
+        rc = aegis_cli._cmd_report_by_aid_and_provider(
+            audit, since_secs=None, with_live=True,
+        )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "live: KV=87.0%" in out
+    assert "queue=2/0" in out
+    assert "band=high" in out
+
+
+def test_with_live_unreachable_renders_unreachable_line(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audit = _write_audit(tmp_path, [
+        _rec(aid="agent-a", provider="anthropic", decision="ALLOW"),
+    ])
+    reg = tmp_path / "inference.toml"
+    reg.write_text(
+        '[endpoints.agent-a]\n'
+        'provider = "vllm"\n'
+        'metrics_url = "http://test/metrics"\n'
+    )
+    monkeypatch.setenv("AEGIS_INFERENCE_REGISTRY", str(reg))
+
+    from unittest.mock import patch
+
+    from aegis.inference.vllm_metrics import VLLMMetricsError
+
+    with patch(
+        "aegis.inference.multi_scrape.scrape_vllm_metrics",
+        side_effect=VLLMMetricsError("connection refused"),
+    ):
+        rc = aegis_cli._cmd_report_by_aid_and_provider(
+            audit, since_secs=None, with_live=True,
+        )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "live:" in out
+    assert "unreachable" in out
+    assert "connection refused" in out
+
+
+def test_with_live_aid_not_in_registry_renders_not_in_registry(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An aid that has audit records but no entry in inference.toml
+    renders 'live: not in registry' so the operator can see the gap."""
+    audit = _write_audit(tmp_path, [
+        _rec(aid="agent-untracked", provider="anthropic", decision="ALLOW"),
+    ])
+    reg = tmp_path / "inference.toml"
+    reg.write_text(
+        '[endpoints.agent-other]\n'
+        'provider = "vllm"\n'
+        'metrics_url = "http://test/metrics"\n'
+    )
+    monkeypatch.setenv("AEGIS_INFERENCE_REGISTRY", str(reg))
+
+    from unittest.mock import patch
+
+    from aegis.inference.vllm_metrics import InferenceMetrics
+
+    with patch(
+        "aegis.inference.multi_scrape.scrape_vllm_metrics",
+        return_value=InferenceMetrics(captured_at_ns=1),
+    ):
+        rc = aegis_cli._cmd_report_by_aid_and_provider(
+            audit, since_secs=None, with_live=True,
+        )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "agent-untracked" in out
+    assert "live: not in registry" in out
