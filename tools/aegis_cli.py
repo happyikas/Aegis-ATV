@@ -1091,6 +1091,16 @@ def cmd_health(_: argparse.Namespace) -> int:
 def cmd_metrics(args: argparse.Namespace) -> int:
     """Scrape self-hosted inference server /metrics and pretty-print.
 
+    Three modes:
+
+    * Default — single endpoint via ``--vllm-url`` (legacy behaviour,
+      backward compatible).
+    * ``--all`` — read ``~/.aegis/inference.toml`` and scrape every
+      configured endpoint concurrently. Cloud / disabled endpoints
+      are listed but not scraped. Gap B (issue #145) per-aid view.
+    * ``--aid <name>`` — pick exactly one endpoint from the registry
+      by its aid label.
+
     Currently supports vLLM (OpenClaw + Local OSS LLM track only).
     Cloud LLM tracks have no equivalent — returns a friendly hint.
     """
@@ -1100,6 +1110,10 @@ def cmd_metrics(args: argparse.Namespace) -> int:
         VLLMMetricsError,
         scrape_vllm_metrics,
     )
+
+    # PR-L (Gap B) — multi-endpoint paths read the registry.
+    if getattr(args, "all", False) or getattr(args, "aid", None):
+        return _cmd_metrics_multi(args)
 
     try:
         snap = scrape_vllm_metrics(
@@ -1167,6 +1181,140 @@ def cmd_metrics(args: argparse.Namespace) -> int:
     print("─" * 60)
     if snap.saturated():
         print(_red("  ⚠ inference server saturated — see kv-cache-optimizer advisor"))
+    return 0
+
+
+def _cmd_metrics_multi(args: argparse.Namespace) -> int:
+    """Multi-endpoint scrape (Gap B / issue #145).
+
+    Reads ``~/.aegis/inference.toml`` (or ``$AEGIS_INFERENCE_REGISTRY``)
+    and scrapes every enabled vLLM endpoint concurrently. Cloud /
+    disabled endpoints are recorded as ``EndpointSkipped`` so the
+    table remains complete.
+
+    Returns 0 even when some endpoints are unreachable — the scrape is
+    a best-effort observation, not a security gate. Returns 1 only
+    when:
+
+    * the registry file is malformed (``InferenceRegistryError``),
+    * ``--aid <name>`` was passed but no such endpoint exists,
+    * the registry is empty (nothing to scrape — likely a config
+      mistake the user wants to know about).
+    """
+    from dataclasses import asdict
+
+    from aegis.inference import (
+        EndpointSkipped,
+        EndpointUnreachable,
+        InferenceMetrics,
+        InferenceRegistryError,
+        load_registry,
+        scrape_all,
+    )
+
+    try:
+        registry = load_registry()
+    except InferenceRegistryError as e:
+        print(_red(f"[metrics] inference.toml: {e}"), file=sys.stderr)
+        return 1
+
+    if registry.is_empty():
+        path = registry.source_path or "~/.aegis/inference.toml"
+        print(
+            _yellow(
+                f"[metrics] no endpoints in registry ({path}) — "
+                "see docs/INFERENCE_REGISTRY.md for the schema."
+            ),
+            file=sys.stderr,
+        )
+        return 1
+
+    aid_filter = getattr(args, "aid", None)
+    if aid_filter:
+        ep = registry.by_aid(aid_filter)
+        if ep is None:
+            print(
+                _red(
+                    f"[metrics] no endpoint with aid={aid_filter!r} "
+                    f"in {registry.source_path}. "
+                    f"Configured aids: {sorted(e.aid for e in registry.endpoints)}"
+                ),
+                file=sys.stderr,
+            )
+            return 1
+        # Filter to a single-row registry by replacing the tuple. The
+        # frozen dataclass requires dataclasses.replace, but
+        # InferenceRegistry is small enough that constructing a new
+        # one is cleanest.
+        from aegis.inference import InferenceRegistry
+
+        registry = InferenceRegistry(
+            endpoints=(ep,),
+            defaults_timeout_s=registry.defaults_timeout_s,
+            source_path=registry.source_path,
+        )
+
+    results = scrape_all(registry)
+
+    if args.json:
+        # Stable JSON shape: {aid: {kind: ..., ...}} so a downstream
+        # jq pipe can dispatch on `kind`.
+        out: dict[str, dict[str, Any]] = {}
+        for aid, r in sorted(results.items()):
+            if isinstance(r, InferenceMetrics):
+                row = asdict(r)
+                row["kind"] = "metrics"
+                row["kv_cache_pressure_band"] = r.kv_cache_pressure_band()
+                row["saturated"] = r.saturated()
+            elif isinstance(r, EndpointUnreachable):
+                row = asdict(r)
+                row["kind"] = "unreachable"
+            else:
+                assert isinstance(r, EndpointSkipped)
+                row = asdict(r)
+                row["kind"] = "skipped"
+            out[aid] = row
+        print(json.dumps(out, indent=2, sort_keys=True))
+        return 0
+
+    # Human-readable table.
+    print(f"inference.toml  ·  {registry.source_path}")
+    print(f"{len(results)} endpoint(s)")
+    print("─" * 78)
+    print(
+        f"{'aid':<24}  {'provider':<10}  {'kv':>6}  {'queue':>10}  status"
+    )
+    print("─" * 78)
+    for aid, r in sorted(results.items()):
+        if isinstance(r, InferenceMetrics):
+            band = r.kv_cache_pressure_band()
+            band_color = {
+                "low": _green,
+                "moderate": _green,
+                "high": _yellow,
+                "critical": _red,
+            }[band]
+            ep = registry.by_aid(aid)
+            provider = ep.provider if ep else "?"
+            queue = f"{r.requests_running}/{r.requests_waiting}"
+            print(
+                f"{aid:<24}  {provider:<10}  "
+                f"{r.kv_cache_used_pct * 100:5.1f}%  "
+                f"{queue:>10}  {band_color(band)}"
+            )
+        elif isinstance(r, EndpointUnreachable):
+            print(
+                f"{aid:<24}  {'vllm':<10}  {'  N/A':>6}  {'      N/A':>10}  "
+                f"{_red('unreachable')}  ({r.reason[:40]})"
+            )
+        else:
+            assert isinstance(r, EndpointSkipped)
+            label = r.provider_name or r.provider
+            print(
+                f"{aid:<24}  {label[:10]:<10}  {'  N/A':>6}  {'      N/A':>10}  "
+                f"{_yellow('skipped')}  ({r.reason[:40]})"
+            )
+    print("─" * 78)
     return 0
 
 
@@ -2116,7 +2264,10 @@ def cmd_report(args: argparse.Namespace) -> int:
         and getattr(args, "by_provider", False)
     )
     if by_aid_and_provider:
-        return _cmd_report_by_aid_and_provider(audit_path, since_secs)
+        return _cmd_report_by_aid_and_provider(
+            audit_path, since_secs,
+            with_live=getattr(args, "with_live", False),
+        )
 
     # ── PR-C: --by-aid multi-agent breakdown ─────────────────────────
     if getattr(args, "by_aid", False):
@@ -2571,6 +2722,7 @@ def _cmd_report_by_provider(
 
 def _cmd_report_by_aid_and_provider(
     audit_path: Path, since_secs: int | None,
+    *, with_live: bool = False,
 ) -> int:
     """`aegis report --by-aid-and-provider` — multi-agent + multi-LLM
     cross-grouping (Gap A).
@@ -2590,6 +2742,15 @@ def _cmd_report_by_aid_and_provider(
     Records without aid bucket under '(no-aid)'; without provider
     under '(no-provider)'. The bucket pair '(no-aid)' × '(no-
     provider)' is collapsed to a single row.
+
+    Args:
+        audit_path: Path to the local ``audit.jsonl``.
+        since_secs: Optional time window (seconds back from now).
+        with_live: Gap B (issue #145). When True and
+            ``~/.aegis/inference.toml`` exists, also scrapes per-aid
+            live metrics from the registry and prints a "live: KV=
+            87% queue=2/0" line under each aid block. Cloud /
+            unreachable / unregistered aids print "live: n/a".
     """
     cutoff_ns = (
         int(time.time() - since_secs) * 1_000_000_000 if since_secs else 0
@@ -2644,6 +2805,40 @@ def _cmd_report_by_aid_and_provider(
                 else:
                     counters["n_block_destructive"] += 1
 
+    # PR-L Gap B (issue #145) — pre-fetch live metrics once if
+    # --with-live is set so each aid block can render its row
+    # without N separate scrape round-trips during the print loop.
+    live_results: dict[str, Any] = {}
+    live_registry_note: str | None = None
+    if with_live:
+        try:
+            from aegis.inference import (
+                InferenceRegistryError,
+                load_registry,
+                scrape_all,
+            )
+
+            try:
+                registry = load_registry()
+            except InferenceRegistryError as e:
+                live_registry_note = (
+                    f"--with-live: inference.toml malformed ({e}) "
+                    "— skipping live cross-reference"
+                )
+            else:
+                if registry.is_empty():
+                    live_registry_note = (
+                        "--with-live: no inference.toml found at "
+                        f"{registry.source_path} — skipping live "
+                        "cross-reference"
+                    )
+                else:
+                    live_results = scrape_all(registry)
+        except ImportError:
+            live_registry_note = (
+                "--with-live: aegis.inference module unavailable"
+            )
+
     print("AegisData Agent Risk Report — by aid × provider")
     print("================================================")
     if since_secs:
@@ -2655,6 +2850,8 @@ def _cmd_report_by_aid_and_provider(
         f"{n_aids} aids × {n_providers} providers, "
         f"{len(by_pair)} pairs)"
     )
+    if live_registry_note:
+        print(f"  {_yellow(live_registry_note)}")
     print()
 
     if not by_pair:
@@ -2742,6 +2939,33 @@ def _cmd_report_by_aid_and_provider(
                         f"providers BLOCK at up to "
                         f"{max_rate[1] * 100:.1f}% — investigate"
                     )
+
+        # PR-L Gap B — live cross-reference under each aid block.
+        if with_live and live_results:
+            from aegis.inference import (
+                EndpointSkipped,
+                EndpointUnreachable,
+                InferenceMetrics,
+            )
+
+            r = live_results.get(aid)
+            if r is None:
+                print("     live: not in registry")
+            elif isinstance(r, InferenceMetrics):
+                print(
+                    f"     live: KV={r.kv_cache_used_pct * 100:.1f}%  "
+                    f"queue={r.requests_running}/{r.requests_waiting}  "
+                    f"band={r.kv_cache_pressure_band()}"
+                )
+            elif isinstance(r, EndpointUnreachable):
+                print(
+                    f"     live: {_red('unreachable')} ({r.reason[:50]})"
+                )
+            else:
+                assert isinstance(r, EndpointSkipped)
+                print(
+                    f"     live: {_yellow('skipped')} ({r.reason[:50]})"
+                )
         print()
 
     if drift_alerts:
@@ -5811,7 +6035,26 @@ def build_parser() -> argparse.ArgumentParser:
         default="http://localhost:8000",
         help=(
             "vLLM server base URL (default: http://localhost:8000). "
-            "/metrics is appended automatically."
+            "/metrics is appended automatically. Ignored when "
+            "--all or --aid is set."
+        ),
+    )
+    mt.add_argument(
+        "--all",
+        action="store_true",
+        help=(
+            "Scrape every endpoint in ~/.aegis/inference.toml "
+            "concurrently. Cloud / disabled endpoints are listed "
+            "but not scraped. Gap B (issue #145)."
+        ),
+    )
+    mt.add_argument(
+        "--aid",
+        type=str,
+        default=None,
+        help=(
+            "Scrape exactly one endpoint from the registry, "
+            "selected by its [endpoints.<aid>] label."
         ),
     )
     mt.add_argument(
@@ -6312,6 +6555,19 @@ def build_parser() -> argparse.ArgumentParser:
             "where multiple agents each pick their own LLM (some "
             "local, some cloud). Also activated implicitly when both "
             "--by-aid and --by-provider are passed together."
+        ),
+    )
+    rep.add_argument(
+        "--with-live",
+        action="store_true",
+        help=(
+            "(--by-aid-and-provider only) Cross-reference live "
+            "inference metrics from ~/.aegis/inference.toml. For each "
+            "aid, prints a 'live: KV=87%% queue=2/0 band=high' line "
+            "below its provider sub-rows. Cloud / disabled / "
+            "unreachable endpoints render 'live: skipped' or "
+            "'live: unreachable'. Adds a per-aid network round-trip "
+            "to /metrics during report generation. Gap B (issue #145)."
         ),
     )
     rep.set_defaults(fn=cmd_report)
