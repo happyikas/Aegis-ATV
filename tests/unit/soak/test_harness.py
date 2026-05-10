@@ -10,22 +10,17 @@ from __future__ import annotations
 import asyncio
 import json
 import random
-from collections import Counter
 from pathlib import Path
 from typing import Any
-
-import pytest
 
 from aegis.soak import (
     LatencyStats,
     SoakConfig,
-    SoakResult,
     SoakThresholds,
     _format_result_human,
     run_soak,
     write_result_json,
 )
-
 
 # ── stub senders ──────────────────────────────────────────────────
 
