@@ -1,0 +1,104 @@
+name: release-pypi
+
+# Tag-triggered PyPI publish. The repo's release pipeline is:
+#
+#   1. Bump `version` in pyproject.toml on a PR (manual)
+#   2. Land that PR to main
+#   3. Tag the merge commit: `git tag v0.3.0 && git push origin v0.3.0`
+#   4. This workflow runs: `uv build` → `pypa/gh-action-pypi-publish`
+#      uploads to PyPI.
+#
+# Authentication is via PyPI **trusted publisher** — no API tokens
+# stored as repo secrets. One-time setup is documented in
+# `docs/RELEASE_PIPELINE.md` (`§1 Trusted Publisher`).
+#
+# Skips when triggered manually with `dry-run: true` so a release
+# manager can verify the build artifacts before flipping the publish
+# step on.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Build only; skip PyPI upload."
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write   # required for trusted-publisher OIDC
+
+jobs:
+  build:
+    name: build wheel + sdist
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Verify version matches tag (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag_version="${GITHUB_REF#refs/tags/v}"
+          file_version=$(uv run python -c "import tomllib; print(tomllib.loads(open('pyproject.toml','rb').read().decode())['project']['version'])")
+          if [ "$tag_version" != "$file_version" ]; then
+            echo "::error::tag v$tag_version doesn't match pyproject.toml version $file_version"
+            exit 1
+          fi
+          echo "tag $tag_version matches pyproject.toml — OK"
+
+      - name: Build (wheel + sdist)
+        run: uv build
+
+      - name: List artifacts
+        run: ls -lh dist/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
+  publish:
+    name: publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Only run on tag push — workflow_dispatch is build-only by default.
+    # If someone wants to test-publish manually they'd flip dry-run to
+    # false; the `if` keeps that path explicit.
+    if: |
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.dry-run == false)
+    environment:
+      name: pypi
+      url: https://pypi.org/p/aegis-mvp
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Trusted publisher — no `password:` needed. Configure on
+          # https://pypi.org/manage/project/aegis-mvp/settings/publishing/
+          # See docs/RELEASE_PIPELINE.md §1.
+          packages-dir: dist/
+          # Hard-fail on a duplicate version, don't silently skip.
+          skip-existing: false

@@ -385,6 +385,12 @@ See [`tools/README.md`](tools/README.md) for install + tool mapping.
 | [`PRICING.md`](PRICING.md) | **★ Pricing & tiers** — Solo Free (free forever), Solo Pro $19/mo, Team $39/seat/mo, Enterprise custom. Free / paid boundary, what's never gated, FAQ |
 | [`docs/LICENSE_KEY.md`](docs/LICENSE_KEY.md) | License-key validation design — Ed25519 JWS, offline verification, revocation strategy, feature manifest, CLI surface |
 
+### Release & distribution
+
+| Doc | What's in it |
+|---|---|
+| [`docs/RELEASE_PIPELINE.md`](docs/RELEASE_PIPELINE.md) | Release runbook — PyPI trusted publisher + GHCR multi-arch image. Tag-triggered, no API tokens. Dry-run paths, rollback, sdist size budget |
+
 ### Enterprise sales / design partner
 
 | Doc | What's in it |

@@ -1,0 +1,116 @@
+name: release-docker
+
+# Tag-triggered container image publish to GitHub Container Registry
+# (GHCR). The image lands at `ghcr.io/happyikas/aegis-atv:v0.3.0`
+# (and `:latest` for non-prerelease tags).
+#
+# Why GHCR and not Docker Hub?
+#   * No new account / billing setup; uses the existing GitHub auth
+#     surface via GITHUB_TOKEN.
+#   * Free for public images.
+#   * Same provenance as the source code.
+# A Docker Hub mirror can be added later as a separate publish step
+# without touching this workflow's structure.
+#
+# Multi-arch (linux/amd64 + linux/arm64) so M-series Mac users can
+# pull the image without emulation.
+#
+# Reuses the same trigger pattern as release-pypi.yml so a single
+# `git tag v0.3.0 && git push origin v0.3.0` ships *both* PyPI and
+# GHCR.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Build only; skip push to GHCR."
+        type: boolean
+        default: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}   # → ghcr.io/happyikas/Aegis-ATV
+
+permissions:
+  contents: read
+  packages: write   # GHCR push
+
+jobs:
+  build-and-push:
+    name: build + push (multi-arch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU (for arm64 cross-build)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        if: |
+          startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && inputs.dry-run == false)
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # The repository is `happyikas/Aegis-ATV` (mixed case). GHCR
+          # requires lowercase; the action down-cases automatically
+          # when an explicit images: list isn't given, so we pass it
+          # explicitly with tolower. Same image, two ergonomic tags
+          # (the project's actual repo name + a stable short alias).
+          images: |
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/aegis-atv
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-') }}
+          labels: |
+            org.opencontainers.image.title=Aegis ATV
+            org.opencontainers.image.description=Action firewall + cryptographic audit chain for Claude Code (and OpenClaw, preview)
+            org.opencontainers.image.licenses=Apache-2.0
+            org.opencontainers.image.url=https://github.com/happyikas/Aegis-ATV
+            org.opencontainers.image.source=https://github.com/happyikas/Aegis-ATV
+            org.opencontainers.image.documentation=https://github.com/happyikas/Aegis-ATV#documentation
+
+      - name: Build (and push when not dry-run)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: |
+            ${{
+              startsWith(github.ref, 'refs/tags/v') ||
+              (github.event_name == 'workflow_dispatch' && inputs.dry-run == false)
+            }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # GHA cache so the second tag of the day is fast.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image summary
+        run: |
+          {
+            echo "## Container image"
+            echo ""
+            echo "Pushed to GHCR:"
+            echo ""
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
