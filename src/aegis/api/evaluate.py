@@ -289,6 +289,28 @@ def _evaluate_impl(
             f"composite={burnin_controller.composite_score(inp):.3f}"
         )
 
+        # Gap C (#146) — fire per-(aid × provider) divergence advisor
+        # at *evaluation* time, not just at report time. The detector
+        # is read-only and short-circuits cheaply when the aid hasn't
+        # accumulated >=2 real-provider slots, so it's safe in the
+        # firewall hot path. When divergence is found, surface it via
+        # step_traces so the audit record carries the signal forward.
+        try:
+            drifts = burnin_controller.provider_drift_for_aid(
+                inp.header.tenant_id,
+                inp.role_id or "default-role",
+                inp.header.aid,
+            )
+        except Exception:  # noqa: BLE001 — defensive; advisor must not crash eval
+            drifts = []
+        if drifts:
+            d = drifts[0]
+            verdict.step_traces["aegis.coach.provider_drift"] = (
+                f"aid={d['aid']} {d['max_provider']}={d['max_rate']:.2%} "
+                f"vs {d['min_provider']}={d['min_rate']:.2%} "
+                f"ratio={d['ratio']:.1f}× kind={d['kind']}"
+            )
+
     return verdict
 
 

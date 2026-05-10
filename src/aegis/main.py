@@ -72,6 +72,10 @@ def create_app(
         intent_log if intent_log is not None else IntentLog(settings.aegis_intent_log_db)
     )
     real_burnin = burnin_controller if burnin_controller is not None else BurnInController()
+    # Gap C (#146) — expose the controller on app.state so tests and
+    # future surfaces (`aegis burnin status --by-provider` via API)
+    # can inspect per-(aid × provider) baselines without re-importing.
+    app.state.burnin_controller = real_burnin
     # Claim 34 — cost-attestation signing key is DISTINCT from the
     # telemetry signing key. Auto-create on first run.
     if cost_ledger is None:
