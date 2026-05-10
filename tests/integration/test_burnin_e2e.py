@@ -67,7 +67,8 @@ def test_burnin_graduation_blocked_under_threshold(aegis_app: FastAPI) -> None:
     key = layers[0]["key"]
     r = client.post("/burnin/graduate", json={"layer_key": key})
     assert r.status_code == 409
-    assert "graduation blocked" in r.json()["detail"]
+    # PR #159 — error envelope is now structured.
+    assert "graduation blocked" in r.json()["error"]["message"]
 
 
 def test_burnin_label_endpoint_updates_metrics(aegis_app: FastAPI) -> None:

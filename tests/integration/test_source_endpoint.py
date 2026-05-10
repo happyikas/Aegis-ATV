@@ -60,7 +60,8 @@ def test_source_non_python_rejected(aegis_app: FastAPI) -> None:
     # web/static/index.html exists in the package — try to read it
     r = client.get("/source", params={"path": "web/static/index.html"})
     assert r.status_code == 400
-    assert "py" in r.json()["detail"].lower()
+    # PR #159 — error envelope is now structured.
+    assert "py" in r.json()["error"]["message"].lower()
 
 
 def test_source_missing_file_404(aegis_app: FastAPI) -> None:

@@ -31,6 +31,12 @@ from aegis.api.burnin_status import make_router as _burnin_router
 from aegis.api.cost_attestation import make_router as _cost_router
 from aegis.api.evaluate import make_router as _evaluate_router
 from aegis.api.ham import make_router as _ham_router
+from aegis.api.lifecycle import (
+    LifecycleState,
+    make_lifespan,
+    make_readyz_router,
+)
+from aegis.api.middleware import install_hardening
 from aegis.api.replay import make_router as _replay_router
 from aegis.api.source import make_router as _source_router
 from aegis.api.tool_outcome import make_router as _tool_outcome_router
@@ -62,8 +68,36 @@ def create_app(
     ham_store: HierarchicalMemoryStore | None = None,
     measurement: BurnInMeasurement | None = None,
 ) -> FastAPI:
-    """Build a FastAPI app. Override stores/keys for tests."""
-    app = FastAPI(title="AegisData T2", version=__version__)
+    """Build a FastAPI app. Override stores/keys for tests.
+
+    PR #159 — sidecar production hardening: every constructed app
+    gets size-limit + rate-limit + request-id + security-headers
+    middlewares, structured error envelope handlers, a graceful
+    shutdown lifespan, and the ``/readyz`` readiness endpoint.
+    Defaults come from :class:`Settings` and can be overridden per-
+    deploy via env vars (``AEGIS_SIDECAR_*``). Setting any cap to 0
+    disables that one middleware.
+    """
+    # Lifespan + readiness state must be constructed BEFORE the
+    # FastAPI() call — lifespan is passed as a constructor arg.
+    lifecycle_state = LifecycleState()
+    app = FastAPI(
+        title="AegisData T2",
+        version=__version__,
+        lifespan=make_lifespan(
+            lifecycle_state,
+            drain_seconds=settings.aegis_sidecar_drain_seconds,
+        ),
+    )
+    app.state.lifecycle = lifecycle_state
+
+    # Wire production-hardening middlewares + error handlers.
+    install_hardening(
+        app,
+        max_request_bytes=settings.aegis_sidecar_max_request_bytes,
+        rate_per_minute=settings.aegis_sidecar_rate_per_minute,
+        rate_burst=settings.aegis_sidecar_rate_burst,
+    )
 
     real_key = key if key is not None else load_or_create_key(Path(settings.aegis_signing_key_path))
     real_db = db if db is not None else AuditDB(settings.aegis_audit_db)
@@ -260,6 +294,31 @@ def create_app(
             "version": __version__,
             "burn_in_id": real_measurement.burn_in_id,
         }
+
+    # PR #159 — /readyz separate from /healthz. /healthz proves the
+    # process is alive (use for restart decisions); /readyz also
+    # checks each dependency reachable + flips to 503 on shutdown
+    # (use for traffic gating in load balancers).
+    def _audit_db_probe() -> bool:
+        try:
+            real_db.conn.execute("SELECT 1").fetchone()
+            return True
+        except Exception:  # noqa: BLE001 — defensive
+            return False
+
+    def _audit_log_probe() -> bool:
+        try:
+            return real_log.path.parent.exists()
+        except Exception:  # noqa: BLE001 — defensive
+            return False
+
+    app.include_router(make_readyz_router(
+        lifecycle_state,
+        probes={
+            "audit_db": _audit_db_probe,
+            "audit_log": _audit_log_probe,
+        },
+    ))
 
     return app
 

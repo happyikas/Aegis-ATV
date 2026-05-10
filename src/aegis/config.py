@@ -148,5 +148,15 @@ class Settings(BaseSettings):
     aegis_audit_patrol_cold_segments_per_run: int = 3
     aegis_audit_patrol_poll_seconds: float = 30.0
 
+    # Sidecar production hardening (PR #159).
+    # Each is opt-in: set to 0 to disable that middleware entirely.
+    # Defaults are tuned for a single-developer Solo Free install
+    # where rate-limit / size cap should never bite during normal use
+    # but still backstop a runaway client / DoS attempt.
+    aegis_sidecar_max_request_bytes: int = 1 * 1024 * 1024     # 1 MiB
+    aegis_sidecar_rate_per_minute: int = 600                   # 10/sec sustained
+    aegis_sidecar_rate_burst: int = 100                        # short-burst tolerance
+    aegis_sidecar_drain_seconds: float = 5.0                   # shutdown grace
+
 
 settings = Settings()
