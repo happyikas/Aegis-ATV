@@ -73,19 +73,19 @@ Once §1 + §2 are configured, a release is:
 
 ```bash
 # 1. Bump version on a PR
-sed -i '' 's/^version = "0.2.0"$/version = "0.3.0"/' pyproject.toml
+sed -i '' 's/^version = "0.3.0"$/version = "0.3.1"/' pyproject.toml
 # Update CHANGELOG.md with the new section
-git checkout -b release/0.3.0
-git commit -am "chore: bump version to 0.3.0"
-git push -u origin release/0.3.0
-gh pr create --title "chore: release 0.3.0" --body "Release notes: …"
+git checkout -b release/0.3.1
+git commit -am "chore: bump version to 0.3.1"
+git push -u origin release/0.3.1
+gh pr create --title "chore: release 0.3.1" --body "Release notes: …"
 # … wait for CI + merge …
 
 # 2. After merge, sync main and tag the merge commit
 git checkout main
 git pull --ff-only origin main
-git tag -s v0.3.0 -m "v0.3.0 — multi-agent + multi-LLM trio (Gaps A/B/C)"
-git push origin v0.3.0
+git tag -s v0.3.1 -m "v0.3.1 — audit docs + license gate activation + plugin GA"
+git push origin v0.3.1
 
 # 3. Watch the two workflows fire
 gh run watch --workflow=release-pypi.yml
@@ -97,8 +97,15 @@ version` so a misspelled tag fails fast instead of publishing the
 wrong artifact.
 
 The `:latest` Docker tag is **only** updated on stable tags (no `-`
-in the version string). Prereleases like `v0.3.0-rc.1` get their
+in the version string). Prereleases like `v0.3.1-rc.1` get their
 exact tag but don't touch `:latest`.
+
+> **Watch out — tag the right ref.** The very first attempt at the
+> v0.3.0 release missed step 2 (no tag was pushed even though the
+> version bump landed). The result: PyPI / GHCR stayed at 0.2.0
+> while the codebase advertised 0.3.0. Always confirm
+> `gh run list --workflow release-pypi --limit 1` shows a *new*
+> run after step 2 — if not, the tag never reached GitHub.
 
 ---
 

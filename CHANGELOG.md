@@ -43,6 +43,15 @@ platform readiness. Code work is closed.
 
 ## [0.3.0] — 2026-05-10  ·  Multi-agent + multi-LLM + production hardening
 
+> **PyPI / GHCR note**: `0.3.0` never reached PyPI as a published
+> artifact — the tag was missed and the `release-pypi` workflow
+> didn't fire. The body of work described below was instead shipped
+> in `0.3.1` (2026-05-11), which is what `pip install aegis-mvp`
+> resolves to. The GHCR multi-arch image likewise jumps from 0.2.0
+> → 0.3.1. The `[0.3.0]` heading is preserved here for historical
+> traceability — it reflects the commit set that was originally
+> intended for that version. See the `[0.3.1]` entry above.
+
 The first release driven entirely by post-v0.2 feedback rather than
 the patent backlog. Two big themes:
 

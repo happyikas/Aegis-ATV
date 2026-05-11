@@ -4,7 +4,7 @@ name: release-pypi
 #
 #   1. Bump `version` in pyproject.toml on a PR (manual)
 #   2. Land that PR to main
-#   3. Tag the merge commit: `git tag v0.3.0 && git push origin v0.3.0`
+#   3. Tag the merge commit: `git tag v0.3.1 && git push origin v0.3.1`
 #   4. This workflow runs: `uv build` → `pypa/gh-action-pypi-publish`
 #      uploads to PyPI.
 #
