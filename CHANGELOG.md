@@ -4,25 +4,42 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.3.1] — 2026-05-11  ·  Audit docs + license gate activation + plugin GA
 
-### Added
+A documentation- and gate-flip release on top of 0.3.0. No new
+public-API surface; the runtime behavior changes are limited to
+license-gated refusals (which only fire on Pro+ install paths that
+weren't enforceable before). Three landings:
 
 * **OpenClaw plugin GA** — `@happyikas/openclaw-plugin-aegis` lifts
-  the `-preview` suffix and publishes as `0.3.0`. The diff against
-  `0.2.0-preview.2` is metadata-only; the E2E CI soak window cleared
-  with zero flake. (PR #TBD — closes [#148](https://github.com/happyikas/Aegis-ATV/issues/148))
-* **`docs/THREAT_MODEL.md`** — STRIDE walk + auditor checklist for
-  the 3rd-party audit. (PR #162)
-
-### Changed
-
+  the `-preview` suffix and publishes as `0.3.0`. The plugin diff
+  against `0.2.0-preview.2` is metadata-only; the E2E CI soak window
+  (PR #143 → main on 2026-05-09) cleared with zero flake before the
+  publish call. The plugin's CHANGELOG / README / install snippets
+  + the top-level `README.md` release-tracks matrix + the Korean
+  release notes + `SHOW_HN.md` all flip from "preview" to "GA" in
+  lockstep. (PR #164, PR #165 — closes [#148](https://github.com/happyikas/Aegis-ATV/issues/148))
 * **License-key gate wired to three call sites** —
   `aegis install --profile pro|cloud` refuses without `advisor.full`,
   `aegis install --mode sidecar` refuses without `sidecar.multi-tenant`,
-  and the runtime advisor pipeline silently no-ops when `advisor.full`
-  is not granted. Activates `LICENSE_KEY.md` §9 steps 5-7 on top of
-  PR #157's no-op plumbing. (PR #163)
+  and the runtime advisor pipeline (`_compute_action_advice` in
+  `tools/aegis_local_hook.py`) silently returns `None` when
+  `advisor.full` is not granted. Activates `LICENSE_KEY.md` §9
+  steps 5–7 on top of PR #157's no-op plumbing. Solo Free / Pro
+  installs without sidecar profile are unchanged. The runtime gate
+  uses a boot-once sentinel to keep disk I/O off the per-tool-call
+  hot path. (PR #163 — closes [#149](https://github.com/happyikas/Aegis-ATV/issues/149))
+* **`docs/THREAT_MODEL.md`** — STRIDE walk + auditor checklist for
+  the 3rd-party audit. Names the trust boundaries (firewall ↔ sidecar
+  ↔ audit chain ↔ license module), per-asset threat tables, and the
+  mitigations already in place vs. open. (PR #162)
+
+### Roadmap state
+
+ROADMAP.md refreshed: no items remain "in flight". The three
+remaining MVP items (#147 Gap D, #150 ClawHub, #151 Show HN) are
+all external-event-gated — design-partner availability or upstream
+platform readiness. Code work is closed.
 
 ## [0.3.0] — 2026-05-10  ·  Multi-agent + multi-LLM + production hardening
 
