@@ -4,6 +4,26 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+* **OpenClaw plugin GA** — `@happyikas/openclaw-plugin-aegis` lifts
+  the `-preview` suffix and publishes as `0.3.0`. The diff against
+  `0.2.0-preview.2` is metadata-only; the E2E CI soak window cleared
+  with zero flake. (PR #TBD — closes [#148](https://github.com/happyikas/Aegis-ATV/issues/148))
+* **`docs/THREAT_MODEL.md`** — STRIDE walk + auditor checklist for
+  the 3rd-party audit. (PR #162)
+
+### Changed
+
+* **License-key gate wired to three call sites** —
+  `aegis install --profile pro|cloud` refuses without `advisor.full`,
+  `aegis install --mode sidecar` refuses without `sidecar.multi-tenant`,
+  and the runtime advisor pipeline silently no-ops when `advisor.full`
+  is not granted. Activates `LICENSE_KEY.md` §9 steps 5-7 on top of
+  PR #157's no-op plumbing. (PR #163)
+
 ## [0.3.0] — 2026-05-10  ·  Multi-agent + multi-LLM + production hardening
 
 The first release driven entirely by post-v0.2 feedback rather than
