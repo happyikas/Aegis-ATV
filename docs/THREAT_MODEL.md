@@ -3,7 +3,10 @@
 > **Audience**: maintainers + a third-party security auditor. The
 > "Auditor checklist" in §8 is the action item for the audit.
 >
-> **Status**: written 2026-05-10 against v0.3.0. Treated as living
+> **Status**: written 2026-05-10 against the v0.3.0 codebase;
+> trust-boundary / mitigation substance unchanged through v0.3.1
+> (a metadata + license-gate-activation patch). PyPI / GHCR ship
+> v0.3.1; the v0.3.0 tag itself never published. Treated as living
 > doc — every PR that changes a trust boundary or mitigation is
 > expected to update the corresponding row.
 
@@ -483,3 +486,4 @@ threat model should bump the date in §1 and add an entry to the
 | Date | Commit | Changes |
 |------|--------|---------|
 | 2026-05-10 | (initial) | Initial threat model targeting v0.3.0 surface |
+| 2026-05-11 | post-0.3.1 | Status note clarified: v0.3.0 codebase, v0.3.1 published (metadata + license-gate-activation patch; trust-boundary substance unchanged) |

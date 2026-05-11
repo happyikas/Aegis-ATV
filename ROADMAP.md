@@ -36,10 +36,13 @@ platform readiness.
 
 | PR / Issue | Landed | Title |
 |---|---|---|
+| [PR #167](https://github.com/happyikas/Aegis-ATV/pull/167) | 2026-05-11 | CLI install messaging flipped to GA (caught via #151 pre-flight) |
+| [PR #166](https://github.com/happyikas/Aegis-ATV/pull/166) | 2026-05-11 | Release `0.3.1` — `aegis-mvp` on PyPI + GHCR (multi-arch). Supersedes the never-published `0.3.0` tag |
+| [PR #165](https://github.com/happyikas/Aegis-ATV/pull/165) | 2026-05-11 | post-0.3.0-GA cleanup — drop `@preview` refs + refresh ROADMAP |
 | [PR #164](https://github.com/happyikas/Aegis-ATV/pull/164) | 2026-05-11 | `openclaw-plugin 0.3.0` GA — `-preview` suffix lifted (closes [#148](https://github.com/happyikas/Aegis-ATV/issues/148)) |
 | [PR #163](https://github.com/happyikas/Aegis-ATV/pull/163) | 2026-05-10 | License gate wired — `--profile pro/cloud`, sidecar install, runtime advisor (LICENSE_KEY.md §9 steps 5-7; closes [#149](https://github.com/happyikas/Aegis-ATV/issues/149)) |
 | [PR #162](https://github.com/happyikas/Aegis-ATV/pull/162) | 2026-05-10 | `docs/THREAT_MODEL.md` — STRIDE walk + auditor checklist for the 3rd-party audit |
-| [PR #161](https://github.com/happyikas/Aegis-ATV/pull/161) | 2026-05-10 | Release 0.3.0 — multi-agent + multi-LLM + production hardening |
+| [PR #161](https://github.com/happyikas/Aegis-ATV/pull/161) | 2026-05-10 | `aegis-mvp 0.3.0` release commit (version bump + CHANGELOG). Tag was missed; superseded by PR #166 → `0.3.1` on PyPI / GHCR. See `CHANGELOG.md [0.3.0]` for the "ghost release" note |
 | [PR #160](https://github.com/happyikas/Aegis-ATV/pull/160) | earlier | Load-test harness — `aegis soak` + `aegis bench` |
 | [PR #159](https://github.com/happyikas/Aegis-ATV/pull/159) | earlier | Sidecar production hardening — rate limit + size cap + /readyz + graceful shutdown + structured errors |
 | [PR #158](https://github.com/happyikas/Aegis-ATV/pull/158) | earlier | Audit log rotation — gzip + time trigger + `aegis audit status/prune` |

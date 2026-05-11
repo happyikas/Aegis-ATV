@@ -1,7 +1,7 @@
 name: release-docker
 
 # Tag-triggered container image publish to GitHub Container Registry
-# (GHCR). The image lands at `ghcr.io/happyikas/aegis-atv:v0.3.0`
+# (GHCR). The image lands at `ghcr.io/happyikas/aegis-atv:v0.3.1`
 # (and `:latest` for non-prerelease tags).
 #
 # Why GHCR and not Docker Hub?
@@ -16,7 +16,7 @@ name: release-docker
 # pull the image without emulation.
 #
 # Reuses the same trigger pattern as release-pypi.yml so a single
-# `git tag v0.3.0 && git push origin v0.3.0` ships *both* PyPI and
+# `git tag v0.3.1 && git push origin v0.3.1` ships *both* PyPI and
 # GHCR.
 
 on:
