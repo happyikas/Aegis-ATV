@@ -4075,22 +4075,19 @@ def _cmd_install_rescue() -> int:
 
 
 def _cmd_install_openclaw_stub(target: str) -> int:
-    """Print a friendly roadmap message for the two preview release
-    tracks (openclaw-local / openclaw-cloud) and exit cleanly.
+    """Print install guidance for the two OpenClaw release tracks.
 
-    The Claude Code track is the current GA release; the OpenClaw
-    tracks are documented in docs/releases/<TRACK>.ko.md but the
-    actual @openclaw/plugin-aegis TypeScript plugin lands in a
-    separate PR series (3-4 weeks). Until then this stub keeps the
-    --target flag wired up so users get the expected --help output
-    and a clear "what's coming" pointer instead of an installer that
-    silently does nothing or crashes.
+    Both OpenClaw tracks went GA in 0.3.1 (openclaw-plugin 0.3.0 on
+    npm + this Python sidecar). The actual install is two-step (npm
+    install in the user's OpenClaw project + docker compose for the
+    sidecar) — this CLI doesn't drive the npm side, so the role of
+    this handler is to print the exact commands the user needs to
+    run, not to silently do nothing.
     """
     track_meta = {
         "openclaw-local": {
             "label": "OpenClaw + Local OSS LLM",
             "doc": "docs/releases/OPENCLAW_LOCAL.ko.md",
-            "eta": "2026 H2",
             "headline": (
                 "air-gapped agentic AI with model-weight baseline + "
                 "logit-level forensic + GPU/KV-cache server metrics"
@@ -4099,7 +4096,6 @@ def _cmd_install_openclaw_stub(target: str) -> int:
         "openclaw-cloud": {
             "label": "OpenClaw + Cloud LLM API",
             "doc": "docs/releases/OPENCLAW_CLOUD.ko.md",
-            "eta": "2026 H1",
             "headline": (
                 "multi-channel agent ops (Telegram/Discord/Slack/Web) "
                 "with multi-provider drift detection"
@@ -4108,24 +4104,33 @@ def _cmd_install_openclaw_stub(target: str) -> int:
     }
     meta = track_meta[target]
     print()
-    print(_yellow(f"  Aegis ATV — {meta['label']} (Preview)"))
+    print(_green(f"  Aegis ATV — {meta['label']} (GA, v0.3.0)"))
     print()
-    print(f"  Status:    Preview, GA expected {meta['eta']}")
     print(f"  Headline:  {meta['headline']}")
     print()
-    print("  This release track is documented but the underlying")
-    print("  @openclaw/plugin-aegis plugin is not yet shipping.")
-    print(f"  See {meta['doc']} for the preview spec, scope, and")
-    print("  per-feature roadmap.")
+    print("  This track is two-step: install the plugin in your OpenClaw")
+    print("  project, then start the Aegis sidecar:")
     print()
-    print("  In the meantime, the same Aegis core (16-step firewall,")
-    print("  audit chain, Coach/Live/Doctor) is fully usable on the")
-    print("  Claude Code track:")
+    print(_green(
+        "    # 1) From your OpenClaw project root:"
+    ))
+    print(_green(
+        "    npm install @happyikas/openclaw-plugin-aegis"
+    ))
     print()
+    print(_green(
+        "    # 2) Start the sidecar (this repo):"
+    ))
+    print(_green(
+        "    docker compose up -d"
+    ))
+    print()
+    print(f"  Full track manual:  {meta['doc']}")
+    print("  npm package:         "
+          "https://www.npmjs.com/package/@happyikas/openclaw-plugin-aegis")
+    print()
+    print("  Prefer the in-process firewall (Solo Free, no service)?")
     print(_green("    aegis install --target claude-code --mode local"))
-    print()
-    print("  Subscribe to releases to get notified when this track GA's:")
-    print("    https://github.com/happyikas/Aegis-ATV/releases")
     print()
     return 0
 
@@ -7374,11 +7379,11 @@ def build_parser() -> argparse.ArgumentParser:
             "Release track to install. "
             "claude-code (GA): patches ~/.claude/settings.json with the "
             "Aegis PreToolUse hook + slash commands (current default). "
-            "openclaw-local (Preview): OpenClaw + self-hosted LLM "
+            "openclaw-local (GA): OpenClaw + self-hosted LLM "
             "(vLLM/Ollama) for air-gapped operation. "
-            "openclaw-cloud (Preview): OpenClaw + cloud LLM (Anthropic/"
+            "openclaw-cloud (GA): OpenClaw + cloud LLM (Anthropic/"
             "OpenAI/Google) for multi-channel agent ops. "
-            "Preview tracks print a roadmap message — see "
+            "OpenClaw tracks print a roadmap message — see "
             "docs/releases/README.md for details. "
             "default: claude-code"
         ),
