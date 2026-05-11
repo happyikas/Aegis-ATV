@@ -3,7 +3,7 @@
   "name": "aegis",
   "displayName": "Aegis ATV",
   "description": "Run every tool call through Aegis ATV's 16-step firewall + cryptographic audit chain. BLOCKs destructive operations, requires approval for grey-zone calls, and writes a SHA3-chained Ed25519-signed audit line per decision.",
-  "version": "0.2.0-preview.2",
+  "version": "0.3.0",
   "license": "Apache-2.0",
   "homepage": "https://github.com/happyikas/Aegis-ATV/tree/main/openclaw-plugin",
   "main": "dist/index.js",

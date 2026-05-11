@@ -12,26 +12,25 @@
 
 OpenClaw plugin that runs every tool call through [Aegis ATV](https://github.com/happyikas/Aegis-ATV)'s 16-step firewall + cryptographic audit chain. Maps Aegis verdicts (`ALLOW` / `REQUIRE_APPROVAL` / `BLOCK`) to OpenClaw's `before_tool_call` return contract, plus param-rewrite for automatic redaction.
 
-> **Status**: Preview (`0.2.0-preview.2`). TypeScript handler + Aegis HTTP client + multi-channel + multi-provider attribution are implemented and unit-tested with mocked responses (31 vitest cases). End-to-end integration with a running OpenClaw runtime + Aegis sidecar lifts the preview suffix in the next release.
+> **Status**: GA (`0.3.0`). TypeScript handler + Aegis HTTP client + multi-channel + multi-provider attribution, plus an end-to-end test that boots a real Aegis Python sidecar in a subprocess and exercises ALLOW / REQUIRE_APPROVAL / BLOCK paths against it. The OpenClaw runtime half is still mock-driven (OpenClaw itself isn't yet on public npm); see *Honest limitations* below.
 
 ## Compatibility
 
 | Plugin version | Aegis sidecar | Notes |
 |----------------|---------------|-------|
-| `0.2.0-preview.2` (this) | `aegis-mvp >= 0.2.0` | POSTs to `/evaluate/openclaw` route; multi-channel + multi-provider attribution; pre-publish blocker fixes (manifest version sync, manifest doc accuracy, `prepublishOnly` runs tests, sidecar version-mismatch hint, 12 entry-point tests) |
+| `0.3.0` (this) | `aegis-mvp >= 0.2.0` | GA — `-preview` suffix lifted after the E2E CI soak window cleared with zero flake. No code changes vs `0.2.0-preview.2`; metadata-only diff (version, README, CHANGELOG). |
+| `0.2.0-preview.2` | `aegis-mvp >= 0.2.0` | POSTs to `/evaluate/openclaw` route; multi-channel + multi-provider attribution; pre-publish blocker fixes (manifest version sync, manifest doc accuracy, `prepublishOnly` runs tests, sidecar version-mismatch hint, 12 entry-point tests). Deprecated post-GA. |
 
 The plugin's `apiVersion: 1` field in `openclaw.plugin.json` tracks the OpenClaw plugin SDK contract — independent of this package version.
 
 ## Install
 
-This package is currently published under the `preview` npm tag — `npm install @happyikas/openclaw-plugin-aegis` will not resolve under the default `latest` tag until the first GA release. Use the tag explicitly:
-
 ```bash
-# Latest preview:
-npm install @happyikas/openclaw-plugin-aegis@preview
+# Default install (resolves to 0.3.0 via the `latest` dist-tag):
+npm install @happyikas/openclaw-plugin-aegis
 
-# Pin to an exact pre-release version:
-npm install @happyikas/openclaw-plugin-aegis@0.2.0-preview.2
+# Pin to an exact version:
+npm install @happyikas/openclaw-plugin-aegis@0.3.0
 ```
 
 You also need the Aegis sidecar service running at `http://localhost:8000` (default). To start it:
@@ -94,7 +93,7 @@ export default function (api: OpenClawPluginApi) {
   "private": true,
   "type": "module",
   "dependencies": {
-    "@happyikas/openclaw-plugin-aegis": "^0.2.0-preview"
+    "@happyikas/openclaw-plugin-aegis": "^0.3.0"
   }
 }
 ```
@@ -177,28 +176,37 @@ OpenClaw return contract (block/requireApproval/params)
 
 ## Honest limitations
 
-- **No end-to-end test against real OpenClaw runtime yet** — handler is mock-tested with `vi.fn()` fetch.
-- **First npm publish in progress** — published as `0.2.0-preview.2` (the `-preview.N` suffix marks "no E2E test against a running OpenClaw runtime yet"; lifts in the next minor release).
+- **OpenClaw runtime half is mock-tested** — the E2E suite (`tests/e2e/sidecar.e2e.test.ts`) boots a real Aegis Python sidecar and exercises every verdict path against it, but the OpenClaw runtime side is simulated with vitest's `vi.fn()` because OpenClaw itself isn't yet on public npm. The contracts the plugin assumes (`OpenClawPluginApi`, `OpenClawBeforeToolCallEvent`) match OpenClaw's public design notes; if upstream publishes with a different shape that's a follow-up compatibility patch.
 - **Schema sync** — Aegis Python `EvaluateRequest` / `EvaluateResponse` are mirrored in `src/types.ts` by hand; future work: codegen from Pydantic models.
 - **No streaming verdicts** — single-shot per tool call. Streaming is a future Aegis API addition.
+- **Inter-agent edge tracking not wired** — `inter_agent_edges` in the sidecar audit record stays empty; awaits OpenClaw runtime cooperation (see [Aegis-ATV#147](https://github.com/happyikas/Aegis-ATV/issues/147)).
 
 ## Roadmap
 
 | Item | Status |
 |------|--------|
 | Initial skeleton + handler + 19 vitest tests | ✅ shipped in `0.1.0-preview.1` (skeleton, never published) |
-| `/evaluate/openclaw` adapter route | ✅ shipped in this release |
-| Multi-channel attribution (`channel` field) | ✅ shipped in this release |
-| Multi-provider attribution (`provider` field) | ✅ shipped in this release |
-| End-to-end test against `docker compose up` Aegis sidecar | 🟡 next release (lifts the preview suffix) |
+| `/evaluate/openclaw` adapter route | ✅ shipped in `0.2.0-preview.2` |
+| Multi-channel attribution (`channel` field) | ✅ shipped in `0.2.0-preview.2` |
+| Multi-provider attribution (`provider` field) | ✅ shipped in `0.2.0-preview.2` |
+| End-to-end test against `docker compose up` Aegis sidecar | ✅ shipped in `0.3.0` (lifts the preview suffix) |
 | Codegen TypeScript types from Aegis Pydantic schema | 🟡 future |
 | Streaming verdicts (mid-tool-call cancellation) | 🔴 future Aegis API addition |
-| ClawHub marketplace listing | 🔴 follow-up |
+| Inter-agent edge tracking (`inter_agent_edges`) | 🔴 [Aegis-ATV#147](https://github.com/happyikas/Aegis-ATV/issues/147) |
+| ClawHub marketplace listing | 🔴 [Aegis-ATV#150](https://github.com/happyikas/Aegis-ATV/issues/150) — paused upstream |
 
-## What's new in `0.2.0-preview.1`
+## What's new in `0.3.0`
 
-* The plugin now POSTs to `/evaluate/openclaw` (the new adapter route added in `aegis-mvp 0.2.0`) instead of the legacy `/evaluate` (which expects the full ATVInput shape). This closes the schema mismatch that was present in the never-published `0.1.0-preview.1` skeleton.
-* Multi-channel + multi-provider attribution flow into the Aegis audit record. Combined with `aegis report --by-channel` and `aegis report --by-provider`, this is the foundation for cross-channel and cross-provider safety drift detection.
+This is the first GA release — the `-preview` suffix is lifted after
+the E2E CI soak window cleared with zero flake. The diff against
+`0.2.0-preview.2` is metadata-only (version bump + README + CHANGELOG +
+removal of the install caveat that pointed at the `@preview` tag);
+the runtime behavior is unchanged from `0.2.0-preview.2`.
+
+Earlier release highlights, in case you skipped a version:
+
+* **`0.2.0-preview.2`** — `/evaluate/openclaw` adapter route + multi-channel + multi-provider attribution, plus pre-publish blocker fixes.
+* **`0.1.0-preview.1`** — initial TypeScript skeleton (never published to npm).
 
 See [CHANGELOG.md](./CHANGELOG.md) for the full version history.
 

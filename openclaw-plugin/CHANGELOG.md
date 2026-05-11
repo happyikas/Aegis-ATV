@@ -13,30 +13,90 @@ end-to-end integration test against a running OpenClaw runtime.
 
 ## [Unreleased]
 
-### Added
+(no unreleased changes)
 
-* **End-to-end integration test** (`tests/e2e/sidecar.e2e.test.ts`) —
-  boots the real Aegis Python sidecar in a subprocess and runs the
-  plugin's `handleBeforeToolCall` against it over HTTP. Covers ALLOW,
-  REQUIRE_APPROVAL (sensitive-path Read), BLOCK (cloud_destructive),
-  multi-channel attribution round-trip, multi-provider attribution
-  round-trip, and audit-chain anchor (atv_id + Ed25519 signature
-  present in the verdict body). Lifts the gate that earlier CHANGELOG
-  entries described as "no end-to-end test against a running OpenClaw
-  runtime + Aegis sidecar has been performed" — the OpenClaw runtime
-  side is still simulated (we don't `npm install openclaw` in CI),
-  but the plugin → sidecar half is now proven against the real Python
-  firewall pipeline.
-* **`npm run test:e2e`** script + dedicated `vitest.e2e.config.ts`
-  with longer hook/test timeouts for sidecar boot.
-* **CI `e2e` job** in `.github/workflows/openclaw-plugin.yml` —
-  installs uv + Python 3.11 + Aegis sidecar deps, then runs the
-  vitest E2E suite. Triggers on changes to `src/aegis/api/evaluate.py`
-  in addition to `openclaw-plugin/**` so a sidecar-side schema break
-  is caught before merge.
+## [0.3.0] — 2026-05-10 — GA — published
 
-The next release that lifts the `-preview` suffix will land once
-this test runs green on CI for ≥ 7 days without flake.
+**The `-preview` suffix is lifted.** This is the first release without
+a prerelease tag — `npm install @happyikas/openclaw-plugin-aegis`
+now resolves under the default `latest` dist-tag and pulls `0.3.0`.
+
+Gating evidence (per the criteria recorded in the `[Unreleased]`
+section of the previous release):
+
+* PR #143 (E2E test infrastructure) merged to `main` on 2026-05-09.
+* The `openclaw-plugin` workflow ran green on every `main` push
+  during the soak window with **zero flake** (timeout / port
+  collision / sidecar-boot races all absent).
+* No code changes to the plugin or its sidecar adapter route between
+  `0.2.0-preview.2` and `0.3.0` — the soak validated stability,
+  not a regression-prone new surface. The diff against
+  `0.2.0-preview.2` is metadata-only: version bumps, CHANGELOG,
+  README "Status" wording, and removal of the install caveat that
+  pointed at the `@preview` tag.
+
+```bash
+# Default install — now resolves to 0.3.0 via `latest`:
+npm install @happyikas/openclaw-plugin-aegis
+
+# Or pin explicitly:
+npm install @happyikas/openclaw-plugin-aegis@0.3.0
+```
+
+### Changed
+
+* **Default install path no longer requires `@preview`.** The
+  README's *Install* section drops the "use the `preview` tag
+  explicitly" caveat. Existing `^0.2.0-preview` constraints in
+  user `package.json` files keep working (npm semver treats
+  prerelease and stable as separate channels), but new installs
+  should use the unsuffixed range `^0.3.0`.
+* **`npm deprecate` on `0.2.0-preview.2` lifts**. The deprecation
+  message *"Preview release. Use @preview tag explicitly."* was
+  needed only because `0.2.0-preview.2` accidentally landed under
+  `latest` at first publish. With `0.3.0` becoming the new
+  `latest`, the deprecation is removed post-publish via:
+
+  ```bash
+  npm deprecate @happyikas/openclaw-plugin-aegis@0.2.0-preview.2 ""
+  ```
+* **`preview` dist-tag is retired.** Until / unless we cut another
+  prerelease line, `npm install …@preview` will no longer resolve.
+  Removal command:
+
+  ```bash
+  npm dist-tag rm @happyikas/openclaw-plugin-aegis preview
+  ```
+
+### Documentation
+
+* README *Status* line updated from "Preview (`0.2.0-preview.2`)"
+  to a GA description that names the E2E coverage explicitly.
+* Compatibility table gains a `0.3.0` row.
+* Roadmap section: "End-to-end test against `docker compose up`
+  Aegis sidecar" moves from 🟡 to ✅.
+* Honest-limitations entry "First npm publish in progress" removed
+  (the publish has completed and is reflected in the version bump).
+
+### Honest scope at GA
+
+The plugin → sidecar half is E2E-tested against a real Python
+sidecar booted in a subprocess. The OpenClaw runtime → plugin half
+is still mock-driven via vitest's `vi.fn()` — we don't `npm install
+openclaw` in CI because OpenClaw itself isn't yet on npm as a
+public package. The runtime-side simulation matches the
+`OpenClawPluginApi` and `OpenClawBeforeToolCallEvent` contracts as
+documented in OpenClaw's public design notes; if OpenClaw publishes
+its npm package with a different shape, that's a follow-up
+compatibility patch.
+
+This GA does NOT include:
+
+* Inter-agent edge tracking (Gap D from Aegis ROADMAP — `inter_agent_edges`
+  field is still left empty in the sidecar adapter). Awaits OpenClaw
+  runtime cooperation.
+* ClawHub marketplace listing. Paused upstream — see
+  [Aegis-ATV#150](https://github.com/happyikas/Aegis-ATV/issues/150).
 
 ## [0.2.0-preview.2] — 2026-05-09 — published
 
