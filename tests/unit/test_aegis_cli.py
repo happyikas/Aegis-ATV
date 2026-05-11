@@ -2214,27 +2214,29 @@ def test_install_target_invalid_choice_rejected() -> None:
 def test_install_openclaw_local_stub_returns_zero(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """openclaw-local is Preview — stub must exit 0 and print the
-    track label + roadmap pointer + fallback to claude-code."""
+    """openclaw-local is GA (v0.3.0) — stub must exit 0 and print the
+    track label, the two install commands (npm install + docker compose),
+    and a pointer to the Korean track manual."""
     rc = aegis_cli._cmd_install_openclaw_stub("openclaw-local")
     assert rc == 0
     captured = capsys.readouterr()
     assert "OpenClaw + Local OSS LLM" in captured.out
-    assert "Preview" in captured.out
+    assert "GA" in captured.out
     assert "docs/releases/OPENCLAW_LOCAL.ko.md" in captured.out
-    # Falls back to recommending the GA track
-    assert "claude-code" in captured.out
+    # The actual install commands are surfaced
+    assert "npm install @happyikas/openclaw-plugin-aegis" in captured.out
+    assert "docker compose" in captured.out
 
 
 def test_install_openclaw_cloud_stub_returns_zero(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """openclaw-cloud is Preview — same stub behaviour as Local."""
+    """openclaw-cloud is GA (v0.3.0) — same stub behaviour as Local."""
     rc = aegis_cli._cmd_install_openclaw_stub("openclaw-cloud")
     assert rc == 0
     captured = capsys.readouterr()
     assert "OpenClaw + Cloud LLM API" in captured.out
-    assert "Preview" in captured.out
+    assert "GA" in captured.out
     assert "docs/releases/OPENCLAW_CLOUD.ko.md" in captured.out
 
 
@@ -2244,7 +2246,9 @@ def test_install_openclaw_target_routes_to_stub(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """`aegis install --target openclaw-local` must NOT touch
-    settings.json — it must short-circuit to the stub."""
+    settings.json — it short-circuits to the install-guidance stub
+    because the actual install is driven from the npm side (in the
+    user's OpenClaw project), not from this Python CLI."""
     import argparse
     settings_path = isolated_install / ".claude" / "settings.json"
     # Pre-condition: no settings.json yet
@@ -2257,10 +2261,10 @@ def test_install_openclaw_target_routes_to_stub(
     ))
     assert rc == 0
     # Stub must NOT have created settings.json — that would be an
-    # accidental Claude Code install under the Preview track.
+    # accidental Claude Code install under the OpenClaw track.
     assert not settings_path.exists()
     captured = capsys.readouterr()
-    assert "Preview" in captured.out
+    assert "OpenClaw" in captured.out
 
 
 def test_install_default_target_is_claude_code(
