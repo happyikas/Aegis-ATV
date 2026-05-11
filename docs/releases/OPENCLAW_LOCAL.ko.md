@@ -107,7 +107,7 @@ Claude Code 트랙과 동일한 16-step firewall + audit chain + 8-advisor pipel
 | 5. vLLM metrics scraper | 🟡 진행 중 | `src/aegis/inference/vllm_metrics.py` |
 | 6. 모델 가중치 baseline 통합 | 🔴 예정 | step309 의 OpenClaw 변형 |
 | 7. Logit-level forensic | 🔴 예정 | vLLM logits 활성 시만 |
-| 8. npm publish | ✅ 완료 | [`@happyikas/openclaw-plugin-aegis@0.2.0-preview.2`](https://www.npmjs.com/package/@happyikas/openclaw-plugin-aegis) on npm — install with `@preview` tag. ClawHub 마켓 등록은 별도 후속 |
+| 8. npm publish | ✅ 완료 | [`@happyikas/openclaw-plugin-aegis@0.3.0`](https://www.npmjs.com/package/@happyikas/openclaw-plugin-aegis) on npm — GA, `latest` dist-tag. ClawHub 마켓 등록은 별도 후속 ([#150](https://github.com/happyikas/Aegis-ATV/issues/150) — upstream paused) |
 
 → 본 PR 머지 후 단계 3–7 은 **별도 PR 시리즈**로 진행. 사용자가 progress 를 추적할 수 있게 GitHub Project board 에 트래킹.
 

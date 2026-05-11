@@ -63,11 +63,10 @@ export async function evaluate(
     if (!response.ok) {
       const body = await safeReadText(response);
       // PR-I (Gap 9) — surface a clear hint when the sidecar is too
-      // old to know the /evaluate/openclaw route. The plugin's
-      // 0.2.0-preview.x requires aegis-mvp >= 0.2.0; an older sidecar
-      // returns 404 (route not registered) and would otherwise
-      // silently fail-open, which is exactly the wrong behaviour for
-      // a security plugin.
+      // old to know the /evaluate/openclaw route. The plugin (>= 0.2.0)
+      // requires aegis-mvp >= 0.2.0; an older sidecar returns 404
+      // (route not registered) and would otherwise silently fail-open,
+      // which is exactly the wrong behaviour for a security plugin.
       const isOldSidecar404 =
         response.status === 404 && url.endsWith("/evaluate/openclaw");
       const hint = isOldSidecar404

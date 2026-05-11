@@ -16,12 +16,12 @@ Aegis ATV ships in three release tracks. Pick the one that matches your environm
 | Track | Status | Best for | Install |
 |-------|--------|----------|---------|
 | 🟢 **Claude Code** | **GA** (v0.1.0) | Solo developer using Claude Code daily | `aegis install --target claude-code` |
-| 🟡 **OpenClaw + Cloud LLM** | Preview | Multi-channel agent ops (Telegram/Discord/Slack), provider flexibility | `aegis install --target openclaw-cloud` + `npm install @happyikas/openclaw-plugin-aegis@preview` |
-| 🟡 **OpenClaw + Local OSS LLM** | Preview | Air-gapped, data-residency-critical, regulated industries | `aegis install --target openclaw-local` + `npm install @happyikas/openclaw-plugin-aegis@preview` |
+| 🟢 **OpenClaw + Cloud LLM** | **GA** (v0.3.0) | Multi-channel agent ops (Telegram/Discord/Slack), provider flexibility | `aegis install --target openclaw-cloud` + `npm install @happyikas/openclaw-plugin-aegis` |
+| 🟢 **OpenClaw + Local OSS LLM** | **GA** (v0.3.0) | Air-gapped, data-residency-critical, regulated industries | `aegis install --target openclaw-local` + `npm install @happyikas/openclaw-plugin-aegis` |
 
 Detailed track docs (Korean): [`docs/releases/`](docs/releases/README.md) — 1-page decision matrix + per-track manual.
 
-The npm package is **published live** as [`@happyikas/openclaw-plugin-aegis@0.2.0-preview.2`](https://www.npmjs.com/package/@happyikas/openclaw-plugin-aegis); use the `@preview` tag explicitly until the GA release lifts the `-preview` suffix.
+The npm package is **published live** as [`@happyikas/openclaw-plugin-aegis@0.3.0`](https://www.npmjs.com/package/@happyikas/openclaw-plugin-aegis); installs via the default `latest` dist-tag (no `@preview` tag needed).
 
 ## Three named features (work across all tracks)
 
