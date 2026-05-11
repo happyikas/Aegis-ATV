@@ -89,11 +89,11 @@ instead of a hopeful prose explanation.
 
 Three release tracks share the same firewall + chain:
 
-  - Claude Code (GA today): `aegis install --target claude-code`
-  - OpenClaw + Cloud LLM (preview): npm install
-    @happyikas/openclaw-plugin-aegis@preview — multi-channel
+  - Claude Code (GA): `aegis install --target claude-code`
+  - OpenClaw + Cloud LLM (GA): npm install
+    @happyikas/openclaw-plugin-aegis — multi-channel
     (Telegram/Discord/Slack/CLI), multi-provider (Claude/GPT/Gemini)
-  - OpenClaw + Local OSS LLM (preview): air-gapped, vLLM/Ollama,
+  - OpenClaw + Local OSS LLM (GA): air-gapped, vLLM/Ollama,
     no outbound network
 
 What lit up most recently: `aegis report --by-aid-and-provider`
@@ -298,7 +298,7 @@ Before submitting (mirrors issue [#151](https://github.com/happyikas/Aegis-ATV/i
 - [ ] Demo GIF current (the README hero asset; reflects current CLI surface)
 - [ ] `aegis verify-audit` works against a fresh install in <60 seconds
 - [ ] The "first 30 seconds" path in README is accurate (no broken commands)
-- [ ] `npm install @happyikas/openclaw-plugin-aegis@preview` works from a fresh shell
+- [ ] `npm install @happyikas/openclaw-plugin-aegis` works from a fresh shell (resolves to 0.3.0 via `latest`)
 - [ ] PRICING.md is published so HN commenters can answer "is this open core or rugpull-bait?"
 - [ ] At least 1 design partner reference (anonymized OK) we can link to
 - [ ] Author has 4–6 hours blocked off after submission

@@ -2,7 +2,7 @@
 
 > Public roadmap kept in this file *and* mirrored to a GitHub Project
 > board (the board is the canonical view for triage; this file is the
-> stable URL for outsiders). Last refreshed: 2026-05-09.
+> stable URL for outsiders). Last refreshed: 2026-05-11.
 
 For the most-recent issue activity see
 [the issues list](https://github.com/happyikas/Aegis-ATV/issues).
@@ -11,45 +11,22 @@ For the most-recent issue activity see
 
 ## Now — in flight
 
-| Issue / PR | Title | Status |
-|---|---|---|
-| [PR #143](https://github.com/happyikas/Aegis-ATV/pull/143) | OpenClaw plugin E2E test against real Aegis sidecar | CI in progress |
-| [PR #144](https://github.com/happyikas/Aegis-ATV/pull/144) | `PRICING.md` + `docs/LICENSE_KEY.md` (free / paid boundary) | open |
-
-PR #142 (Gap A — `aegis report --by-aid-and-provider`) merged 2026-05-09.
+_(no work currently in flight — MVP surface is closed; see "Next" for
+external-event-gated items.)_
 
 ---
 
-## Next — multi-agent + multi-LLM follow-on
+## Next — external-event-gated
 
-These are the three remaining gaps from the multi-agent + multi-LLM
-cross-grouping review. PR #142 (Gap A) is the report-side; these
-extend Gap A to **infrastructure**, **learning**, and **cross-agent
-provenance**.
+The remaining MVP items all wait on something outside the repo. Code
+work is done; gating is design-partner availability or upstream
+platform readiness.
 
 | Priority | Issue | One-line | Blocker |
 |---|---|---|---|
-| 🟢 high | [#145 — Gap B](https://github.com/happyikas/Aegis-ATV/issues/145) | per-aid vLLM endpoint config (multi-vLLM-server scrape) | none — ready to start |
-| 🟡 mid | [#146 — Gap C](https://github.com/happyikas/Aegis-ATV/issues/146) | per-(aid, provider) baseline learning (Coach burn-in) | depends on Gap B for endpoint metrics |
-| 🔴 low | [#147 — Gap D](https://github.com/happyikas/Aegis-ATV/issues/147) | inter-agent edge tracking (`inter_agent_edges` populate) | depends on OpenClaw runtime cooperation |
-
----
-
-## OpenClaw plugin lifecycle
-
-| Issue | What's there | When |
-|---|---|---|
-| [#148](https://github.com/happyikas/Aegis-ATV/issues/148) | Lift `-preview` suffix → publish `@happyikas/openclaw-plugin-aegis@0.3.0` | E2E CI runs green ≥ 7 days on `main` (gated by PR #143) |
-| [#150](https://github.com/happyikas/Aegis-ATV/issues/150) | ClawHub marketplace registration | paused until ClawHub goes public |
-
----
-
-## Business model
-
-| Issue | What's there | Gating |
-|---|---|---|
-| [#149](https://github.com/happyikas/Aegis-ATV/issues/149) | Implement license-key validation runtime gate | ≥ 3 paying design partners willing to test activation |
-| [#151](https://github.com/happyikas/Aegis-ATV/issues/151) | Show HN go-live prep | the pre-flight checklist in the issue |
+| 🟡 mid | [#151 — Show HN go-live](https://github.com/happyikas/Aegis-ATV/issues/151) | submission to Hacker News | design-partner reference (1+) we can link to from the post body |
+| 🔴 low | [#147 — Gap D](https://github.com/happyikas/Aegis-ATV/issues/147) | inter-agent edge tracking (`inter_agent_edges`) | OpenClaw runtime cooperation (upstream must emit `parentAgentId` / `parentInvocationId`) |
+| 🔴 low | [#150 — ClawHub marketplace](https://github.com/happyikas/Aegis-ATV/issues/150) | plugin discovery via ClawHub | ClawHub marketplace not yet public |
 
 ---
 
@@ -57,16 +34,29 @@ provenance**.
 
 (For the full release log see [`CHANGELOG.md`](CHANGELOG.md).)
 
-| PR | Landed | Title |
+| PR / Issue | Landed | Title |
 |---|---|---|
-| [#142](https://github.com/happyikas/Aegis-ATV/pull/142) | 2026-05-09 | Gap A: `aegis report --by-aid-and-provider` cross-grouping |
-| [#141](https://github.com/happyikas/Aegis-ATV/pull/141) | 2026-05-09 | OpenClaw track step 8 ✅ — npm package published |
-| [#140](https://github.com/happyikas/Aegis-ATV/pull/140) | 2026-05-09 | rename npm scope `@openclaw` → `@happyikas` |
-| [#139](https://github.com/happyikas/Aegis-ATV/pull/139) | 2026-05-09 | `0.2.0-preview.2` publish blocker fixes |
-| [#138](https://github.com/happyikas/Aegis-ATV/pull/138) | 2026-05-09 | npm publish prep — `0.2.0-preview.1` |
-| [#136](https://github.com/happyikas/Aegis-ATV/pull/136) | 2026-05-08 | `aegis report --by-provider` |
-| [#134](https://github.com/happyikas/Aegis-ATV/pull/134) | 2026-05-08 | `aegis report --by-channel` |
-| [#133](https://github.com/happyikas/Aegis-ATV/pull/133) | 2026-05-08 | `aegis report --by-aid` |
+| [PR #164](https://github.com/happyikas/Aegis-ATV/pull/164) | 2026-05-11 | `openclaw-plugin 0.3.0` GA — `-preview` suffix lifted (closes [#148](https://github.com/happyikas/Aegis-ATV/issues/148)) |
+| [PR #163](https://github.com/happyikas/Aegis-ATV/pull/163) | 2026-05-10 | License gate wired — `--profile pro/cloud`, sidecar install, runtime advisor (LICENSE_KEY.md §9 steps 5-7; closes [#149](https://github.com/happyikas/Aegis-ATV/issues/149)) |
+| [PR #162](https://github.com/happyikas/Aegis-ATV/pull/162) | 2026-05-10 | `docs/THREAT_MODEL.md` — STRIDE walk + auditor checklist for the 3rd-party audit |
+| [PR #161](https://github.com/happyikas/Aegis-ATV/pull/161) | 2026-05-10 | Release 0.3.0 — multi-agent + multi-LLM + production hardening |
+| [PR #160](https://github.com/happyikas/Aegis-ATV/pull/160) | earlier | Load-test harness — `aegis soak` + `aegis bench` |
+| [PR #159](https://github.com/happyikas/Aegis-ATV/pull/159) | earlier | Sidecar production hardening — rate limit + size cap + /readyz + graceful shutdown + structured errors |
+| [PR #158](https://github.com/happyikas/Aegis-ATV/pull/158) | earlier | Audit log rotation — gzip + time trigger + `aegis audit status/prune` |
+| [PR #157](https://github.com/happyikas/Aegis-ATV/pull/157) | earlier | License no-op gate plumbing — Solo Pro / Team / Enterprise |
+| [PR #156](https://github.com/happyikas/Aegis-ATV/pull/156) | earlier | Release pipeline — PyPI + GHCR multi-arch + slim sdist |
+| [PR #155](https://github.com/happyikas/Aegis-ATV/pull/155) | earlier | Gap C — Coach burn-in 3-tuple `(aid, role, provider)` (closes [#146](https://github.com/happyikas/Aegis-ATV/issues/146)) |
+| [PR #154](https://github.com/happyikas/Aegis-ATV/pull/154) | earlier | Gap B — per-aid vLLM endpoint config + multi-server scrape (closes [#145](https://github.com/happyikas/Aegis-ATV/issues/145)) |
+| [PR #144](https://github.com/happyikas/Aegis-ATV/pull/144) | 2026-05-09 | `PRICING.md` + `docs/LICENSE_KEY.md` (free / paid boundary) |
+| [PR #143](https://github.com/happyikas/Aegis-ATV/pull/143) | 2026-05-09 | OpenClaw plugin E2E test against real Aegis sidecar |
+| [PR #142](https://github.com/happyikas/Aegis-ATV/pull/142) | 2026-05-09 | Gap A: `aegis report --by-aid-and-provider` cross-grouping |
+| [PR #141](https://github.com/happyikas/Aegis-ATV/pull/141) | 2026-05-09 | OpenClaw track step 8 ✅ — npm package published as `0.2.0-preview.2` |
+| [PR #140](https://github.com/happyikas/Aegis-ATV/pull/140) | 2026-05-09 | rename npm scope `@openclaw` → `@happyikas` |
+| [PR #139](https://github.com/happyikas/Aegis-ATV/pull/139) | 2026-05-09 | `0.2.0-preview.2` publish blocker fixes |
+| [PR #138](https://github.com/happyikas/Aegis-ATV/pull/138) | 2026-05-09 | npm publish prep — `0.2.0-preview.1` |
+| [PR #136](https://github.com/happyikas/Aegis-ATV/pull/136) | 2026-05-08 | `aegis report --by-provider` |
+| [PR #134](https://github.com/happyikas/Aegis-ATV/pull/134) | 2026-05-08 | `aegis report --by-channel` |
+| [PR #133](https://github.com/happyikas/Aegis-ATV/pull/133) | 2026-05-08 | `aegis report --by-aid` |
 
 ---
 

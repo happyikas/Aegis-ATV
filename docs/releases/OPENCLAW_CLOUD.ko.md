@@ -107,7 +107,7 @@ cloud LLM 트랙이라서 발생하는 한계 — Local OSS 트랙으로 가야 
 | 5. 다채널 attribution 통합 | 🟡 설계만 | OpenClaw event metadata → ATV `header.channel` |
 | 6. Param rewrite 통합 | ✅ 핸들러에 구현됨 | `sanitized_input` 처리 |
 | 7. Provider drift 감지 | 🔴 예정 | Coach 의 새 학습 차원 |
-| 8. npm publish | ✅ 완료 | [`@happyikas/openclaw-plugin-aegis@0.2.0-preview.2`](https://www.npmjs.com/package/@happyikas/openclaw-plugin-aegis) on npm — install with `@preview` tag. ClawHub 마켓 등록은 별도 후속 |
+| 8. npm publish | ✅ 완료 | [`@happyikas/openclaw-plugin-aegis@0.3.0`](https://www.npmjs.com/package/@happyikas/openclaw-plugin-aegis) on npm — GA, `latest` dist-tag. ClawHub 마켓 등록은 별도 후속 ([#150](https://github.com/happyikas/Aegis-ATV/issues/150) — upstream paused) |
 
 → 단계 3 (TypeScript 플러그인) 이 Local 트랙과 공유되므로, 그 PR 이 머지되면 **Cloud 트랙 4–5 는 빠르게 따라옴**.
 

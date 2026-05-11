@@ -12,6 +12,28 @@ TypeScript plugin which versions independently.
 
 ---
 
+## 0.3.0 GA — 2026-05-11 (published)
+
+The `-preview` suffix lifted in PR #164. The diff against
+`0.2.0-preview.2` was metadata-only (version bumps, CHANGELOG,
+README "Status" wording, removal of the `@preview` install
+caveat); the runtime behavior is unchanged. E2E CI ran green
+through the soak window (PR #143 shipped the infra on 2026-05-09)
+with zero flake before the publish call. Post-publish housekeeping:
+
+```bash
+npm publish                                                          # 0.3.0 → `latest`
+npm dist-tag rm @happyikas/openclaw-plugin-aegis preview             # retire preview channel
+npm deprecate @happyikas/openclaw-plugin-aegis@0.2.0-preview.2 ""    # lift deprecation msg
+```
+
+The remainder of this runbook documents the **0.2.0-preview.X**
+publish flow that originally landed the package on npm. Keep for
+historical reference; the GA publish above is the canonical
+go-forward path.
+
+---
+
 ## 0. Pre-flight (one-time)
 
 ### 0.1. npm account + access to `@openclaw` org
