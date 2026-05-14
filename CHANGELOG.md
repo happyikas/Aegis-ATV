@@ -4,6 +4,28 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+* **`aegis.integrations.openrouter`** — Python helper that extracts
+  the canonical Aegis `provider` string from an OpenRouter response,
+  including fallback-chain resolution. `aegis report --by-provider`
+  now cross-groups by *actual* served provider when the caller stamps
+  `provider="openrouter:<vendor>-<model>"` into the ATV header, so
+  the provider-drift advisor works correctly with OpenRouter routes.
+  Pure-Python, no network, 45 unit tests. (PR-this)
+* **`docs/integrations/openrouter.md`** — 3-layer stack guide (agent
+  runtime → OpenRouter LLM gateway → Aegis tool firewall), code
+  examples for both fresh use and OpenClaw composition, honest scope
+  table. README + SHOW_HN.md gain a paragraph positioning the
+  compose narrative.
+* **`aegis label`** (PR #169) — human adjudication CLI; first code
+  surface for the patent's "human analyst" label source.
+* **`docs/integrations/hermes.md`** (PR #169) — Aegis-as-external-
+  observer mapped against Hermes's self-improving-agent positioning,
+  with a code-grounded 5-pattern matrix.
+
 ## [0.3.1] — 2026-05-11  ·  Audit docs + license gate activation + plugin GA
 
 A documentation- and gate-flip release on top of 0.3.0. No new

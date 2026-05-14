@@ -339,6 +339,17 @@ tool call inside Claude Code, asks the running Aegis service for a
 verdict, and short-circuits the tool with stderr if blocked.
 See [`tools/README.md`](tools/README.md) for install + tool mapping.
 
+### Compose with an LLM gateway (OpenRouter)
+
+If you route LLM calls through [OpenRouter](https://openrouter.ai), Aegis composes naturally — they sit at **different layers**:
+
+* **OpenRouter**: 300+ models × 60+ providers behind one API. Decides *which model handles this prompt*.
+* **Aegis**: 16-step firewall + cryptographic audit chain on every tool call. Decides *is this resulting action safe?*
+
+The `aegis.integrations.openrouter` Python helper stamps the served-provider name (from OpenRouter's `provider_responses[]`) into Aegis's `provider` field — so `aegis report --by-provider` cross-groups by actual provider (`openrouter:anthropic-claude-sonnet-4` vs `openrouter:openai-gpt-4o`), and the **provider-drift advisor** can flag "this provider's BLOCK rate diverges 3× from the cross-provider median" — a check that's only meaningful when multiple providers serve the same prompt.
+
+See [`docs/integrations/openrouter.md`](docs/integrations/openrouter.md) for the 3-layer stack figure, code snippets, and honest scope.
+
 ---
 
 ## Documentation
