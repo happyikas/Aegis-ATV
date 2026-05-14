@@ -2281,3 +2281,298 @@ def test_install_default_target_is_claude_code(
     ))
     assert rc == 0
     assert (isolated_install / ".claude" / "settings.json").exists()
+
+
+# ── aegis label ──────────────────────────────────────────────────
+
+
+@pytest.fixture
+def _isolated_labels_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> Path:
+    """Point the labels writer at a tmp file so tests don't touch
+    ``~/.aegis/labels.jsonl``."""
+    p = tmp_path / "labels.jsonl"
+    monkeypatch.setenv("AEGIS_LABELS_PATH", str(p))
+    return p
+
+
+def _label_args(  # type: ignore[no-untyped-def]
+    *,
+    trace=None, invocation=None, last=False,
+    label=None, verdict=None,
+    reason="", analyst="cli", confidence=1.0,
+    label_action=None,
+    limit=20,
+    trace_id=None,
+):
+    import argparse
+    return argparse.Namespace(
+        trace=trace, invocation=invocation, last=last,
+        label=label, verdict=verdict,
+        reason=reason, analyst=analyst, confidence=confidence,
+        label_action=label_action,
+        limit=limit,
+        trace_id=trace_id,
+    )
+
+
+def test_label_set_writes_record_via_trace(
+    _isolated_labels_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    rc = aegis_cli.cmd_label(_label_args(
+        trace="trace-A", label="suspicious", reason="grey-zone",
+        analyst="alice",
+    ))
+    assert rc == 0
+    captured = capsys.readouterr().out
+    assert "labeled" in captured
+    assert "trace-A" in captured
+    assert "REQUIRE_APPROVAL" in captured
+    # File written
+    raw = _isolated_labels_path.read_text(encoding="utf-8").strip()
+    rec = json.loads(raw)
+    assert rec["trace_id"] == "trace-A"
+    assert rec["label"] == "suspicious"
+    assert rec["verdict"] == "REQUIRE_APPROVAL"
+    assert rec["analyst"] == "alice"
+
+
+def test_label_set_accepts_verdict_vocabulary(
+    _isolated_labels_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    rc = aegis_cli.cmd_label(_label_args(
+        trace="trace-B", verdict="BLOCK",
+    ))
+    assert rc == 0
+    raw = _isolated_labels_path.read_text(encoding="utf-8").strip()
+    rec = json.loads(raw)
+    assert rec["label"] == "malicious"
+    assert rec["verdict"] == "BLOCK"
+
+
+def test_label_set_requires_target_selector(
+    _isolated_labels_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    rc = aegis_cli.cmd_label(_label_args(label="benign"))
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "--trace" in err and "--invocation" in err and "--last" in err
+
+
+def test_label_set_rejects_multiple_target_selectors(
+    _isolated_labels_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    rc = aegis_cli.cmd_label(_label_args(
+        trace="t1", last=True, label="benign",
+    ))
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "mutually exclusive" in err
+
+
+def test_label_set_propagates_label_error(
+    _isolated_labels_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """If the user provides no label AND no verdict, the canoniser
+    raises LabelError; the CLI must surface it and return 1."""
+    rc = aegis_cli.cmd_label(_label_args(trace="t1"))
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "exactly one" in err
+
+
+def test_label_last_walks_audit_log(
+    _isolated_labels_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    audit = tmp_path / "audit.jsonl"
+    # Mix of PreToolUse + PostToolUse, the latest PreToolUse wins.
+    audit.write_text(
+        json.dumps({
+            "hook": "PreToolUse", "trace_id": "older-pre",
+            "invocation_id": "inv-1",
+        }) + "\n"
+        + json.dumps({
+            "hook": "PostToolUse", "trace_id": "post-1",
+        }) + "\n"
+        + json.dumps({
+            "hook": "PreToolUse", "trace_id": "newer-pre",
+            "invocation_id": "inv-2",
+        }) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AEGIS_LOCAL_AUDIT", str(audit))
+
+    rc = aegis_cli.cmd_label(_label_args(
+        last=True, label="malicious", reason="post-hoc",
+    ))
+    assert rc == 0
+    written = json.loads(
+        _isolated_labels_path.read_text(encoding="utf-8").strip()
+    )
+    assert written["trace_id"] == "newer-pre"
+
+
+def test_label_invocation_resolves_to_trace(
+    _isolated_labels_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    audit = tmp_path / "audit.jsonl"
+    audit.write_text(
+        json.dumps({
+            "hook": "PreToolUse", "trace_id": "matching-trace",
+            "invocation_id": "target-inv",
+        }) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AEGIS_LOCAL_AUDIT", str(audit))
+
+    rc = aegis_cli.cmd_label(_label_args(
+        invocation="target-inv", label="benign",
+    ))
+    assert rc == 0
+    written = json.loads(
+        _isolated_labels_path.read_text(encoding="utf-8").strip()
+    )
+    assert written["trace_id"] == "matching-trace"
+    assert written["invocation_id"] == "target-inv"
+
+
+def test_label_invocation_not_found_errors(
+    _isolated_labels_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    audit = tmp_path / "audit.jsonl"
+    audit.write_text(
+        json.dumps({
+            "hook": "PreToolUse", "trace_id": "tA", "invocation_id": "iA",
+        }) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AEGIS_LOCAL_AUDIT", str(audit))
+    rc = aegis_cli.cmd_label(_label_args(
+        invocation="nonexistent", label="benign",
+    ))
+    assert rc == 1
+    assert "not found" in capsys.readouterr().err
+
+
+def test_label_last_with_no_audit_log(
+    _isolated_labels_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("AEGIS_LOCAL_AUDIT", str(tmp_path / "absent.jsonl"))
+    rc = aegis_cli.cmd_label(_label_args(last=True, label="benign"))
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "no audit log" in err
+
+
+def test_label_list_empty(
+    _isolated_labels_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    rc = aegis_cli.cmd_label(_label_args(label_action="list"))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "no adjudications yet" in out
+
+
+def test_label_list_renders_recent_first(
+    _isolated_labels_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from aegis.burnin import labels as _labels
+
+    _labels.append_label(
+        trace_id="t-old", label="benign", ts_ns=1_000_000_000_000_000_000,
+        path=_isolated_labels_path,
+    )
+    _labels.append_label(
+        trace_id="t-new", label="malicious",
+        ts_ns=1_000_000_000_000_000_500,
+        path=_isolated_labels_path,
+    )
+    rc = aegis_cli.cmd_label(_label_args(label_action="list"))
+    assert rc == 0
+    out = capsys.readouterr().out
+    # t-new must appear before t-old in the output (recent-first sort)
+    new_pos = out.find("t-new")
+    old_pos = out.find("t-old")
+    assert new_pos != -1 and old_pos != -1
+    assert new_pos < old_pos
+
+
+def test_label_show_supersede_uses_latest(
+    _isolated_labels_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from aegis.burnin import labels as _labels
+
+    _labels.append_label(
+        trace_id="t1", label="benign", ts_ns=1_000_000_000_000_000_000,
+        path=_isolated_labels_path,
+    )
+    _labels.append_label(
+        trace_id="t1", label="malicious",
+        ts_ns=1_000_000_000_000_000_500,
+        path=_isolated_labels_path,
+    )
+    rc = aegis_cli.cmd_label(_label_args(
+        label_action="show", trace_id="t1",
+    ))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "malicious" in out
+    assert "BLOCK" in out
+
+
+def test_label_show_missing_trace_errors(
+    _isolated_labels_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    rc = aegis_cli.cmd_label(_label_args(
+        label_action="show", trace_id="absent-trace",
+    ))
+    assert rc == 1
+    assert "no adjudication" in capsys.readouterr().out
+
+
+def test_label_subcommand_wired_in_build_parser() -> None:
+    """argparse must accept `aegis label ...` and route to cmd_label."""
+    parser = aegis_cli.build_parser()
+    args = parser.parse_args([
+        "label", "--trace", "t1", "--label", "suspicious",
+    ])
+    assert args.fn is aegis_cli.cmd_label
+    assert args.trace == "t1"
+    assert args.label == "suspicious"
+
+
+def test_label_list_subcommand_wired() -> None:
+    parser = aegis_cli.build_parser()
+    args = parser.parse_args(["label", "list", "--limit", "5"])
+    assert args.fn is aegis_cli.cmd_label
+    assert args.label_action == "list"
+    assert args.limit == 5
+
+
+def test_label_show_subcommand_wired() -> None:
+    parser = aegis_cli.build_parser()
+    args = parser.parse_args(["label", "show", "trace-xyz"])
+    assert args.fn is aegis_cli.cmd_label
+    assert args.label_action == "show"
+    assert args.trace_id == "trace-xyz"

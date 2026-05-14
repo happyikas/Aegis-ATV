@@ -3808,6 +3808,247 @@ def cmd_advise(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_label(args: argparse.Namespace) -> int:
+    """`aegis label` — human adjudication of an audit record.
+
+    Closes the "self-labeled only" gap in the burn-in corpus
+    (patent ¶[0083], source 1 of 4). The trainer in
+    ``aegis.burnin.m13_train`` joins this file against
+    ``~/.aegis/shadow.jsonl`` by ``trace_id`` so a single
+    re-train picks up every adjudication landed since the last run.
+
+    Three lookup modes:
+
+      * ``--trace <id>``         — exact trace_id (UUID)
+      * ``--invocation <id>``    — exact invocation_id (per-tool-call key)
+      * ``--last``               — most-recent PreToolUse record in
+                                   ``~/.aegis/audit.jsonl``
+
+    Two vocabularies (you can use either — the record stores both):
+
+      * ``--label {benign|suspicious|malicious}`` — patent class
+      * ``--verdict {ALLOW|REQUIRE_APPROVAL|BLOCK}`` — firewall class
+
+    Optional context:
+
+      * ``--reason <text>``      — analyst note (≤ 500 chars)
+      * ``--analyst <handle>``   — who labeled (default: ``cli``)
+      * ``--confidence <0-1>``   — defaults to 1.0
+
+    Re-labeling: appending a new record with the same trace_id is
+    treated as supersede (latest ``ts_ns`` wins). We never rewrite
+    history — audit.jsonl is append-only by contract.
+
+    Sub-actions:
+
+      * ``aegis label list``     — show recent labels
+      * ``aegis label show <trace_id>`` — show the latest label for one trace
+    """
+    from aegis.burnin import labels as _labels
+
+    action = getattr(args, "label_action", None) or "set"
+
+    if action == "list":
+        return _cmd_label_list(args)
+    if action == "show":
+        return _cmd_label_show(args)
+
+    # default action — set a label
+    trace_id, invocation_id = _resolve_audit_target(args)
+    if trace_id is None:
+        return 1
+
+    try:
+        rec = _labels.append_label(
+            trace_id=trace_id,
+            label=args.label,
+            verdict=args.verdict,
+            invocation_id=invocation_id or "",
+            reason=args.reason or "",
+            analyst=args.analyst or "cli",
+            confidence=args.confidence,
+        )
+    except _labels.LabelError as e:
+        print(_red(f"error: {e}"), file=sys.stderr)
+        return 1
+
+    print(_green("✓ labeled"))
+    print(f"  trace_id:      {rec.trace_id}")
+    if rec.invocation_id:
+        print(f"  invocation_id: {rec.invocation_id}")
+    print(f"  label:         {rec.label}  (verdict: {rec.verdict})")
+    if rec.reason:
+        print(f"  reason:        {rec.reason}")
+    print(f"  analyst:       {rec.analyst}")
+    print(f"  confidence:    {rec.confidence:.2f}")
+    print()
+    print(f"  saved to: {_labels.labels_path()}")
+    print()
+    print("  next: `aegis burnin train-m13` will pick this up on the")
+    print("        next training run.")
+    return 0
+
+
+def _resolve_audit_target(
+    args: argparse.Namespace,
+) -> tuple[str | None, str | None]:
+    """Resolve --trace / --invocation / --last to (trace_id, invocation_id).
+
+    Returns ``(None, None)`` and prints an error on failure.
+    """
+    explicit_trace = (getattr(args, "trace", None) or "").strip()
+    explicit_inv = (getattr(args, "invocation", None) or "").strip()
+    use_last = bool(getattr(args, "last", False))
+
+    n_set = sum(bool(x) for x in (explicit_trace, explicit_inv, use_last))
+    if n_set == 0:
+        print(_red(
+            "error: provide exactly one of --trace <id>, --invocation <id>, "
+            "or --last"
+        ), file=sys.stderr)
+        return None, None
+    if n_set > 1:
+        print(_red(
+            "error: --trace / --invocation / --last are mutually exclusive"
+        ), file=sys.stderr)
+        return None, None
+
+    if explicit_trace:
+        return explicit_trace, ""
+    if explicit_inv:
+        return _trace_for_invocation(explicit_inv)
+    # --last: most-recent PreToolUse record
+    return _last_pretool_trace_id()
+
+
+def _audit_path() -> Path:
+    raw = os.environ.get("AEGIS_LOCAL_AUDIT", "").strip()
+    if raw:
+        return Path(raw)
+    return Path.home() / ".aegis" / "audit.jsonl"
+
+
+def _last_pretool_trace_id() -> tuple[str | None, str | None]:
+    path = _audit_path()
+    if not path.exists():
+        print(_red(
+            f"error: --last requested but no audit log at {path}"
+        ), file=sys.stderr)
+        return None, None
+    last_trace = ""
+    last_inv = ""
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("hook") == "PostToolUse":
+                continue
+            # PreToolUse or unlabeled (legacy) record — prefer PreToolUse
+            # because that's where the verdict was issued.
+            t = rec.get("trace_id") or (rec.get("header") or {}).get("trace_id")
+            inv = rec.get("invocation_id", "")
+            if t:
+                last_trace = str(t)
+                last_inv = str(inv)
+    if not last_trace:
+        print(_red(
+            "error: no PreToolUse record with trace_id in audit log; "
+            "use --trace explicitly"
+        ), file=sys.stderr)
+        return None, None
+    return last_trace, last_inv
+
+
+def _trace_for_invocation(
+    invocation_id: str,
+) -> tuple[str | None, str | None]:
+    path = _audit_path()
+    if not path.exists():
+        print(_red(
+            f"error: no audit log at {path}"
+        ), file=sys.stderr)
+        return None, None
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("invocation_id") == invocation_id:
+                t = rec.get("trace_id") or (rec.get("header") or {}).get("trace_id")
+                if t:
+                    return str(t), invocation_id
+    print(_red(
+        f"error: invocation_id {invocation_id!r} not found in audit log"
+    ), file=sys.stderr)
+    return None, None
+
+
+def _cmd_label_list(args: argparse.Namespace) -> int:
+    from aegis.burnin import labels as _labels
+
+    limit = getattr(args, "limit", 20) or 20
+    recs = _labels.read_labels()
+    if not recs:
+        print(f"[label] no adjudications yet at {_labels.labels_path()}")
+        print("        run `aegis label --last --label suspicious` to start")
+        return 0
+    # Most-recent first.
+    recs.sort(key=lambda r: r.ts_ns, reverse=True)
+    recs = recs[:limit]
+    print(f"{'when':<20} {'label':<11} {'verdict':<18} {'analyst':<14} trace_id")
+    print("-" * 90)
+    import datetime as _dt
+    for r in recs:
+        when = _dt.datetime.fromtimestamp(
+            r.ts_ns / 1e9, tz=_dt.UTC,
+        ).strftime("%Y-%m-%d %H:%M:%S")
+        short_trace = r.trace_id[:12] + "…" if len(r.trace_id) > 13 else r.trace_id
+        print(
+            f"{when:<20} {r.label:<11} {r.verdict:<18} "
+            f"{r.analyst[:13]:<14} {short_trace}"
+        )
+    print()
+    print(f"total: {len(_labels.read_labels())} adjudications  "
+          f"({_labels.labels_path()})")
+    return 0
+
+
+def _cmd_label_show(args: argparse.Namespace) -> int:
+    from aegis.burnin import labels as _labels
+
+    trace_id = (getattr(args, "trace_id", None) or "").strip()
+    if not trace_id:
+        print(_red("error: trace_id is required"), file=sys.stderr)
+        return 1
+    rec = _labels.latest_label_for(trace_id)
+    if rec is None:
+        print(f"[label] no adjudication for trace_id={trace_id}")
+        return 1
+    print(f"trace_id:      {rec.trace_id}")
+    if rec.invocation_id:
+        print(f"invocation_id: {rec.invocation_id}")
+    print(f"label:         {rec.label}")
+    print(f"verdict:       {rec.verdict}")
+    print(f"reason:        {rec.reason or '(none)'}")
+    print(f"analyst:       {rec.analyst}")
+    print(f"confidence:    {rec.confidence:.2f}")
+    import datetime as _dt
+    when = _dt.datetime.fromtimestamp(
+        rec.ts_ns / 1e9, tz=_dt.UTC,
+    ).strftime("%Y-%m-%d %H:%M:%S UTC")
+    print(f"labeled at:    {when}")
+    return 0
+
+
 def cmd_cache_lint(args: argparse.Namespace) -> int:
     """`aegis cache-lint` — diagnose Anthropic prompt-cache breakage.
 
@@ -7322,6 +7563,95 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     ad.set_defaults(fn=cmd_advise)
+
+    # ── aegis label ──────────────────────────────────────────────
+    lb = sub.add_parser(
+        "label",
+        help=(
+            "Human adjudication of an audit record (closes the "
+            "'self-labeled only' gap in the shadow corpus)"
+        ),
+    )
+    lb_sub = lb.add_subparsers(dest="label_action", required=False)
+
+    # 'set' is the default action (no sub-action keyword needed)
+    def _add_label_set_args(p: argparse.ArgumentParser) -> None:
+        sel = p.add_mutually_exclusive_group(required=False)
+        sel.add_argument(
+            "--trace",
+            type=str,
+            default=None,
+            help="trace_id of the audit record to label (UUID)",
+        )
+        sel.add_argument(
+            "--invocation",
+            type=str,
+            default=None,
+            help="invocation_id (per-tool-call key); trace_id is resolved",
+        )
+        sel.add_argument(
+            "--last",
+            action="store_true",
+            help="label the most-recent PreToolUse record in audit.jsonl",
+        )
+        vocab = p.add_mutually_exclusive_group(required=False)
+        vocab.add_argument(
+            "--label",
+            type=str,
+            choices=["benign", "suspicious", "malicious"],
+            default=None,
+            help="patent vocabulary (canonicalised to a firewall verdict)",
+        )
+        vocab.add_argument(
+            "--verdict",
+            type=str,
+            choices=["ALLOW", "REQUIRE_APPROVAL", "BLOCK"],
+            default=None,
+            help="firewall vocabulary (canonicalised to a patent label)",
+        )
+        p.add_argument(
+            "--reason",
+            type=str,
+            default="",
+            help="analyst note (≤ 500 chars)",
+        )
+        p.add_argument(
+            "--analyst",
+            type=str,
+            default="cli",
+            help="analyst handle / email (default: 'cli')",
+        )
+        p.add_argument(
+            "--confidence",
+            type=float,
+            default=1.0,
+            help="confidence in the label, [0, 1] (default: 1.0)",
+        )
+
+    _add_label_set_args(lb)
+
+    lb_list = lb_sub.add_parser(
+        "list",
+        help="show recent adjudications",
+    )
+    lb_list.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="max rows to show (default: 20)",
+    )
+
+    lb_show = lb_sub.add_parser(
+        "show",
+        help="show the latest label for a trace_id",
+    )
+    lb_show.add_argument(
+        "trace_id",
+        type=str,
+        help="trace_id to look up",
+    )
+
+    lb.set_defaults(fn=cmd_label)
 
     cl = sub.add_parser(
         "cache-lint",
