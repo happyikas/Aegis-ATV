@@ -101,7 +101,15 @@ cross-groups the audit chain by (agent, LLM provider) and surfaces
 "this agent's BLOCK rate diverges 5× across the providers it has
 used" — the canary for vendor-migration safety drift.
 
-Stack: 2,369 tests passing on Python 3.11/3.12/3.13. mypy strict
+If you use OpenRouter, Aegis is the missing tool-call firewall —
+different layer. OpenRouter routes LLM calls across 300+ models;
+Aegis verifies the tool calls those models produce. The Python
+helper `aegis.integrations.openrouter` stamps the served provider
+into the audit so `aegis report --by-provider` works correctly with
+OpenRouter routes. The provider-drift advisor is the unique value
+that only shows up when multiple providers serve the same prompt.
+
+Stack: 2,800+ tests passing on Python 3.11/3.12/3.13. mypy strict
 clean. Runs in one Docker container. Solo Free tier is unconditionally
 free forever (Apache-2.0); paid tiers are in design-partner phase
 (see PRICING.md for the boundary).
