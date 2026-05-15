@@ -419,6 +419,72 @@ def test_validate_plugin_manifest_missing_required_fields(
     assert "name" in msg
 
 
+# ---- plugin manifest resolution (0.3.3 hotfix) ----------------------------
+
+
+def test_resolve_plugin_manifest_prefers_dev_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """When the repo's ``.claude-plugin/plugin.json`` exists, the
+    resolver MUST return it (dev / source-clone path takes priority).
+    This is what `uv run aegis` should do."""
+    dev = tmp_path / ".claude-plugin" / "plugin.json"
+    dev.parent.mkdir()
+    dev.write_text(json.dumps({"name": "x", "version": "1.0.0"}))
+    monkeypatch.setattr(aegis_cli, "PROJECT_ROOT", tmp_path)
+    resolved = aegis_cli._resolve_plugin_manifest()
+    assert resolved == dev
+    assert resolved.exists()
+
+
+def test_resolve_plugin_manifest_falls_back_to_bundled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """When the dev path doesn't exist (= installed via pip / uv tool),
+    the resolver MUST return the bundled `aegis/_data/plugin.json`
+    inside the installed package. This is the 0.3.3 hotfix contract."""
+    # PROJECT_ROOT is a tmpdir without .claude-plugin/
+    monkeypatch.setattr(aegis_cli, "PROJECT_ROOT", tmp_path)
+    resolved = aegis_cli._resolve_plugin_manifest()
+    # Should be the real bundled file (aegis/_data/plugin.json)
+    import aegis as _a
+    bundled = Path(_a.__file__).parent / "_data" / "plugin.json"
+    assert resolved == bundled
+    assert resolved.exists()
+
+
+def test_bundled_plugin_manifest_is_valid_json(
+) -> None:
+    """The bundled manifest in src/aegis/_data/plugin.json MUST be
+    parseable + contain the required fields. Catches the case where
+    someone updates the dev copy but forgets to refresh the bundled
+    copy."""
+    import aegis as _a
+    bundled = Path(_a.__file__).parent / "_data" / "plugin.json"
+    assert bundled.exists(), "bundled plugin.json not shipped in package"
+    data = json.loads(bundled.read_text(encoding="utf-8"))
+    assert data.get("name"), "bundled manifest missing 'name'"
+    assert data.get("version"), "bundled manifest missing 'version'"
+
+
+def test_resolve_plugin_manifest_returns_dev_path_when_neither_exists(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """When neither the dev path nor a bundled copy exists, the
+    resolver MUST still return SOMETHING (the dev path) so the
+    downstream "manifest not found" error message points operators
+    at the expected location. Defensive — never raise."""
+    monkeypatch.setattr(aegis_cli, "PROJECT_ROOT", tmp_path)
+    # Patch the aegis import to break the bundled lookup
+    fake_module = type(sys)("aegis_broken")  # type: ignore[no-untyped-call]
+    fake_module.__file__ = str(tmp_path / "fake-aegis" / "__init__.py")
+    monkeypatch.setitem(sys.modules, "aegis", fake_module)
+    resolved = aegis_cli._resolve_plugin_manifest()
+    expected = tmp_path / ".claude-plugin" / "plugin.json"
+    assert resolved == expected
+    assert not resolved.exists()  # signals "manifest not found" downstream
+
+
 # ---- P0 (post #19): PostToolUse + --judge + venv python ------------------
 
 

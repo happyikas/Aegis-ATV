@@ -4,6 +4,39 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.3] — 2026-05-15  ·  Hotfix — bundle plugin manifest in wheel
+
+### Fixed
+
+* **`aegis install` from `uv tool install` / `pip install` failed** —
+  `aegis install --mode local` looked for `.claude-plugin/plugin.json`
+  at `PROJECT_ROOT/.claude-plugin/` which is the repo-root hidden
+  directory. That works in dev mode (source clone) but the wheel
+  package layout (`packages = ["src/aegis", "tools"]`) doesn't carry
+  the hidden directory, so non-clone installs hit
+  `plugin manifest not found: .../site-packages/.claude-plugin/plugin.json`
+  and exited 1.
+
+  Fix is two-fold:
+  1. **Bundle the manifest in the wheel** —
+     `src/aegis/_data/plugin.json` is now a tracked copy of
+     `.claude-plugin/plugin.json` and `pyproject.toml` 's
+     `[tool.hatch.build.targets.wheel.force-include]` ships it.
+  2. **Resolver fallback** — new `_resolve_plugin_manifest()` tries
+     the dev path first (source clone), then falls back to the
+     bundled copy via `aegis.__file__.parent/_data/plugin.json`.
+     Resolution is deterministic and module-level — no behaviour
+     change for source-clone users.
+
+  4 new unit tests in `tests/unit/test_aegis_cli.py` cover dev-path
+  priority, bundled fallback, the "both missing" fallthrough, and
+  the bundled-file JSON-validity invariant (catches stale copies).
+
+  Verified end-to-end: built the wheel, installed into a fresh
+  `uv venv` outside the repo, ran `aegis install --mode local` and
+  `_resolve_plugin_manifest()` — both pick up the bundled copy
+  cleanly.
+
 ## [0.3.2] — 2026-05-15  ·  ContextMemory + aegis doctor + OpenRouter integration
 
 A feature + tooling release. Three big themes — all shippable from the

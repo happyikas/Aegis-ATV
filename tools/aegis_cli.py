@@ -53,7 +53,38 @@ STOP_HOOK_SCRIPT = HERE / "hooks" / "session_end.py"
 PRECOMPACT_HOOK_SCRIPT = HERE / "hooks" / "pre_compact.py"
 USER_PROMPT_HOOK_SCRIPT = HERE / "hooks" / "user_prompt_submit.py"
 SESSION_START_HOOK_SCRIPT = HERE / "hooks" / "session_start.py"
-PLUGIN_MANIFEST = PROJECT_ROOT / ".claude-plugin" / "plugin.json"
+def _resolve_plugin_manifest() -> Path:
+    """Return the canonical plugin manifest path.
+
+    Resolution order:
+      1. ``PROJECT_ROOT/.claude-plugin/plugin.json`` — dev / source clone.
+         When running from a checkout, the hidden ``.claude-plugin/``
+         directory at the repo root holds the canonical manifest.
+      2. ``src/aegis/_data/plugin.json`` (bundled) — pip / uv tool /
+         brew installs. The wheel doesn't carry repo-root hidden
+         directories, so the manifest is copied into the package's
+         own data directory by the build (see ``pyproject.toml``).
+
+    Returns the first path that exists; falls back to (1) when nothing
+    is found so the existing "manifest not found" error message
+    surfaces the source-clone path operators expect.
+    """
+    dev_path = PROJECT_ROOT / ".claude-plugin" / "plugin.json"
+    if dev_path.exists():
+        return dev_path
+    try:
+        import aegis as _aegis_pkg
+        bundled = (
+            Path(_aegis_pkg.__file__).parent / "_data" / "plugin.json"
+        )
+        if bundled.exists():
+            return bundled
+    except (ImportError, AttributeError):
+        pass
+    return dev_path
+
+
+PLUGIN_MANIFEST = _resolve_plugin_manifest()
 POLICIES_DIR = PROJECT_ROOT / "policies"
 SRC_DIR = PROJECT_ROOT / "src"
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
