@@ -89,6 +89,43 @@ POLICIES_DIR = PROJECT_ROOT / "policies"
 SRC_DIR = PROJECT_ROOT / "src"
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 
+# Top-level help banner — shown by `aegis --help` (and `aegis -h`).
+# Grouped by *intent* rather than implementation, so the help reads
+# like an operator's mental model. argparse's auto-generated
+# subcommand list (which would be alphabetic and exhaustive) is
+# collapsed via `metavar="<command>"` on the subparsers — see
+# build_parser() — so this banner is the canonical command index.
+#
+# Keep this in sync with the parser registrations below. When adding
+# a new top-level concept command, list it under the right section.
+# Implementation aliases (e.g. `dashboard` / `rule`) stay invisible
+# here — operators learn the canonical form, but old muscle memory
+# still works.
+_AEGIS_TOP_HELP = """\
+Aegis ATV — Agent Telemetry Vector
+
+Core commands:
+  doctor:        Diagnose cost, performance, security, and mistakes
+  report:        Generate a session or timeline report
+  live:          Monitor agent execution in real time
+  advise:        Show prioritized recommendations
+  memory:        Improve: CLAUDE.md and ContextMemory
+  guard:         Create and test guardrails
+  coach:         Train sLLM and RAG with saved logs and external data
+
+Audit & forensics:
+  verify-audit:  Verify signed audit chain
+  replay:        Replay past traces against new policies
+  forensic:      Inspect incidents and blocked actions
+
+System:
+  install, uninstall, status, health, license, baseline, snapshots,
+  rollback, fleet-monitor, session, cost, budget, audit, sidecar,
+  pull-model, label, cache-lint, tour
+
+Run `aegis <command> --help` for command-specific options.
+"""
+
 # Sprint 1 PR3 — Claude Code custom slash commands.
 # Source: tools/claude_commands/*.md (templates with {AEGIS_CMD} placeholder).
 # Dest:   ~/.claude/commands/aegis-*.md (rendered at install time).
@@ -6859,9 +6896,200 @@ def cmd_budget(args: argparse.Namespace) -> int:
     return 2
 
 
+# ──────────────────────────────────────────────────────────────────
+# v0.5.0 — `coach` / `memory` composite parsers
+#
+# The CLI grew organically from v0.1 (single-purpose subcommands) to
+# v0.4 (40+ subcommands). v0.5.0 introduces seven *concept* commands
+# at the top — `doctor`, `report`, `live`, `advise`, `memory`,
+# `guard`, `coach` — that mirror the operator's mental model:
+#
+#   diagnose → report → watch → recommend → memory → guardrail → train
+#
+# `live`, `guard` are 1:1 aliases of the existing `dashboard`, `rule`
+# parsers (wired via argparse `aliases=`).  `coach` and `memory`
+# bundle several existing commands under a new namespace, so they
+# need a small router that re-parses argv against the legacy parser.
+# This keeps every old `aegis burnin / case-memory / advisor-
+# calibration` invocation working untouched while exposing the new
+# vocabulary.
+# ──────────────────────────────────────────────────────────────────
+
+def _coach_delegate(args: argparse.Namespace) -> int:
+    """Router for `aegis coach <sub>` / `aegis memory case <sub>`.
+
+    Reconstructs argv as `<legacy-target> <REMAINDER>` and re-parses
+    through ``build_parser`` so the legacy handler (`cmd_burnin`,
+    `cmd_advisor_calibration`, `cmd_case_memory`) sees the args
+    namespace it expects — including all of its bespoke flags.
+    """
+    target: str = args._coach_target
+    rest: list[str] = list(getattr(args, "rest", None) or [])
+    new_args = build_parser().parse_args([target, *rest])
+    return int(new_args.fn(new_args))
+
+
+def cmd_memory_show(args: argparse.Namespace) -> int:
+    """``aegis memory show`` — print ContextMemory store status.
+
+    ContextMemory (``~/.aegis/context_memory.jsonl``) is the
+    near-storage analytics layer that backs ``aegis doctor`` /
+    ``advise`` / ``live``. This command surfaces the store itself:
+    path, size, record count, oldest / newest timestamps. Use it to
+    answer "does Aegis have data yet?" and "how much history can I
+    analyze?".
+    """
+    import datetime as _dt
+
+    from aegis.context_memory import context_memory_path
+
+    cm_path = (
+        Path(args.context_memory) if getattr(args, "context_memory", None)
+        else context_memory_path()
+    )
+
+    if not cm_path.exists():
+        print(_yellow(
+            f"[memory show] ContextMemory 가 비어있습니다: {cm_path}\n"
+            "        Aegis 가 한 번이라도 작동한 후 (Claude Code tool call "
+            "발생 후) 다시 시도하세요."
+        ))
+        return 1
+
+    try:
+        stat = cm_path.stat()
+        size_bytes = stat.st_size
+    except OSError as e:
+        print(_red(f"error: stat({cm_path}) 실패: {e}"), file=sys.stderr)
+        return 1
+
+    # Walk the file once to count records + extract first / last ts.
+    # The store is JSONL; each line is one ATV. For typical
+    # workstation use (a few MB) this is sub-100 ms.
+    n_records = 0
+    first_ts_ns: int | None = None
+    last_ts_ns: int | None = None
+    try:
+        with cm_path.open("rb") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line:
+                    continue
+                n_records += 1
+                try:
+                    obj = json.loads(line)
+                except (ValueError, UnicodeDecodeError):
+                    continue
+                ts = obj.get("ts_ns") or obj.get("timestamp_ns")
+                if isinstance(ts, int):
+                    if first_ts_ns is None:
+                        first_ts_ns = ts
+                    last_ts_ns = ts
+    except OSError as e:
+        print(_red(f"error: {cm_path} 읽기 실패: {e}"), file=sys.stderr)
+        return 1
+
+    def _fmt_ts(ns: int | None) -> str:
+        if ns is None:
+            return "—"
+        return _dt.datetime.fromtimestamp(
+            ns / 1_000_000_000, tz=_dt.UTC,
+        ).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    def _fmt_size(n: int) -> str:
+        for unit in ("B", "KB", "MB", "GB"):
+            if n < 1024 or unit == "GB":
+                return f"{n:,.1f} {unit}" if unit != "B" else f"{n:,} B"
+            n //= 1024
+        return f"{n} B"
+
+    print(_green("ContextMemory store"))
+    print(f"  path:     {cm_path}")
+    print(f"  size:     {_fmt_size(size_bytes)}")
+    print(f"  records:  {n_records:,}")
+    print(f"  oldest:   {_fmt_ts(first_ts_ns)}")
+    print(f"  newest:   {_fmt_ts(last_ts_ns)}")
+    if n_records == 0:
+        print(_yellow(
+            "  (store is empty — Aegis writes here on every PreToolUse hook)"
+        ))
+    return 0
+
+
+def cmd_memory_claude_md(args: argparse.Namespace) -> int:
+    """``aegis memory claude-md`` — locate the project CLAUDE.md.
+
+    v0.5.0 ships a minimal locator that surfaces the CLAUDE.md path,
+    size, and instruction-baseline drift status (if step309 baselining
+    is enabled). The full feedback loop — "given recent BLOCKs / advise
+    output, propose CLAUDE.md improvements" — is roadmapped for 0.5.x.
+    """
+    candidates = [
+        Path.cwd() / "CLAUDE.md",
+        Path.cwd() / "AGENTS.md",
+    ]
+    found = next((p for p in candidates if p.exists()), None)
+    if found is None:
+        print(_yellow(
+            "[memory claude-md] no CLAUDE.md / AGENTS.md found in cwd.\n"
+            "  Create one to give Claude Code per-project context "
+            "(it'll auto-load on session start)."
+        ))
+        return 1
+
+    try:
+        size = found.stat().st_size
+        lines = sum(1 for _ in found.open("rb"))
+    except OSError as e:
+        print(_red(f"error: {found} 읽기 실패: {e}"), file=sys.stderr)
+        return 1
+
+    print(_green(f"Project instructions: {found}"))
+    print(f"  size:   {size:,} B")
+    print(f"  lines:  {lines:,}")
+
+    # If step309 baseline is configured, surface drift state.
+    baseline_path = os.environ.get("AEGIS_INSTRUCTION_BASELINE_PATH", "")
+    if baseline_path:
+        bp = Path(baseline_path)
+        if bp.exists():
+            print(f"  baseline: {bp} (step309 drift-gate active)")
+        else:
+            print(_yellow(
+                f"  baseline: {bp} — path set but file missing; "
+                "run `aegis baseline reattest`"
+            ))
+    else:
+        print(
+            "  baseline: not configured "
+            "(set AEGIS_INSTRUCTION_BASELINE_PATH to enable step309)"
+        )
+
+    print()
+    print(_yellow(
+        "  Future (0.5.x): this command will analyze recent BLOCK + "
+        "advise events and suggest concrete CLAUDE.md edits "
+        "(\"prefer rg over grep\", \"avoid kubectl delete without "
+        "--dry-run\", …)."
+    ))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog="aegis")
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    ap = argparse.ArgumentParser(
+        prog="aegis",
+        description=_AEGIS_TOP_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sub = ap.add_subparsers(
+        dest="cmd",
+        required=True,
+        # argparse always lists every subparser in the "positional
+        # arguments" section. We've already laid them out by section
+        # in the `description=` block above, so collapse the default
+        # listing to a single line via metavar.
+        metavar="<command>",
+    )
 
     st = sub.add_parser(
         "status",
@@ -7983,12 +8211,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     dr.set_defaults(fn=cmd_doctor)
 
-    # ── aegis dashboard ──────────────────────────────────────────
+    # ── aegis live / dashboard ───────────────────────────────────
+    # `live` is the v0.5.0 canonical top-level command for the
+    # one-screen TUI dashboard. `dashboard` is kept as an alias for
+    # backward compatibility with v0.4.0 docs / muscle memory.
     dsh = sub.add_parser(
-        "dashboard",
+        "live",
+        aliases=["dashboard"],
         help=(
-            "한 화면 TUI dashboard — Cost · Performance · Security "
-            "+ advisor 권고 + 최근 BLOCK 자동 갱신"
+            "📊 ATV Live — one-screen TUI: Cost · Performance · "
+            "Security + advisor recs + recent BLOCKs (auto-refresh)"
         ),
     )
     dsh.add_argument(
@@ -8033,12 +8265,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tr.set_defaults(fn=cmd_tour)
 
-    # ── aegis rule ───────────────────────────────────────────────
+    # ── aegis guard / rule ───────────────────────────────────────
+    # `guard` is the v0.5.0 canonical top-level command for guardrail
+    # authoring + testing. `rule` is kept as an alias for backward
+    # compatibility with v0.4.x docs / Hookify-import muscle memory.
     ru = sub.add_parser(
-        "rule",
+        "guard",
+        aliases=["rule"],
         help=(
-            "Hookify-style 사용자 룰 추가 / 관리. 자연어 → regex "
-            "자동 제안 + markdown 저장."
+            "🛡️ ATV Guard — create + test guardrails. Hookify-style "
+            "natural-language rules → regex auto-proposal + markdown."
         ),
     )
     ru_sub = ru.add_subparsers(dest="rule_action", required=True)
@@ -8087,6 +8323,84 @@ def build_parser() -> argparse.ArgumentParser:
                         help="기존 룰 덮어쓰기")
 
     ru.set_defaults(fn=cmd_rule)
+
+    # ── aegis coach ──────────────────────────────────────────────
+    # v0.5.0 — Train sLLM + RAG with saved logs and external data.
+    # The subcommands re-dispatch to the legacy parsers via
+    # `_coach_delegate` so every existing flag stays valid; e.g.
+    # `aegis coach burnin retrain --since 30d` is exactly equivalent
+    # to `aegis burnin retrain --since 30d`.
+    co_top = sub.add_parser(
+        "coach",
+        help=(
+            "🏋️ ATV Coach — train sLLM + RAG (burnin · calibrate · "
+            "case-memory) with saved logs and external data."
+        ),
+    )
+    co_top_sub = co_top.add_subparsers(dest="coach_action", required=True)
+
+    co_burnin = co_top_sub.add_parser(
+        "burnin",
+        help="Burn-in baseline retrain / revert / shadow (alias for `aegis burnin`)",
+    )
+    co_burnin.add_argument("rest", nargs=argparse.REMAINDER)
+    co_burnin.set_defaults(fn=_coach_delegate, _coach_target="burnin")
+
+    co_cal = co_top_sub.add_parser(
+        "calibrate",
+        help="Advisor-gate threshold calibration (alias for `aegis advisor-calibration`)",
+    )
+    co_cal.add_argument("rest", nargs=argparse.REMAINDER)
+    co_cal.set_defaults(fn=_coach_delegate, _coach_target="advisor-calibration")
+
+    co_cm = co_top_sub.add_parser(
+        "case-memory",
+        help="step340 RAG case-memory build / import / status (alias for `aegis case-memory`)",
+    )
+    co_cm.add_argument("rest", nargs=argparse.REMAINDER)
+    co_cm.set_defaults(fn=_coach_delegate, _coach_target="case-memory")
+
+    # ── aegis memory ─────────────────────────────────────────────
+    # v0.5.0 — Improve CLAUDE.md + ContextMemory. Two subcommands
+    # today; the CLAUDE.md feedback loop will grow in 0.5.x.
+    mm = sub.add_parser(
+        "memory",
+        help=(
+            "🧠 ATV Memory — inspect ContextMemory + improve CLAUDE.md "
+            "(near-storage analytics layer that backs doctor / advise / live)."
+        ),
+    )
+    mm_sub = mm.add_subparsers(dest="memory_action", required=True)
+
+    mm_show = mm_sub.add_parser(
+        "show",
+        help="Print ContextMemory store status (path, size, record count, ts range).",
+    )
+    mm_show.add_argument(
+        "--context-memory",
+        dest="context_memory",
+        type=str,
+        default=None,
+        help="ContextMemory path override (default: ~/.aegis/context_memory.jsonl)",
+    )
+    mm_show.set_defaults(fn=cmd_memory_show)
+
+    mm_md = mm_sub.add_parser(
+        "claude-md",
+        help="Locate + summarize CLAUDE.md (drift status if step309 baseline is set).",
+    )
+    mm_md.set_defaults(fn=cmd_memory_claude_md)
+
+    # `memory case <build|import|status>` is convenient alias for the
+    # case-memory training command — it lives under coach (training)
+    # in our taxonomy but operators reaching for "memory" should still
+    # find it. Keeps both mental models happy.
+    mm_case = mm_sub.add_parser(
+        "case",
+        help="step340 RAG case-memory (alias for `aegis case-memory`)",
+    )
+    mm_case.add_argument("rest", nargs=argparse.REMAINDER)
+    mm_case.set_defaults(fn=_coach_delegate, _coach_target="case-memory")
 
     # ── aegis label ──────────────────────────────────────────────
     lb = sub.add_parser(
