@@ -1,6 +1,6 @@
 [project]
 name = "aegis-mvp"
-version = "0.3.2"
+version = "0.3.3"
 description = "Aegis ATV — Action Firewall + cryptographic audit chain for Claude Code and OpenClaw"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
@@ -75,6 +75,13 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/aegis", "tools"]
+
+# Force-include the bundled plugin manifest. hatchling by default
+# omits package_data globs that aren't .py files; this explicit
+# include ships `src/aegis/_data/plugin.json` so `aegis install` works
+# from a wheel / `uv tool install` (no source clone required).
+[tool.hatch.build.targets.wheel.force-include]
+"src/aegis/_data/plugin.json" = "aegis/_data/plugin.json"
 
 [tool.hatch.build.targets.sdist]
 # Slim sdist: keep source + policies + minimal docs, drop the
