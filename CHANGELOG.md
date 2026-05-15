@@ -8,6 +8,19 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+* **ContextMemory binary tier** (`src/aegis/context_memory/binary_emulation.py`)
+  — second emulation layer with **1 KB fixed-size packed records**,
+  little-endian, NAND-page-aligned. Mirrors the planned CXL SSD /
+  Computational SSD silicon layout (Same ATV schema = silicon spec).
+  Optional secondary write: set `AEGIS_CONTEXT_MEMORY_BINARY=1` to
+  mirror every JSONL write to `~/.aegis/context_memory.bin`. New
+  helpers: `pack` / `unpack` / `append_binary` / `iter_binary` /
+  `read_all_binary` / `equivalence_check` (cross-tier sanity).
+  58 new unit tests covering layout invariants, pack/unpack round-trip
+  with Korean / emoji / NaN m13 score, truncation of long fields,
+  enum sentinels, writer/reader integration, env override, and
+  cross-tier equivalence. Layout: header 48B + body 944B + reserved
+  32B = 1024B per record.
 * **ContextMemory** (`src/aegis/context_memory/`) — append-only ATV
   analytics store, software emulation of the planned CXL SSD /
   Computational SSD near-storage compute layer (PitchDeck's

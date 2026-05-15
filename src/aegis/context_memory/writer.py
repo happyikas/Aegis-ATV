@@ -66,6 +66,18 @@ def append(
         p = path if path is not None else context_memory_path()
         p.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps(rec.to_dict(), sort_keys=True, ensure_ascii=False)
+        # Optional secondary write to the binary (CXL/CSD emulation)
+        # tier when the env flag is set. Defensive — silicon mirror
+        # failures don't gate the canonical JSONL write.
+        try:
+            from aegis.context_memory.binary_emulation import (
+                append_binary,
+                binary_enabled,
+            )
+            if binary_enabled():
+                append_binary(rec)
+        except Exception:  # noqa: BLE001 — analytics writes never block
+            pass
         with p.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
         return True
