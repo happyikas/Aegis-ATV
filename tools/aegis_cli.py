@@ -3839,6 +3839,43 @@ def cmd_advise(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_dashboard(args: argparse.Namespace) -> int:
+    """``aegis dashboard`` — one-screen TUI consolidating Coach / Live /
+    Doctor surfaces.
+
+    Reads ContextMemory and renders cost · performance · security
+    panels + advisor recommendations + recent BLOCKs in a single
+    auto-refreshing view. Ctrl-C exits cleanly.
+
+    Flags:
+      --refresh N   refresh every N seconds (default 2.0)
+      --since H     window in hours (default 24)
+      --demo        synthetic data — useful for screencasts / first
+                    runs before ContextMemory has accumulated
+      --context-memory PATH   override ~/.aegis/context_memory.jsonl
+    """
+    try:
+        from aegis.dashboard import run_dashboard
+    except ImportError as e:
+        print(_red(f"error: dashboard module not importable: {e}"),
+              file=sys.stderr)
+        print(_yellow(
+            "  install / upgrade: `uv pip install -U rich`",
+        ), file=sys.stderr)
+        return 1
+
+    cm_path = (
+        Path(args.context_memory)
+        if getattr(args, "context_memory", None) else None
+    )
+    return run_dashboard(
+        refresh_seconds=float(getattr(args, "refresh", 2.0)),
+        since_hours=float(getattr(args, "since_hours", 24.0)),
+        context_memory_path=cm_path,
+        demo=bool(getattr(args, "demo", False)),
+    )
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """`aegis doctor` — Cost · Performance · Security 통합 리포트.
 
@@ -7710,6 +7747,41 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     dr.set_defaults(fn=cmd_doctor)
+
+    # ── aegis dashboard ──────────────────────────────────────────
+    dsh = sub.add_parser(
+        "dashboard",
+        help=(
+            "한 화면 TUI dashboard — Cost · Performance · Security "
+            "+ advisor 권고 + 최근 BLOCK 자동 갱신"
+        ),
+    )
+    dsh.add_argument(
+        "--refresh",
+        type=float,
+        default=2.0,
+        help="자동 갱신 주기 (초). 기본 2.0",
+    )
+    dsh.add_argument(
+        "--since-hours",
+        dest="since_hours",
+        type=float,
+        default=24.0,
+        help="ContextMemory 윈도우 (시간). 기본 24.0",
+    )
+    dsh.add_argument(
+        "--demo",
+        action="store_true",
+        help="합성 데이터 표시 — 첫 실행 / 스크린샷용",
+    )
+    dsh.add_argument(
+        "--context-memory",
+        dest="context_memory",
+        type=str,
+        default=None,
+        help="ContextMemory 경로 override",
+    )
+    dsh.set_defaults(fn=cmd_dashboard)
 
     # ── aegis label ──────────────────────────────────────────────
     lb = sub.add_parser(

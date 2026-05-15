@@ -35,6 +35,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "orjson>=3.9",
     "structlog>=24.1",
+    "rich>=13.7",
 ]
 
 [project.optional-dependencies]
