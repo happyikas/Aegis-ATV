@@ -220,6 +220,16 @@ def _evaluate_impl(
     )
     verdict.signature = record["signature"]
 
+    # ContextMemory write — analytics-shaped projection of the audit
+    # record. Separate file from audit.jsonl by design (silicon
+    # roadmap: CXL SSD / Computational SSD emulation). Fully
+    # defensive — must never block the verdict path.
+    try:
+        from aegis.context_memory import append as cm_append
+        cm_append(record, mode="sidecar")
+    except Exception:  # noqa: BLE001 — analytics writes never block
+        pass
+
     # M15: also append the (already-signed) record into the encrypted
     # power-fail-safe journal. The audit log keeps plaintext for
     # operator inspection; the journal is the at-rest-encrypted source

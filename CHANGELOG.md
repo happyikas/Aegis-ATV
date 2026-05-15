@@ -8,6 +8,25 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+* **ContextMemory** (`src/aegis/context_memory/`) — append-only ATV
+  analytics store, software emulation of the planned CXL SSD /
+  Computational SSD near-storage compute layer (PitchDeck's
+  "HARDWARE NEXT" surface). Every audit-record write now also writes
+  an analytics-shaped projection to `~/.aegis/context_memory.jsonl`
+  (env override `AEGIS_CONTEXT_MEMORY_PATH`). Separate from the
+  audit chain by design — different concerns (tamper-evidence vs
+  analytics). Hooks land in both local mode (`tools/aegis_local_hook.py`)
+  and sidecar mode (`src/aegis/api/evaluate.py`); fully defensive,
+  never blocks the verdict path.
+* **`aegis doctor`** — Cost · Performance · Security 통합 markdown
+  리포트. Reads ContextMemory, runs heuristic advisor on top of
+  per-window stats (provider dominance, p95 vs PitchDeck < 50ms
+  target, BLOCK rate vs baseline, provider drift 3× threshold,
+  dominant-step pattern, etc.). Options: `--since DURATION`,
+  `--out FILE`, `--context-memory PATH`. 46 new unit tests covering
+  record schema, writer (defensive), reader (malformed-tolerant),
+  analytics (window/cost/perf/security), advisor heuristics, and
+  the markdown renderer. 7 new CLI integration tests.
 * **`aegis.integrations.openrouter`** — Python helper that extracts
   the canonical Aegis `provider` string from an OpenRouter response,
   including fallback-chain resolution. `aegis report --by-provider`

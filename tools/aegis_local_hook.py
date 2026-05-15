@@ -658,6 +658,12 @@ def _append_audit(record: dict[str, Any]) -> None:
     ``this_hash``, plus its own SHA3-256 ``this_hash``. Tampering
     with any historical line breaks every subsequent recompute, so
     ``aegis verify-audit`` (local mode) catches mutations.
+
+    Side-effect: also appends an analytics-shaped projection of the
+    record to ContextMemory (~/.aegis/context_memory.jsonl). The two
+    stores are deliberately separate — audit is the cryptographic
+    chain, ContextMemory is the silicon-ready analytics surface
+    that ``aegis doctor`` reads.
     """
     try:
         from aegis.audit.local_chain import append as chain_append
@@ -665,6 +671,15 @@ def _append_audit(record: dict[str, Any]) -> None:
         chain_append(LOCAL_AUDIT_PATH, record)
     except OSError:
         # Audit failure must never block the user's tool call.
+        pass
+
+    # ContextMemory write — fully defensive, swallows every error.
+    # See src/aegis/context_memory/__init__.py for the silicon-roadmap
+    # rationale (CXL SSD / Computational SSD emulation).
+    try:
+        from aegis.context_memory import append as cm_append
+        cm_append(record, mode="local")
+    except Exception:  # noqa: BLE001 — analytics writes never block
         pass
 
 

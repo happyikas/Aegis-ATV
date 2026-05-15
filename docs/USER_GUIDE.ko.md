@@ -140,6 +140,7 @@ docker compose up -d
 |---|---|---|
 | `aegis status` | 현재 설치 상태 + 운영 통계 | 매일 첫 명령 |
 | `aegis report` | 최근 24시간의 5줄 위험 요약 | 매일 / 매주 점검 |
+| `aegis doctor` | **Cost · Performance · Security 통합 markdown 리포트** | 주간 / 월간 종합 |
 | `aegis verify-audit` | 감사 체인이 위조되지 않았는지 검증 (1초) | 사건 의심 시 / 매주 |
 | `aegis forensic last` | 가장 최근 BLOCK / REQUIRE_APPROVAL 케이스 자세히 보기 | "왜 차단됐지?" |
 | `aegis advise` | AI 가 권고한 행동 (cost / security / performance) 종합 | 운영 개선 |
@@ -203,6 +204,9 @@ aegis fleet-monitor start                   # 알림 daemon (Slack/ntfy)
 뭔가 잘못됐을 때 **무엇이 일어났는지 정확히 재현** + **다음에 어떻게 막을지 권고** + **시간 되돌리기**.
 
 ```bash
+aegis doctor                       # Cost · Performance · Security 통합 리포트
+aegis doctor --since 24h           # 윈도우 지정
+aegis doctor --out report.md       # 마크다운 파일로 저장
 aegis forensic last                # 최근 BLOCK 분석
 aegis advise <trace_id>            # 그 케이스의 advisor 권고
 aegis rollback <trace_id>          # 그 시점으로 시스템 상태 되돌리기
@@ -225,6 +229,69 @@ aegis verify-audit                 # 감사 체인 무결성 검증
 
 비전문가용 한 문장으로 통합:
 > **5 가지 기술이 합쳐서**: agent 의 모든 행동을 **표준 벡터** 로 인코딩하고 (ATV), 그 벡터에 **정책을 적용** 하고 (ATMU), 애매한 케이스는 **로컬 AI 가 검토** 하고 (sLLM), 모든 결정을 **암호로 서명된 체인** 에 기록 (Crypto-Sign), 매 릴리스마다 **공격 시나리오로 재검증** (Burn-in).
+
+---
+
+## 7-1. ContextMemory — 분석 fast-path (CXL/Computational SSD emulation)
+
+PitchDeck 의 *"HARDWARE NEXT — Near-storage / GPU-resident accelerator. Same ATV schema is the silicon spec"* 에 매핑되는 software emulation 입니다.
+
+```
+~/.aegis/audit.jsonl         ← SHA3 + Ed25519 체인 (변조 증거)
+~/.aegis/context_memory.jsonl ← ATV 분석 fast-path (이번 추가)
+```
+
+ATV 가 생성될 때마다 (= 모든 tool call) Aegis 가 두 파일에 동시에 기록합니다:
+
+- **audit.jsonl** — 감사 체인 (보존). 변조 시 `aegis verify-audit` 가 즉시 fail.
+- **context_memory.jsonl** — 분석 store. 같은 정보를 *denormalized 분석 친화 형태*로. 미래에는 이 파일이 CXL SSD / Computational SSD 의 near-storage compute 입력이 됨 (그래서 schema 가 silicon-ready).
+
+**`aegis doctor`** 가 이 store 를 읽어 **markdown 리포트**를 만듭니다 (`💰 Cost · ⚡ Performance · 🛡️ Security` 3 축 + 각 축의 heuristic 권고):
+
+```bash
+aegis doctor                       # 최근 7일 (기본) → stdout
+aegis doctor --since 24h           # 윈도우 지정
+aegis doctor --out report.md       # 파일 저장
+aegis doctor --context-memory /path/to/cm.jsonl   # 경로 override
+```
+
+리포트 샘플 발췌:
+
+```markdown
+# Aegis Doctor Report
+
+**기간**: 최근 7.0 일
+
+## 📊 요약
+- 총 ATV: 1,243
+- Decision 분포: ALLOW 96.4% · REQUIRE_APPROVAL 3.1% · BLOCK 0.5%
+
+## 💰 Cost
+- 총 비용: $4.18
+- Provider 별 (비용 desc):
+  | Provider | 호출 수 | 총 비용 |
+  |---|---:|---:|
+  | `openrouter:anthropic-claude-sonnet-4` | 842 | $3.92 |
+  | `openrouter:openai-gpt-4o-mini`        | 401 | $0.26 |
+
+### 권고
+- 🔴 **anthropic-claude-sonnet-4 가 비용의 94% 차지** → `aegis report --by-provider` 로 상세 확인 후 저비용 provider 라우팅 검토
+
+## ⚡ Performance
+- p50 4.2 ms · p95 47 ms · p99 134 ms · max 312 ms
+
+### 권고
+- 🟢 **p95 47 ms — PitchDeck 의 < 50 ms 약속 충족 ✓**
+
+## 🛡️ Security
+- BLOCK rate 0.50% (baseline 0.3-1.0% 안)
+- step310 (destructive bash) 가 BLOCK 의 57% 차지
+
+### 권고
+- 🟡 **step310 가 BLOCK 의 57%** → policies/safe_actions.json 검토
+```
+
+ContextMemory 의 store path / schema 는 `AEGIS_CONTEXT_MEMORY_PATH` 환경 변수로 override 가능. Solo Free 기본 동작이라 **별도 설정 없이 자동으로 채워집니다** — Aegis 가 한 번이라도 작동한 후 `aegis doctor` 만 치면 첫 리포트 출력.
 
 ---
 
