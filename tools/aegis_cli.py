@@ -3839,6 +3839,24 @@ def cmd_advise(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tour(args: argparse.Namespace) -> int:
+    """``aegis tour`` — 60초 인터랙티브 onboarding.
+
+    7개 panel walkthrough — Welcome → 비유 → chokepoint → 시연 →
+    설치 → 3 기능 → 다음 단계. Enter 로 진행, q 로 종료.
+
+    재실행 안전 — 어떤 상태도 변경하지 않음. ``--auto`` 로 입력
+    대기 없이 모든 panel 을 한 번에 흘려보는 모드 (테스트 / 데모).
+    """
+    try:
+        from aegis.tour import run_tour
+    except ImportError as e:
+        print(_red(f"error: tour module not importable: {e}"),
+              file=sys.stderr)
+        return 1
+    return run_tour(auto_advance=bool(getattr(args, "auto", False)))
+
+
 def cmd_dashboard(args: argparse.Namespace) -> int:
     """``aegis dashboard`` — one-screen TUI consolidating Coach / Live /
     Doctor surfaces.
@@ -7782,6 +7800,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="ContextMemory 경로 override",
     )
     dsh.set_defaults(fn=cmd_dashboard)
+
+    # ── aegis tour ───────────────────────────────────────────────
+    tr = sub.add_parser(
+        "tour",
+        help=(
+            "60초 인터랙티브 onboarding — 비유 · chokepoint · 시연 · "
+            "설치 · 기능 · 다음 단계 7 panel walkthrough"
+        ),
+    )
+    tr.add_argument(
+        "--auto",
+        action="store_true",
+        help="입력 대기 없이 모든 panel 자동 표시 (테스트 / 데모용)",
+    )
+    tr.set_defaults(fn=cmd_tour)
 
     # ── aegis label ──────────────────────────────────────────────
     lb = sub.add_parser(
