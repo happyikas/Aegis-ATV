@@ -3839,6 +3839,223 @@ def cmd_advise(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_rule(args: argparse.Namespace) -> int:
+    """``aegis rule`` — Hookify-style user-authored rules.
+
+    Sub-actions:
+
+      * ``aegis rule list``                  show all rules
+      * ``aegis rule add <name> [...]``      add a new rule (interactive or flags)
+      * ``aegis rule remove <name>``         delete a rule
+      * ``aegis rule enable <name>``         enable
+      * ``aegis rule disable <name>``        disable
+      * ``aegis rule test <name> <text>``    test rule match against text
+      * ``aegis rule import <file>``         import Hookify markdown
+
+    Rules live at ``~/.aegis/rules/<name>.md`` (env override
+    ``AEGIS_RULES_DIR``). Solo Free tier is capped at 3 user rules;
+    Pro+ is unlimited.
+    """
+    action = getattr(args, "rule_action", None)
+    handlers = {
+        "list": _cmd_rule_list,
+        "add": _cmd_rule_add,
+        "remove": _cmd_rule_remove,
+        "enable": _cmd_rule_enable,
+        "disable": _cmd_rule_disable,
+        "test": _cmd_rule_test,
+        "import": _cmd_rule_import,
+    }
+    if action not in handlers:
+        print(_red("error: action required. Try `aegis rule list`."),
+              file=sys.stderr)
+        return 1
+    return handlers[action](args)
+
+
+def _cmd_rule_list(args: argparse.Namespace) -> int:
+    from aegis.rules import list_rules, rules_dir
+    rules = list_rules()
+    if not rules:
+        print(f"[rules] no rules at {rules_dir()}")
+        print("        try `aegis rule add <name> --nl \"...\"` to start")
+        return 0
+    print(f"{'name':<28} {'severity':<10} {'enabled':<8} {'source':<10} pattern")
+    print("-" * 90)
+    for r in rules:
+        pat = r.pattern if len(r.pattern) <= 30 else r.pattern[:27] + "..."
+        en = "yes" if r.enabled else "no"
+        print(f"{r.name:<28} {r.severity:<10} {en:<8} {r.source:<10} {pat}")
+    print()
+    print(f"total: {len(rules)} rules  ({rules_dir()})")
+    return 0
+
+
+def _cmd_rule_add(args: argparse.Namespace) -> int:
+    from aegis.rules import Rule, RuleError, save_rule
+    from aegis.rules.nl_to_regex import suggest_regex, suggest_rule_name
+
+    name = (getattr(args, "name", None) or "").strip()
+    pattern = (getattr(args, "pattern", None) or "").strip()
+    nl = (getattr(args, "nl", None) or "").strip()
+    severity = (getattr(args, "severity", None) or "critical").strip()
+    message = (getattr(args, "message", None) or "").strip()
+    description = (getattr(args, "description", None) or "").strip()
+    force = bool(getattr(args, "force", False))
+
+    if nl and not pattern:
+        suggestion = suggest_regex(nl)
+        pattern = suggestion.pattern
+        print(_green("✓ regex 제안:"), pattern)
+        print(f"  rationale: {suggestion.rationale}")
+        if suggestion.sample_matches:
+            print("  matches:  " + ", ".join(
+                repr(s) for s in suggestion.sample_matches
+            ))
+        if suggestion.sample_misses:
+            print("  misses:   " + ", ".join(
+                repr(s) for s in suggestion.sample_misses
+            ))
+        if not name:
+            name = suggest_rule_name(nl)
+        if not description:
+            description = nl
+
+    if not name:
+        print(_red("error: --name required (or use --nl to derive)"),
+              file=sys.stderr)
+        return 1
+    if not pattern:
+        print(_red(
+            "error: --pattern required (or use --nl '<sentence>' to "
+            "auto-suggest)",
+        ), file=sys.stderr)
+        return 1
+
+    if not message:
+        message = f"Blocked by rule: {name}"
+
+    license_tier = _detect_license_tier()
+    try:
+        rule = Rule(
+            name=name, severity=severity, enabled=True,
+            description=description or f"Custom rule: {name}",
+            pattern=pattern, message=message, source="user",
+        )
+        path = save_rule(rule, overwrite=force, license_tier=license_tier)
+    except (RuleError, ValueError) as e:
+        print(_red(f"error: {e}"), file=sys.stderr)
+        return 1
+
+    print(_green(f"✓ saved {path}"))
+    print("  → 즉시 적용 (firewall 재시작 불필요)")
+    return 0
+
+
+def _cmd_rule_remove(args: argparse.Namespace) -> int:
+    from aegis.rules import delete_rule
+    name = (getattr(args, "name", None) or "").strip()
+    if not name:
+        print(_red("error: name required"), file=sys.stderr)
+        return 1
+    if delete_rule(name):
+        print(_green(f"✓ removed rule {name!r}"))
+        return 0
+    print(_yellow(f"[rule] {name!r} not found (already removed?)"))
+    return 1
+
+
+def _cmd_rule_enable(args: argparse.Namespace) -> int:
+    return _toggle_rule(args, enabled=True)
+
+
+def _cmd_rule_disable(args: argparse.Namespace) -> int:
+    return _toggle_rule(args, enabled=False)
+
+
+def _toggle_rule(args: argparse.Namespace, *, enabled: bool) -> int:
+    from aegis.rules import set_enabled
+    name = (getattr(args, "name", None) or "").strip()
+    if not name:
+        print(_red("error: name required"), file=sys.stderr)
+        return 1
+    if set_enabled(name, enabled):
+        verb = "enabled" if enabled else "disabled"
+        print(_green(f"✓ rule {name!r} {verb}"))
+        return 0
+    print(_red(f"error: rule {name!r} not found or unparseable"),
+          file=sys.stderr)
+    return 1
+
+
+def _cmd_rule_test(args: argparse.Namespace) -> int:
+    from aegis.rules import evaluate, list_rules, load_rule
+    name = (getattr(args, "name", None) or "").strip()
+    text = (getattr(args, "text", None) or "").strip()
+    if not text:
+        print(_red("error: text to test against is required"),
+              file=sys.stderr)
+        return 1
+    if name:
+        rule = load_rule(name)
+        if rule is None:
+            print(_red(f"error: rule {name!r} not found"), file=sys.stderr)
+            return 1
+        rules = [rule]
+    else:
+        rules = list_rules()
+        if not rules:
+            print("[test] no rules loaded.")
+            return 0
+    matches = evaluate(text, rules)
+    if not matches:
+        print(_green(f"✓ no matching rule for {text!r}"))
+        return 0
+    print(_red(f"⛔ {len(matches)} rule(s) matched:"))
+    for m in matches:
+        print(f"  {m.rule.name} [{m.rule.severity}] — "
+              f"matched {m.matched_text!r} at {m.span}")
+    return 0
+
+
+def _cmd_rule_import(args: argparse.Namespace) -> int:
+    """Import a Hookify-format markdown rule file."""
+    from aegis.rules import RuleError, parse_markdown, save_rule
+    file_path = Path((getattr(args, "file", None) or "").strip())
+    if not file_path.exists():
+        print(_red(f"error: file {file_path} not found"), file=sys.stderr)
+        return 1
+    try:
+        rule = parse_markdown(file_path.read_text(encoding="utf-8"))
+        # Mark source as hookify for provenance
+        from dataclasses import replace as _replace
+        rule = _replace(rule, source="hookify")
+        path = save_rule(
+            rule, overwrite=bool(getattr(args, "force", False)),
+            license_tier=_detect_license_tier(),
+        )
+    except (RuleError, ValueError) as e:
+        print(_red(f"error: {e}"), file=sys.stderr)
+        return 1
+    print(_green(f"✓ imported as {path}"))
+    return 0
+
+
+def _detect_license_tier() -> str:
+    """Best-effort tier detection for the rule-quota gate.
+
+    Reads the active license claim if any; falls back to ``free``.
+    Defensive — license module failures default to free (worst
+    case: user with paid license hits quota → easy fix on their end).
+    """
+    try:
+        from aegis.license import get_active_tier, init_active_from_disk
+        init_active_from_disk()
+        return get_active_tier()
+    except Exception:  # noqa: BLE001
+        return "free"
+
+
 def cmd_tour(args: argparse.Namespace) -> int:
     """``aegis tour`` — 60초 인터랙티브 onboarding.
 
@@ -7815,6 +8032,61 @@ def build_parser() -> argparse.ArgumentParser:
         help="입력 대기 없이 모든 panel 자동 표시 (테스트 / 데모용)",
     )
     tr.set_defaults(fn=cmd_tour)
+
+    # ── aegis rule ───────────────────────────────────────────────
+    ru = sub.add_parser(
+        "rule",
+        help=(
+            "Hookify-style 사용자 룰 추가 / 관리. 자연어 → regex "
+            "자동 제안 + markdown 저장."
+        ),
+    )
+    ru_sub = ru.add_subparsers(dest="rule_action", required=True)
+
+    # list
+    ru_sub.add_parser("list", help="모든 룰 표시")
+
+    # add
+    ru_add = ru_sub.add_parser("add", help="새 룰 추가")
+    ru_add.add_argument("name", nargs="?", default=None,
+                        help="rule name (slug, [a-z0-9-]+)")
+    ru_add.add_argument("--nl", type=str, default=None,
+                        help="자연어 문장 (regex 자동 제안)")
+    ru_add.add_argument("--pattern", type=str, default=None,
+                        help="regex 직접 입력 (--nl 대신)")
+    ru_add.add_argument("--severity", type=str, default="critical",
+                        choices=["critical", "warning", "info"],
+                        help="default critical")
+    ru_add.add_argument("--message", type=str, default=None,
+                        help="block 메시지")
+    ru_add.add_argument("--description", type=str, default=None,
+                        help="설명")
+    ru_add.add_argument("--force", action="store_true",
+                        help="기존 룰 덮어쓰기")
+
+    # remove
+    ru_rm = ru_sub.add_parser("remove", help="룰 삭제")
+    ru_rm.add_argument("name", help="삭제할 rule name")
+
+    # enable / disable
+    ru_en = ru_sub.add_parser("enable", help="룰 활성화")
+    ru_en.add_argument("name", help="rule name")
+    ru_dis = ru_sub.add_parser("disable", help="룰 비활성화")
+    ru_dis.add_argument("name", help="rule name")
+
+    # test
+    ru_test = ru_sub.add_parser("test", help="텍스트에 대해 룰 매칭 테스트")
+    ru_test.add_argument("text", help="테스트할 텍스트")
+    ru_test.add_argument("--name", type=str, default=None,
+                         help="특정 룰만 테스트 (생략 시 모든 룰)")
+
+    # import
+    ru_imp = ru_sub.add_parser("import", help="Hookify markdown 룰 import")
+    ru_imp.add_argument("file", help="Hookify-format markdown 파일")
+    ru_imp.add_argument("--force", action="store_true",
+                        help="기존 룰 덮어쓰기")
+
+    ru.set_defaults(fn=cmd_rule)
 
     # ── aegis label ──────────────────────────────────────────────
     lb = sub.add_parser(
