@@ -2576,3 +2576,165 @@ def test_label_show_subcommand_wired() -> None:
     assert args.fn is aegis_cli.cmd_label
     assert args.label_action == "show"
     assert args.trace_id == "trace-xyz"
+
+
+# ── aegis doctor ─────────────────────────────────────────────────
+
+
+def test_doctor_subcommand_wired_in_build_parser() -> None:
+    parser = aegis_cli.build_parser()
+    args = parser.parse_args(["doctor"])
+    assert args.fn is aegis_cli.cmd_doctor
+    assert args.since == "7d"
+    assert args.out is None
+    assert args.context_memory is None
+
+
+def test_doctor_subcommand_accepts_flags() -> None:
+    parser = aegis_cli.build_parser()
+    args = parser.parse_args([
+        "doctor",
+        "--since", "24h",
+        "--out", "/tmp/report.md",
+        "--context-memory", "/tmp/cm.jsonl",
+    ])
+    assert args.since == "24h"
+    assert args.out == "/tmp/report.md"
+    assert args.context_memory == "/tmp/cm.jsonl"
+
+
+def test_doctor_missing_context_memory_returns_1(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """When the ContextMemory file doesn't exist, surface a yellow
+    hint and exit 1 — don't silently report 0 records."""
+    import argparse
+    monkeypatch.setenv("AEGIS_CONTEXT_MEMORY_PATH", str(tmp_path / "absent.jsonl"))
+    rc = aegis_cli.cmd_doctor(argparse.Namespace(
+        since="7d", out=None, context_memory=None,
+    ))
+    assert rc == 1
+    assert "비어있습니다" in capsys.readouterr().out
+
+
+def test_doctor_full_report_to_stdout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Happy path — populate ContextMemory with synthetic ATVs,
+    render the markdown report to stdout."""
+    import argparse
+    import time as _time
+
+    from aegis.context_memory import ContextMemoryRecord, append
+
+    cm = tmp_path / "cm.jsonl"
+    monkeypatch.setenv("AEGIS_CONTEXT_MEMORY_PATH", str(cm))
+    now = _time.time_ns()
+    for i in range(5):
+        rec = ContextMemoryRecord(
+            ts_ns=now - i * 60_000_000_000,
+            trace_id=f"trace-{i}",
+            invocation_id=f"inv-{i}",
+            aid="session-A",
+            tenant_id="claude-code-local",
+            tool_name="Bash" if i % 2 == 0 else "Edit",
+            decision="ALLOW",
+            reason="ok",
+            channel=None,
+            provider="openrouter:anthropic-claude-sonnet-4",
+            latency_ms=20.0,
+            cost_usd=0.001,
+            tokens_in=100, tokens_out=50,
+            step_traces={},
+            m13_score=None,
+            advisor_invoked=False,
+            recommended_advisors=(),
+            atv_sha3=None, atv_dim=2080,
+            is_sidechain=False, mode="local",
+        )
+        append(rec, path=cm)
+    rc = aegis_cli.cmd_doctor(argparse.Namespace(
+        since="7d", out=None, context_memory=None,
+    ))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "# Aegis Doctor Report" in out
+    assert "## 💰 Cost" in out
+    assert "## ⚡ Performance" in out
+    assert "## 🛡️ Security" in out
+    # 5 records reported
+    assert "5" in out
+
+
+def test_doctor_writes_to_out_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import argparse
+
+    from aegis.context_memory import append
+
+    cm = tmp_path / "cm.jsonl"
+    out_md = tmp_path / "report.md"
+    monkeypatch.setenv("AEGIS_CONTEXT_MEMORY_PATH", str(cm))
+    append({
+        "ts_ns": 1, "trace_id": "t1", "decision": "ALLOW", "tool": "Read",
+    }, path=cm)
+    rc = aegis_cli.cmd_doctor(argparse.Namespace(
+        since="30d", out=str(out_md), context_memory=None,
+    ))
+    assert rc == 0
+    assert out_md.exists()
+    content = out_md.read_text(encoding="utf-8")
+    assert "# Aegis Doctor Report" in content
+    captured = capsys.readouterr()
+    assert "리포트 작성됨" in captured.out
+
+
+def test_doctor_rejects_bad_since(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Bad --since must error cleanly, not crash."""
+    import argparse
+    cm = tmp_path / "cm.jsonl"
+    cm.write_text(
+        '{"ts_ns": 1, "trace_id": "t", "decision": "ALLOW"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AEGIS_CONTEXT_MEMORY_PATH", str(cm))
+    rc = aegis_cli.cmd_doctor(argparse.Namespace(
+        since="not-a-duration", out=None, context_memory=None,
+    ))
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "--since" in err
+
+
+def test_doctor_context_memory_path_override(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--context-memory flag overrides the env var."""
+    import argparse
+    cm_via_flag = tmp_path / "via-flag.jsonl"
+    cm_via_env = tmp_path / "via-env.jsonl"
+    cm_via_flag.write_text(
+        '{"ts_ns": 1, "trace_id": "from-flag", "decision": "ALLOW"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AEGIS_CONTEXT_MEMORY_PATH", str(cm_via_env))
+    rc = aegis_cli.cmd_doctor(argparse.Namespace(
+        since="30d", out=None, context_memory=str(cm_via_flag),
+    ))
+    assert rc == 0
+    out = capsys.readouterr().out
+    # Path used is the flag path, not env
+    assert str(cm_via_flag) in out

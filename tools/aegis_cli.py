@@ -3808,6 +3808,90 @@ def cmd_advise(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """`aegis doctor` — Cost · Performance · Security 통합 리포트.
+
+    Reads ContextMemory (~/.aegis/context_memory.jsonl by default —
+    a CXL SSD / Computational SSD emulation; every ATV gets a row
+    here when the firewall writes its audit record) and produces a
+    markdown report with:
+
+      • 윈도우 요약 (총 ATV, Decision 분포)
+      • 💰 Cost 통계 + 권고
+      • ⚡ Performance 통계 + 권고 (p50 / p95 / p99 / 도구별)
+      • 🛡️ Security 통계 + 권고 (BLOCK rate, step 분포, provider drift)
+      • 📌 다음 액션
+
+    Filters:
+      --since DURATION    윈도우 (기본 7d). 예: 1h, 24h, 3d, 30d.
+      --out FILE          파일에 저장 (기본: stdout)
+      --context-memory P  ContextMemory 경로 override
+
+    Why a separate store from audit.jsonl? Different concerns:
+      • audit.jsonl   — SHA3 + Ed25519 chain, 변조 증거용
+      • context_memory.jsonl — 분석 fast-path, near-storage compute
+                              로의 silicon 이행 spec
+
+    Read-only — `aegis doctor` 는 어떤 파일도 수정하지 않습니다.
+    """
+    import datetime as _dt
+    import sys
+
+    from aegis.context_memory import context_memory_path, read_window
+    from aegis.context_memory.report import render_doctor_report
+
+    # Resolve path override
+    if getattr(args, "context_memory", None):
+        cm_path = Path(args.context_memory)
+    else:
+        cm_path = context_memory_path()
+
+    if not cm_path.exists():
+        print(
+            _yellow(
+                f"[doctor] ContextMemory 가 비어있습니다: {cm_path}\n"
+                "        Aegis 가 한 번이라도 작동한 후 (예: Claude Code "
+                "tool call 발생 후) 다시 시도하세요."
+            )
+        )
+        return 1
+
+    # Resolve --since
+    since_spec = getattr(args, "since", None) or "7d"
+    try:
+        since_secs = _parse_window_secs(since_spec)
+    except ValueError as e:
+        print(_red(f"error: --since 파싱 실패: {e}"), file=sys.stderr)
+        return 1
+
+    now_ns = time.time_ns()
+    since_ns = now_ns - since_secs * 1_000_000_000
+
+    records = read_window(since_ns=since_ns, path=cm_path)
+
+    md = render_doctor_report(
+        records,
+        since_seconds=since_secs,
+        generated_at=_dt.datetime.now(_dt.UTC),
+        context_memory_path_str=str(cm_path),
+    )
+
+    out_path = getattr(args, "out", None)
+    if out_path:
+        try:
+            Path(out_path).write_text(md, encoding="utf-8")
+            print(_green(f"✓ 리포트 작성됨: {out_path}"))
+            print(f"  레코드: {len(records):,} 건")
+            return 0
+        except OSError as e:
+            print(_red(f"error: {out_path} 쓰기 실패: {e}"), file=sys.stderr)
+            return 1
+
+    # stdout
+    print(md)
+    return 0
+
+
 def cmd_label(args: argparse.Namespace) -> int:
     """`aegis label` — human adjudication of an audit record.
 
@@ -7563,6 +7647,38 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     ad.set_defaults(fn=cmd_advise)
+
+    # ── aegis doctor ─────────────────────────────────────────────
+    dr = sub.add_parser(
+        "doctor",
+        help=(
+            "Cost · Performance · Security 통합 리포트 (markdown) — "
+            "ContextMemory (CXL/Computational SSD emulation) 에서 ATV 분석"
+        ),
+    )
+    dr.add_argument(
+        "--since",
+        type=str,
+        default="7d",
+        help="윈도우 기간 (기본 7d). 예: 1h / 24h / 3d / 30d",
+    )
+    dr.add_argument(
+        "--out",
+        type=str,
+        default=None,
+        help="마크다운 파일로 저장 (기본: stdout)",
+    )
+    dr.add_argument(
+        "--context-memory",
+        dest="context_memory",
+        type=str,
+        default=None,
+        help=(
+            "ContextMemory 경로 override "
+            "(기본: $AEGIS_CONTEXT_MEMORY_PATH 또는 ~/.aegis/context_memory.jsonl)"
+        ),
+    )
+    dr.set_defaults(fn=cmd_doctor)
 
     # ── aegis label ──────────────────────────────────────────────
     lb = sub.add_parser(
