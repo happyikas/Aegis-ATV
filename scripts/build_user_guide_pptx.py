@@ -108,7 +108,7 @@ def _add_bg(slide, color: RGBColor) -> None:
     _fill(bg, color)
 
 
-def _footer(slide, page_num: str, total: str = "14") -> None:
+def _footer(slide, page_num: str, total: str = "15") -> None:
     """Slim navy footer band with page number."""
     band = slide.shapes.add_shape(
         MSO_SHAPE.RECTANGLE, 0, Inches(7.18), SLIDE_W, Inches(0.32),
@@ -886,7 +886,102 @@ def slide_13_troubleshooting(prs: Presentation) -> None:
     _footer(slide, "13")
 
 
-def slide_14_summary(prs: Presentation) -> None:
+def slide_14_context_memory(prs: Presentation) -> None:
+    """ContextMemory + aegis doctor — PitchDeck "HARDWARE NEXT" 매핑."""
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _eyebrow(slide, "PitchDeck \"HARDWARE NEXT\" 매핑")
+    _title(slide, "ContextMemory + aegis doctor")
+    _divider(slide)
+
+    # Subtitle
+    _add_text(
+        slide,
+        "ATV 가 생성될 때마다 자동 저장 — CXL SSD / Computational SSD 의 software emulation",
+        left=Inches(0.6), top=Inches(1.85),
+        width=Inches(12.13), height=Inches(0.4),
+        size=14, color=MUTED, italic=True,
+    )
+
+    # Left card: 두 store 의 역할 분리
+    _card(
+        slide, left=Inches(0.6), top=Inches(2.45),
+        width=Inches(6.05), height=Inches(2.5),
+    )
+    _add_text(
+        slide, "두 store 의 역할 분리",
+        left=Inches(0.85), top=Inches(2.6),
+        width=Inches(5.55), height=Inches(0.4),
+        size=16, bold=True, color=NAVY,
+    )
+    _add_text(
+        slide,
+        "audit.jsonl\n"
+        "  SHA3 + Ed25519 체인 (변조 증거)\n\n"
+        "context_memory.jsonl  ← 신규\n"
+        "  분석 fast-path. silicon 이행 시\n"
+        "  near-storage compute 의 입력",
+        left=Inches(0.85), top=Inches(3.05),
+        width=Inches(5.55), height=Inches(1.9),
+        size=13, color=DARK_INK, font=MONO_FONT,
+    )
+
+    # Right card: aegis doctor sample
+    _card(
+        slide, left=Inches(6.85), top=Inches(2.45),
+        width=Inches(5.88), height=Inches(2.5),
+    )
+    _add_text(
+        slide, "$ aegis doctor",
+        left=Inches(7.1), top=Inches(2.6),
+        width=Inches(5.4), height=Inches(0.4),
+        size=14, bold=True, color=NAVY, font=MONO_FONT,
+    )
+    _add_text(
+        slide,
+        "📊 요약 — ALLOW 96.4% / BLOCK 0.5%\n"
+        "💰 Cost  — $4.18 (94% Claude)\n"
+        "⚡ Perf  — p95 47ms ✓\n"
+        "🛡️ Sec  — step310 BLOCK 57%\n\n"
+        "→ markdown 리포트 + 휴리스틱 권고",
+        left=Inches(7.1), top=Inches(3.05),
+        width=Inches(5.4), height=Inches(1.9),
+        size=12, color=DARK_INK, font=MONO_FONT,
+    )
+
+    # Bottom strip: 3-tier value
+    items = [
+        ("매 tool call 자동 기록", "ATV 생성 시점에 두 파일 동시 append (defensive)"),
+        ("3축 분석 + 권고", "Cost · Performance · Security 휴리스틱 advisor 11종 룰"),
+        ("silicon-ready", "Same schema = CXL/CSD 의 spec. host-Python 이 후일 in-storage 로 이행"),
+    ]
+    item_w = Inches(4.05)
+    item_h = Inches(1.5)
+    start_left = Inches(0.6)
+    for i, (head, body) in enumerate(items):
+        left = start_left + (item_w + Inches(0.06)) * i
+        # numbered circle
+        circle = slide.shapes.add_shape(
+            MSO_SHAPE.OVAL, left, Inches(5.15),
+            Inches(0.45), Inches(0.45),
+        )
+        _fill(circle, CORAL)
+        _add_text(slide, str(i + 1),
+                  left=left, top=Inches(5.21),
+                  width=Inches(0.45), height=Inches(0.4),
+                  size=14, bold=True, color=WHITE, align="center")
+        _add_text(slide, head,
+                  left=left + Inches(0.55), top=Inches(5.18),
+                  width=item_w - Inches(0.6), height=Inches(0.4),
+                  size=13, bold=True, color=NAVY)
+        _add_text(slide, body,
+                  left=left, top=Inches(5.7),
+                  width=item_w - Inches(0.1), height=item_h - Inches(0.6),
+                  size=11, color=DARK_INK)
+
+    _footer(slide, "14")
+
+
+def slide_15_summary(prs: Presentation) -> None:
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _add_bg(slide, NAVY)
 
@@ -962,7 +1057,8 @@ def build(out_path: Path) -> None:
     slide_11_integrations(prs)
     slide_12_faq(prs)
     slide_13_troubleshooting(prs)
-    slide_14_summary(prs)
+    slide_14_context_memory(prs)
+    slide_15_summary(prs)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     prs.save(out_path)
