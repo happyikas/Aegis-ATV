@@ -1,6 +1,6 @@
 [project]
 name = "aegis-mvp"
-version = "0.3.1"
+version = "0.3.2"
 description = "Aegis ATV — Action Firewall + cryptographic audit chain for Claude Code and OpenClaw"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
