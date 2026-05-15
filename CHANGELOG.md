@@ -4,6 +4,67 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — 2026-05-15  ·  One-Stop Console — Dashboard · Tour · Serena integration
+
+User-facing minor release that turns the patchwork of 8+ CLI commands
+into **one console**. Three new surfaces — all rich-based, all
+Korean-friendly — make Aegis usable by non-engineers without
+remembering subcommands:
+
+* **`aegis dashboard`** — one-screen TUI. Auto-refreshing 3-pane
+  layout (💰 Cost / ⚡ Performance / 🛡️ Security) + top advisor
+  recommendations + recent BLOCKs. Reads ContextMemory; demo mode
+  for fresh installs.
+* **`aegis tour`** — 60-second interactive onboarding. 7 panel
+  walkthrough: 비유 → chokepoint → 시연 → 설치 → 기능 → 다음
+  단계. Plain language first.
+* **`docs/integrations/serena.md`** — 3-layer stack guide for the
+  Aegis × Serena composition (token-efficient code retrieval +
+  cryptographic tool-call audit). Design-partner / Show HN
+  narrative asset.
+
+Plus minor: the hotfix in 0.3.3 (bundled plugin manifest) is
+included.
+
+### Added
+
+* **`aegis dashboard`** (`src/aegis/dashboard/`) — rich-based TUI
+  console with auto-refresh (default 2s) reading ContextMemory.
+  3-pane stats, advisor recommendations (top 5, sorted high → low),
+  recent BLOCKs, demo mode for empty stores, provider compression
+  (`openrouter:anthropic-claude-sonnet-4` → `OR:claude-sonnet-4` in
+  cost panel). PR #178.
+* **`aegis tour`** (`src/aegis/tour/`) — interactive 7-panel
+  onboarding walkthrough. Pure read+display, safe to re-run.
+  Korean primary, plain-language. `--auto` for demo / test
+  pipelines. PR #180.
+* **`docs/integrations/serena.md`** — Aegis × Serena 통합 가이드.
+  10 sections covering 3-layer stack, setup recipe, ManoMano
+  benchmark (~70% token savings on 36K LOC Java), regulated-
+  industry recipe (zdr + local-mode), Show HN one-liner. PR #179.
+* **`rich>=13.7`** dependency added for TUI rendering.
+
+### Changed
+
+* Top-level `README.md`'s **User manuals** entry now points at both
+  the new integrated guide and the deeper per-feature manuals —
+  matches the One-Stop Console framing.
+
+### Tests
+* 21 new in `test_dashboard.py` (collect_stats / build_layout /
+  run_dashboard / CLI wiring / demo invariants / provider
+  compression).
+* 18 new in `test_tour.py` (step data invariants / rendering /
+  runner exit paths / CLI wiring).
+* Net: 3044 → 3044 passed, 13 skipped (no regressions).
+
+### Roadmap context
+
+This release ships **Phase 1 + Phase 6 + Phase 5 (docs)** of the
+One-Stop Console plan (`docs/USER_GUIDE.ko.md` framing). Remaining
+phases (rule authoring, cost timeline, CLAUDE.md auto-reattest,
+browser dashboard) ship in `0.5.0` and later.
+
 ## [0.3.3] — 2026-05-15  ·  Hotfix — bundle plugin manifest in wheel
 
 ### Fixed
