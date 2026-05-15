@@ -4,7 +4,31 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.3.2] — 2026-05-15  ·  ContextMemory + aegis doctor + OpenRouter integration
+
+A feature + tooling release. Three big themes — all shippable from the
+PitchDeck's "HARDWARE NEXT" and "Multi-LLM provider" surfaces:
+
+* **ContextMemory** — software emulation of the planned CXL SSD /
+  Computational SSD near-storage compute layer. Every ATV gets a row
+  in a separate analytics store (`~/.aegis/context_memory.jsonl`)
+  alongside the audit chain. A second tier (1 KB fixed-size packed
+  binary, opt-in via env) mirrors the silicon layout exactly — same
+  schema = silicon spec.
+* **`aegis doctor`** — CLI that reads ContextMemory and produces a
+  6-section markdown report (요약 · Cost · Performance · Security ·
+  다음 액션 · footer) with heuristic optimization advice (provider
+  dominance, p95 vs < 50ms PitchDeck target, BLOCK-rate drift, etc.).
+* **OpenRouter integration** — `aegis.integrations.openrouter`
+  helper stamps the canonical Aegis provider field from an OpenRouter
+  response so `--by-provider` cross-grouping works on multi-LLM
+  routes. Makes the provider-drift advisor (already shipped in 0.3.0)
+  immediately useful for OpenRouter users.
+
+Plus `aegis label` (human adjudication CLI — patent ¶[0083] source 1
+of 4), the Hermes integration doc, the user-facing manual translated
+into Word + PowerPoint, and a cleanup of the 0.3.0 ghost release in
+the documentation tree.
 
 ### Added
 
