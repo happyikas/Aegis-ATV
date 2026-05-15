@@ -85,7 +85,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' && inputs.dry-run == false)
     environment:
       name: pypi
-      url: https://pypi.org/p/aegis-mvp
+      url: https://pypi.org/p/aegis-atv
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -97,7 +97,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           # Trusted publisher — no `password:` needed. Configure on
-          # https://pypi.org/manage/project/aegis-mvp/settings/publishing/
+          # https://pypi.org/manage/project/aegis-atv/settings/publishing/
           # See docs/RELEASE_PIPELINE.md §1.
           packages-dir: dist/
           # Hard-fail on a duplicate version, don't silently skip.

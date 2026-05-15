@@ -86,7 +86,7 @@ def mint(
         payload = {
             "iss": "https://license.test.example",
             "sub": "user_TEST",
-            "aud": "aegis-mvp",
+            "aud": "aegis-atv",
             "tier": "pro",
             "iat": base_iat,
             "exp": base_exp,

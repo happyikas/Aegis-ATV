@@ -19,8 +19,8 @@
 
 ```bash
 # 저장소 클론 + 의존성 설치
-git clone https://github.com/aegisdata/MVP.git aegis-mvp
-cd aegis-mvp
+git clone https://github.com/aegisdata/MVP.git aegis-atv
+cd aegis-atv
 uv sync                                  # → .venv/bin/python 생성
 ```
 

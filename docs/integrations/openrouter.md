@@ -60,7 +60,7 @@
 
 ## 4. 코드 — Python 헬퍼
 
-설치 후 (`uv pip install aegis-mvp>=0.3.1`) 바로 사용 가능:
+설치 후 (`uv pip install aegis-atv>=0.3.1`) 바로 사용 가능:
 
 ```python
 import os

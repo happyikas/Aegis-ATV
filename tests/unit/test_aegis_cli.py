@@ -145,7 +145,7 @@ def _install_license_active(
     payload = {
         "iss": "https://license.test.example",
         "sub": "user_TEST",
-        "aud": "aegis-mvp",
+        "aud": "aegis-atv",
         "tier": "team",
         "iat": iat,
         "exp": iat + 60 * 60 * 24 * 365,
@@ -197,7 +197,7 @@ def isolated_install(
     stop_hook.write_text("#!/usr/bin/env python3\nprint('stop')\n")
     hook.chmod(0o755)
     local_hook.chmod(0o755)
-    manifest.write_text(json.dumps({"name": "aegis-mvp", "version": "2.0.0"}))
+    manifest.write_text(json.dumps({"name": "aegis-atv", "version": "2.0.0"}))
     monkeypatch.setattr(aegis_cli, "SETTINGS_PATH", settings)
     monkeypatch.setattr(aegis_cli, "HOOK_SCRIPT", hook)
     monkeypatch.setattr(aegis_cli, "LOCAL_HOOK_SCRIPT", local_hook)
@@ -354,7 +354,7 @@ def isolated_install_phase5(
     stop_hook.write_text("#!/usr/bin/env python3\nprint('stop')\n")
     sidecar_hook.chmod(0o755)
     local_hook.chmod(0o755)
-    manifest.write_text(json.dumps({"name": "aegis-mvp", "version": "2.0.0"}))
+    manifest.write_text(json.dumps({"name": "aegis-atv", "version": "2.0.0"}))
 
     monkeypatch.setattr(aegis_cli, "SETTINGS_PATH", settings)
     monkeypatch.setattr(aegis_cli, "HOOK_SCRIPT", sidecar_hook)
@@ -381,7 +381,7 @@ def test_install_mode_invalid_rejected() -> None:
 
 def test_validate_plugin_manifest_ok(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     manifest = tmp_path / "plugin.json"
-    manifest.write_text(json.dumps({"name": "aegis-mvp", "version": "2.0.0"}))
+    manifest.write_text(json.dumps({"name": "aegis-atv", "version": "2.0.0"}))
     monkeypatch.setattr(aegis_cli, "PLUGIN_MANIFEST", manifest)
     ok, info = aegis_cli._validate_plugin_manifest()
     assert ok is True

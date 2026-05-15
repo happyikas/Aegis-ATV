@@ -417,7 +417,7 @@ should run; we suggest specific commands / files to verify.
 
 ### 8.7 Supply chain
 
-- [ ] **PyPI publish provenance**. Confirm published `aegis-mvp`
+- [ ] **PyPI publish provenance**. Confirm published `aegis-atv`
       sdist + wheel were built by the GitHub-Actions workflow
       `release-pypi.yml`, not uploaded by a stray API token.
       (Visible in PyPI's "publisher" field on the project page.)

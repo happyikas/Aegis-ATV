@@ -1,8 +1,8 @@
 services:
   aegis:
     build: .
-    image: aegis-mvp:dev
-    container_name: aegis-mvp
+    image: aegis-atv:dev
+    container_name: aegis-atv
     restart: unless-stopped
     ports:
       - "8000:8000"

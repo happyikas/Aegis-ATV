@@ -108,21 +108,21 @@ jobs:
         with:
           context: .
           load: true
-          tags: aegis-mvp:ci
+          tags: aegis-atv:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Boot container
         run: |
           mkdir -p data keys
-          docker run -d --name aegis-mvp-ci \
+          docker run -d --name aegis-atv-ci \
             -p 8000:8000 \
             -e AEGIS_EMBEDDING_PROVIDER=dummy \
             -e AEGIS_JUDGE_PROVIDER=dummy \
             -e AEGIS_SAFETY_PROVIDER=dummy \
             -v "$(pwd)/data:/app/data" \
             -v "$(pwd)/keys:/app/keys" \
-            aegis-mvp:ci
+            aegis-atv:ci
 
       - name: Wait for /healthz
         run: |
@@ -135,7 +135,7 @@ jobs:
             sleep 1
           done
           echo "service did not come up in 30s"
-          docker logs aegis-mvp-ci
+          docker logs aegis-atv-ci
           exit 1
 
       - name: Smoke-test endpoints
@@ -149,11 +149,11 @@ jobs:
 
       - name: Container logs (always)
         if: always()
-        run: docker logs aegis-mvp-ci || true
+        run: docker logs aegis-atv-ci || true
 
       - name: Stop container
         if: always()
-        run: docker stop aegis-mvp-ci 2>/dev/null || true
+        run: docker stop aegis-atv-ci 2>/dev/null || true
 
   # ─────────────────────────────────────────────────────────────────────
   # Demo end-to-end — runs the full agent_demo against the container

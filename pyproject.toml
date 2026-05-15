@@ -1,7 +1,7 @@
 [project]
-name = "aegis-mvp"
-version = "0.4.0"
-description = "Aegis ATV — Action Firewall + cryptographic audit chain for Claude Code and OpenClaw"
+name = "aegis-atv"
+version = "0.5.0"
+description = "Aegis ATV — Agent Telemetry Vector. Action firewall + cryptographic audit chain + ContextMemory analytics for AI agents."
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 readme = "README.md"
@@ -40,7 +40,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # Solo Free real-sLLM: on-device quantized LLM judge via llama.cpp.
-# Activate with: `uv pip install aegis-mvp[local-llm]` (or
+# Activate with: `uv pip install aegis-atv[local-llm]` (or
 # equivalently `uv sync --extra local-llm`).
 # Apple Silicon (Metal): set CMAKE_ARGS="-DGGML_METAL=on" before install.
 local-llm = [
@@ -88,7 +88,7 @@ packages = ["src/aegis", "tools"]
 # Slim sdist: keep source + policies + minimal docs, drop the
 # pre-rendered media kit (PDFs, GIFs, audio, screenshots) and the
 # large .npz baseline. Users who want those clone the GitHub repo;
-# `pip install aegis-mvp` should be fast and ~1 MB, not 17 MB.
+# `pip install aegis-atv` should be fast and ~1 MB, not 17 MB.
 include = [
     "/src",
     "/tools",
