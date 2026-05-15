@@ -1,5 +1,9 @@
 # Aegis ATV — 사용자 매뉴얼 (한국어 정본)
 
+> **처음 사용하시나요?** [`docs/USER_GUIDE.ko.md`](../USER_GUIDE.ko.md) 가 비전문가용 통합 가이드 — 5–10분 안에 "Aegis 가 무엇이고 어떻게 쓰는지" 한 페이지로. 이 디렉토리는 그 다음 단계의 깊은 reference 입니다.
+
+---
+
 Aegis ATV (Action Transparency & Verification) 의 사용자용 매뉴얼은 제품의
 3개 기능 단위 (**Coach / Live / Doctor**) 로 구성되어 있습니다. 각 기능은
 독립적으로 사용해도 되고, 셋이 조합되면 "agent 의 작업을 학습 → 모니터링

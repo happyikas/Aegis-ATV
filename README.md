@@ -33,7 +33,7 @@ Aegis is packaged around three named features built on the same firewall + audit
 | **📊 ATV Live** | Real-time agent monitoring across **cost / performance / security** | `aegis report`, `aegis cost summary`, `aegis fleet-monitor start` |
 | **🔧 ATV Doctor** | Diagnoses + advises + rolls back when the agent is in trouble (or about to be) | `aegis forensic last`, `aegis advise`, `aegis rollback <trace>` |
 
-User manuals (Korean is the canonical version): [`docs/manuals/`](docs/manuals/README.md)
+User manuals (Korean is the canonical version): [`docs/USER_GUIDE.ko.md`](docs/USER_GUIDE.ko.md) (비전문가용 통합 가이드) · [`docs/manuals/`](docs/manuals/README.md) (기능별 깊은 reference)
 
 ## Why this exists
 
