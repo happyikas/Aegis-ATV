@@ -4,8 +4,8 @@
 
 | 파일 | 용도 | 분량 |
 |---|---|---|
-| [`USER_GUIDE.ko.docx`](USER_GUIDE.ko.docx) | 이메일 첨부 / 인쇄 / 사내 회람 | ~24 KB · 13 섹션 + 목차 |
-| [`USER_GUIDE.ko.pptx`](USER_GUIDE.ko.pptx) | 영업 미팅 · 데모 · 발표 | ~57 KB · 14 슬라이드 16:9 |
+| [`USER_GUIDE.ko.docx`](USER_GUIDE.ko.docx) | 이메일 첨부 / 인쇄 / 사내 회람 | ~26 KB · 14 섹션 + 목차 |
+| [`USER_GUIDE.ko.pptx`](USER_GUIDE.ko.pptx) | 영업 미팅 · 데모 · 발표 | ~60 KB · 15 슬라이드 16:9 |
 
 ## 재생성 방법
 
@@ -49,7 +49,8 @@ uv run --with python-pptx python scripts/build_user_guide_pptx.py
 | 11 | 통합 시나리오 — Claude Code · OpenClaw · OpenRouter · Hermes |
 | 12 | FAQ 4 가지 |
 | 13 | 자주 발생하는 문제 6 건 |
-| 14 | 한 문장 요약 + install command |
+| 14 | **ContextMemory + aegis doctor** — CXL/CSD 매핑 (NEW) |
+| 15 | 한 문장 요약 + install command |
 
 ## 디자인 결정 — 참고
 
