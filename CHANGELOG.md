@@ -4,6 +4,91 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] — 2026-05-15  ·  Top-level CLI restructure — operator vocabulary
+
+**Additive only** — no breaking changes. v0.5.1 introduces seven
+"intent" commands at the top of `aegis --help`, modeled on the
+operator's mental model rather than the underlying module layout.
+Every v0.5.0 command keeps working.
+
+### New top-level commands
+
+```
+Core commands:
+  doctor:        Diagnose cost, performance, security, and mistakes
+  report:        Generate a session or timeline report
+  live:          Monitor agent execution in real time          (alias for `dashboard`)
+  advise:        Show prioritized recommendations
+  memory:        Improve: CLAUDE.md and ContextMemory          (new group)
+  guard:         Create and test guardrails                    (alias for `rule`)
+  coach:         Train sLLM and RAG with saved logs            (new group)
+
+Audit & forensics:
+  verify-audit, replay, forensic
+```
+
+### Added
+
+* `aegis live` — argparse alias of `aegis dashboard`. Same flags
+  (`--refresh`, `--since-hours`, `--demo`, `--context-memory`).
+* `aegis guard` — argparse alias of `aegis rule`. All subcommands
+  (`list / add / remove / enable / disable / test / import`) work
+  identically.
+* `aegis coach` — composite group routing to existing training
+  commands via a thin `_coach_delegate` router:
+    * `aegis coach burnin <action>` → `aegis burnin <action>`
+    * `aegis coach calibrate <action>` → `aegis advisor-calibration <action>`
+    * `aegis coach case-memory <action>` → `aegis case-memory <action>`
+  Every legacy flag passes through unchanged (`REMAINDER`-based
+  delegation).
+* `aegis memory` — composite group with two own handlers + one
+  delegate:
+    * `aegis memory show` — print ContextMemory store status (path,
+      size, record count, ts range). Walks the JSONL once; resilient
+      to malformed lines (crash-recovery scenarios).
+    * `aegis memory claude-md` — locate + summarize project
+      `CLAUDE.md` / `AGENTS.md`. Surfaces step309 instruction-
+      baseline drift status if `AEGIS_INSTRUCTION_BASELINE_PATH` is
+      set. The "given recent BLOCK / advise events, propose CLAUDE.md
+      edits" feedback loop is roadmapped for 0.5.x.
+    * `aegis memory case <action>` — alias for `aegis case-memory
+      <action>` (RAG operators reaching for "memory" find it here).
+
+### Changed
+
+* Top-level `aegis --help` now uses a `RawDescriptionHelpFormatter`
+  banner that groups commands by **intent** (Core / Audit &
+  forensics / System) instead of the argparse default
+  alphabetic-by-everything list. The auto-generated subparser
+  enumeration is collapsed via `metavar="<command>"`.
+
+### Unchanged (backward compat)
+
+* All v0.5.0 commands keep their canonical names — `dashboard`,
+  `rule`, `burnin`, `advisor-calibration`, `case-memory`,
+  `fleet-monitor`, etc. — and continue dispatching to the same
+  handlers. v0.4.x / v0.5.0 scripts work as-is.
+* License-JWT audience handling: still accepts both `aegis-atv` and
+  `aegis-mvp` (carried forward from 0.5.0).
+
+### Tests
+
+* `tests/unit/test_cli_restructure_v05.py` — 21 new test cases
+  covering: alias resolution (live, guard), coach delegate routing,
+  memory handlers (show on empty store, malformed JSONL tolerance,
+  claude-md locator in / out of project), top-level help banner
+  contract.
+
+### Files changed
+
+* `tools/aegis_cli.py` — `_AEGIS_TOP_HELP` constant, `_coach_delegate`
+  router, `cmd_memory_show`, `cmd_memory_claude_md`, new `coach` /
+  `memory` parser registrations, `aliases=` on `dashboard` / `rule`,
+  top-level parser `description=` + `metavar="<command>"`.
+* `pyproject.toml`, `src/aegis/__init__.py` — version → `0.5.1`.
+* `CHANGELOG.md` — this entry.
+* `tests/unit/test_cli_restructure_v05.py` — new.
+
 ## [0.5.0] — 2026-05-15  ·  Naming alignment — Aegis ATV — Agent Telemetry Vector
 
 **Breaking change**: PyPI package renamed `aegis-mvp` → `aegis-atv` to
