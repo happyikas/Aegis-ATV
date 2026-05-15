@@ -44,7 +44,7 @@ Claims:
 {
   "iss": "https://license.aegisdata.example",
   "sub": "user_01HRXY...",
-  "aud": "aegis-mvp",
+  "aud": "aegis-atv",
   "tier": "pro",                     // free | pro | team | enterprise
   "iat": 1762675200,
   "exp": 1794211200,                 // 1 year out by default
@@ -70,7 +70,7 @@ license without a network call.
 ## 2. Validation flow
 
 ```
-aegis-mvp startup
+aegis-atv startup
     │
     ▼
 ┌─────────────────────────────────────────────────────────────┐
@@ -79,7 +79,7 @@ aegis-mvp startup
 │     (mismatch → Solo Free + warn user)                      │
 │  3. Check `exp` against system clock                        │
 │     (expired → Solo Free + warn)                            │
-│  4. Check `aud == "aegis-mvp"` and `tier in {pro,team,...}` │
+│  4. Check `aud == "aegis-atv"` and `tier in {pro,team,...}` │
 │  5. Optional: check burnin_bind matches local Burn-in id    │
 │     (mismatch → Solo Free + warn — license is for another   │
 │     machine)                                                │

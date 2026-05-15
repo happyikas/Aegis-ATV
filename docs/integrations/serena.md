@@ -92,7 +92,7 @@ Claude Code 재시작.
 ### 4.3 Aegis 설치
 
 ```bash
-uv tool install aegis-mvp==0.3.3
+uv tool install aegis-atv==0.3.3
 aegis install --mode local --profile pro
 ```
 

@@ -53,10 +53,16 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from aegis.license.keys import get_issuer_public_key
 
-# The fixed audience claim every Aegis license must declare. Matches
-# the runtime's identifier; a license minted for a different aud
-# (e.g. a future product line) won't be accepted.
-EXPECTED_AUDIENCE: Final[str] = "aegis-mvp"
+# The audience claim every Aegis license must declare. 0.5.0 renamed
+# the PyPI package from ``aegis-mvp`` to ``aegis-atv``; we accept both
+# audience values during the transition so existing JWTs minted with
+# the old ``aud`` keep working. EXPECTED_AUDIENCE is the new canonical
+# value for newly-minted licenses; EXPECTED_AUDIENCES is the set the
+# verifier matches against.
+EXPECTED_AUDIENCE: Final[str] = "aegis-atv"
+EXPECTED_AUDIENCES: Final[frozenset[str]] = frozenset(
+    {"aegis-atv", "aegis-mvp"},  # latter kept for 0.4.x backward compat
+)
 
 # Tier names the runtime understands. Anything else fails the check.
 KNOWN_TIERS: Final[frozenset[str]] = frozenset(
@@ -175,9 +181,10 @@ def _validate_claims(
             )
 
     aud = claims["aud"]
-    if aud != EXPECTED_AUDIENCE:
+    if aud not in EXPECTED_AUDIENCES:
         raise LicenseVerifyError(
-            "wrong-audience", f"aud={aud!r}, expected {EXPECTED_AUDIENCE!r}",
+            "wrong-audience",
+            f"aud={aud!r}, expected one of {sorted(EXPECTED_AUDIENCES)!r}",
         )
 
     tier = claims["tier"]

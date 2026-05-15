@@ -203,7 +203,7 @@ have a transcript ready to attach to a PR.
 * **Terminal scrollback** with `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`
   in `env`. Run `clear; printenv | grep -v API_KEY` before opening the
   recording shell.
-* **`docker logs aegis-mvp`** unless you've grepped out request
+* **`docker logs aegis-atv`** unless you've grepped out request
   bodies — they may contain user prompts.
 
 ---

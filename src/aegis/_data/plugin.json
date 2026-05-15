@@ -1,7 +1,7 @@
 {
-  "name": "aegis-mvp",
+  "name": "aegis-atv",
   "version": "2.0.0",
-  "description": "AegisData \u2014 pre-commit safety, post-hoc proof, predictable cost for autonomous AI agents.",
+  "description": "Aegis ATV \u2014 Agent Telemetry Vector. Action firewall + cryptographic audit chain + ContextMemory analytics for AI agents.",
   "author": {
     "name": "Chanik Shin",
     "email": "chanik@aegisdata.ai",
@@ -33,7 +33,7 @@
       "sprint-5-kickoff"
     ],
     "skills": [
-      "aegis-mvp"
+      "aegis-atv"
     ]
   },
   "config_schema": {

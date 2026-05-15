@@ -1,4 +1,4 @@
-# Aegis — Action Firewall for Claude Code
+# Aegis ATV — Agent Telemetry Vector
 
 [![CI](https://github.com/happyikas/Aegis-ATV/actions/workflows/ci.yml/badge.svg)](https://github.com/happyikas/Aegis-ATV/actions/workflows/ci.yml)
 [![tests](https://img.shields.io/badge/tests-2369%20passed-brightgreen)](https://github.com/happyikas/Aegis-ATV/actions/workflows/ci.yml)

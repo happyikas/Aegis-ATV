@@ -78,7 +78,7 @@ def _pro_license_active(
     payload = {
         "iss": "https://license.test.example",
         "sub": f"user-{uuid.uuid4().hex[:8]}",
-        "aud": "aegis-mvp",
+        "aud": "aegis-atv",
         "tier": "pro",
         "iat": iat,
         "exp": exp,

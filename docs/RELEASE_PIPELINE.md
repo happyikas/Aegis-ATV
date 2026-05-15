@@ -1,7 +1,7 @@
 # Release Pipeline — PyPI + GHCR
 
 > One-time setup + per-release runbook. The pipeline ships
-> `aegis-mvp` to **PyPI** and a multi-arch container image to
+> `aegis-atv` to **PyPI** and a multi-arch container image to
 > **GitHub Container Registry (GHCR)** in lockstep, both triggered by
 > pushing a `v*` git tag.
 
@@ -23,7 +23,7 @@ this workflow file.
 
    | Field | Value |
    |---|---|
-   | PyPI Project Name | `aegis-mvp` |
+   | PyPI Project Name | `aegis-atv` |
    | Owner | `happyikas` |
    | Repository | `Aegis-ATV` |
    | Workflow name | `release-pypi.yml` |
@@ -132,7 +132,7 @@ check the build log for "would push: …"). When happy, proceed to §3.
 
 ## §5 Sdist / wheel size budget
 
-`pip install aegis-mvp` should be fast. Current targets:
+`pip install aegis-atv` should be fast. Current targets:
 
 | Artifact | Target | As of v0.2.0 |
 |---|---|---|
@@ -164,7 +164,7 @@ versions independently — see `openclaw-plugin/CHANGELOG.md`.
 
 * **PyPI**: a published version cannot be deleted, only **yanked**.
   Yank with `pip install --upgrade twine && twine yank
-  aegis-mvp==<bad version>`. Yanked versions still exist for
+  aegis-atv==<bad version>`. Yanked versions still exist for
   reproducibility but new installs ignore them unless pinned
   explicitly.
 * **GHCR**: a tag can be repointed by re-running the workflow

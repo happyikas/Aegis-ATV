@@ -4,6 +4,63 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] — 2026-05-15  ·  Naming alignment — Aegis ATV — Agent Telemetry Vector
+
+**Breaking change**: PyPI package renamed `aegis-mvp` → `aegis-atv` to
+match the canonical product naming. The Python module name (`aegis`)
+and the CLI command (`aegis`) are unchanged. Source-clone users see
+no impact; PyPI users must switch install commands.
+
+### Naming canon
+
+| Field | Value |
+|---|---|
+| Product (short) | **Aegis ATV** |
+| Full name       | **Aegis ATV — Agent Telemetry Vector** |
+| PyPI package    | `aegis-atv` |
+| CLI command     | `aegis` |
+| GitHub repo     | `Aegis-ATV` |
+| Docker image    | `aegis-atv` |
+
+### Migration
+
+* Install via the new name:
+  ```bash
+  uv tool install --reinstall aegis-atv
+  ```
+* Existing JWT licenses (with `aud: aegis-mvp`) keep working — the
+  verifier accepts both `aegis-mvp` and `aegis-atv` audience values
+  during the 0.5.x transition window.
+* The Claude plugin manifest (`.claude-plugin/plugin.json`) renames
+  its `name` field from `aegis-mvp` to `aegis-atv`. Existing
+  installs will be re-detected on next `aegis install` run.
+
+### Changed
+
+* `pyproject.toml::name` = `aegis-atv`
+* `pyproject.toml::description` updated to lead with "Agent Telemetry
+  Vector"
+* `src/aegis/__init__.py` docstring + version
+* `docker-compose.yml` — image / container name → `aegis-atv`
+* `README.md` H1 → `Aegis ATV — Agent Telemetry Vector`
+* `.claude-plugin/plugin.json` + bundled copy at
+  `src/aegis/_data/plugin.json` — name + description updated
+* `src/aegis/license/verify.py` — `EXPECTED_AUDIENCE` now `"aegis-atv"`
+  with backward-compat set `EXPECTED_AUDIENCES` accepting both old
+  and new audience values
+* License-related tests + plugin-manifest tests updated to mint with
+  the new `aud` value
+
+### Unchanged (preserves history)
+
+* Past CHANGELOG entries (0.4.x and earlier) keep their `aegis-mvp`
+  references — they're accurate records of what shipped under that
+  name
+* `tools/aegis_*.py` docstring headers ("Donor: aegis-mvp v1.0.0")
+  are historical attributions and stay as-is
+* `openclaw-plugin/` (separate npm package `@happyikas/openclaw-plugin-aegis`)
+  is unrelated to this rename
+
 ## [0.4.0] — 2026-05-15  ·  One-Stop Console — Dashboard · Tour · Serena integration
 
 User-facing minor release that turns the patchwork of 8+ CLI commands

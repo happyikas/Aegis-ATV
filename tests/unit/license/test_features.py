@@ -86,7 +86,7 @@ def test_features_for_unknown_tier_returns_empty(
     # Bypass verify by hand-crafting a claims tuple with a bogus tier.
     from aegis.license.verify import LicenseClaims
     bad = LicenseClaims(
-        tier="ultraviolet", iss="i", sub="s", aud="aegis-mvp",
+        tier="ultraviolet", iss="i", sub="s", aud="aegis-atv",
         iat=0, exp=10**12, license_id="x", seats=1,
         features=("advisor.full",), burnin_bind=None, kid="k",
     )

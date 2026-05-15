@@ -226,7 +226,7 @@ class TestUninstallBehaviour:
             p.chmod(0o755)
             monkeypatch.setattr(aegis_cli, attr, p)
         manifest = tmp_path / "plugin.json"
-        manifest.write_text(json.dumps({"name": "aegis-mvp", "version": "2.0.0"}))
+        manifest.write_text(json.dumps({"name": "aegis-atv", "version": "2.0.0"}))
         monkeypatch.setattr(aegis_cli, "PLUGIN_MANIFEST", manifest)
 
         # Pre-existing third-party

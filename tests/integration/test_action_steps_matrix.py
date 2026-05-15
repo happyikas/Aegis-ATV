@@ -396,7 +396,7 @@ def _hook_audit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         tier="pro",
         iss="https://license.test.example",
         sub="action-steps-matrix-test",
-        aud="aegis-mvp",
+        aud="aegis-atv",
         iat=int(_t.time()) - 60,
         exp=int(_t.time()) + 60 * 60 * 24 * 365,
         license_id="lic_TEST_ACTION_STEPS",
