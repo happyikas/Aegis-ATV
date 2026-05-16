@@ -7483,6 +7483,143 @@ def cmd_assess(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_autonomy_learn(args: argparse.Namespace) -> int:
+    """``aegis autonomy learn`` — mine the burn-in window and write
+    the trust table to disk.
+
+    The trust table is what the runtime bypass consults — see
+    ``aegis autonomy show`` to inspect the current table.
+    """
+    from aegis.autonomy import (
+        DEFAULT_MIN_CLEAN_RATE,
+        DEFAULT_MIN_SAMPLES,
+        learn_trusted_patterns,
+        save_trust_table,
+        trust_table_path,
+    )
+    from aegis.context_memory import context_memory_path, read_window
+
+    cm_override = getattr(args, "context_memory", None)
+    cm_path = Path(cm_override) if cm_override else context_memory_path()
+    if not cm_path.exists():
+        print(_yellow(
+            f"[autonomy learn] ContextMemory not found at {cm_path}.\n"
+            "  Run Aegis through a few sessions before learning."
+        ))
+        return 1
+
+    since_spec = getattr(args, "since", None) or "30d"
+    try:
+        since_secs = _parse_window_secs(since_spec)
+    except ValueError as e:
+        print(_red(f"error: --since parse failed: {e}"), file=sys.stderr)
+        return 1
+    now_ns = time.time_ns()
+    since_ns = now_ns - since_secs * 1_000_000_000
+    records = read_window(since_ns=since_ns, path=cm_path)
+
+    min_samples = int(getattr(args, "min_samples", DEFAULT_MIN_SAMPLES))
+    min_clean = float(getattr(args, "min_clean_rate", DEFAULT_MIN_CLEAN_RATE))
+
+    table = learn_trusted_patterns(
+        records,
+        min_samples=min_samples,
+        min_clean_rate=min_clean,
+    )
+    out_path_override = getattr(args, "out", None)
+    out_path = Path(out_path_override) if out_path_override else trust_table_path()
+    saved = save_trust_table(
+        table, path=out_path,
+        learned_from_records=len(records),
+        min_samples=min_samples,
+        min_clean_rate=min_clean,
+    )
+    print(_green(f"✓ autonomy trust table updated: {saved}"))
+    print(f"  records scanned:    {len(records):,}")
+    print(f"  window:             {since_spec}")
+    print(f"  patterns learned:   {len(table)}")
+    print(f"  min_samples:        {min_samples}")
+    print(f"  min_clean_rate:     {min_clean:.2f}")
+    if not table:
+        print()
+        print(_yellow(
+            "  No patterns met the trust threshold. Possible reasons:\n"
+            "    • burn-in window too short or sparse\n"
+            "    • all REQUIRE_APPROVAL reasons fell in the never-trust\n"
+            "      category (dangerous, sensitive paths, custom rules)\n"
+            "    • clean-followup rate below threshold — many approvals\n"
+            "      were followed by BLOCKs (the situation isn't routine)"
+        ))
+    return 0
+
+
+def cmd_autonomy_show(args: argparse.Namespace) -> int:
+    """``aegis autonomy show`` — render the current trust table."""
+    from aegis.autonomy import (
+        autonomy_enabled,
+        load_trust_table,
+        render_trust_table,
+        trust_table_metadata,
+        trust_table_path,
+    )
+
+    path_override = getattr(args, "trust_table", None)
+    path = Path(path_override) if path_override else trust_table_path()
+    table = load_trust_table(path=path)
+    meta = trust_table_metadata(path=path)
+
+    flag = "🟢 ENABLED" if autonomy_enabled() else "🟡 disabled"
+    print(_green(f"Autonomy bypass — {flag}"))
+    print(f"  trust table:        {path}")
+    if meta:
+        print(f"  learned at:         {meta.get('learned_at', '?')}")
+        print(f"  records scanned:    {meta.get('learned_from_records', '?')}")
+        print(f"  min_samples:        {meta.get('min_samples', '?')}")
+        print(f"  min_clean_rate:     {meta.get('min_clean_rate', '?')}")
+    else:
+        print("  (trust table missing — run `aegis autonomy learn`)")
+    print()
+    print(render_trust_table(table))
+    return 0
+
+
+def cmd_autonomy_outliers(args: argparse.Namespace) -> int:
+    """``aegis autonomy outliers`` — walk ContextMemory for
+    auto-approved records that were followed by a BLOCK within
+    the lookahead window. The postmortem surface that lets the
+    operator catch trust-table mistakes."""
+    from aegis.autonomy import detect_outliers, render_outliers
+    from aegis.context_memory import context_memory_path, read_window
+
+    cm_override = getattr(args, "context_memory", None)
+    cm_path = Path(cm_override) if cm_override else context_memory_path()
+    if not cm_path.exists():
+        print(_yellow(f"[autonomy outliers] no ContextMemory at {cm_path}"))
+        return 1
+    since_spec = getattr(args, "since", None) or "7d"
+    try:
+        since_secs = _parse_window_secs(since_spec)
+    except ValueError as e:
+        print(_red(f"error: --since parse failed: {e}"), file=sys.stderr)
+        return 1
+    now_ns = time.time_ns()
+    records = read_window(
+        since_ns=now_ns - since_secs * 1_000_000_000, path=cm_path,
+    )
+    block_lookahead = int(getattr(args, "block_lookahead", 10))
+    events = detect_outliers(records, block_lookahead=block_lookahead)
+
+    if getattr(args, "emit_json", False):
+        from dataclasses import asdict
+        print(json.dumps(
+            {"events": [asdict(e) for e in events]},
+            indent=2, ensure_ascii=False,
+        ))
+        return 0
+    print(render_outliers(events))
+    return 1 if events else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="aegis",
@@ -8664,6 +8801,92 @@ def build_parser() -> argparse.ArgumentParser:
         help="ContextMemory path override (default: ~/.aegis/context_memory.jsonl)",
     )
     assess_p.set_defaults(fn=cmd_assess)
+
+    # ── aegis autonomy (v0.5.11) — human-in-the-loop minimizer ──
+    auto_p = sub.add_parser(
+        "autonomy",
+        help=(
+            "Human-in-the-loop minimiser — burn-in learns the "
+            "operator's allow/deny patterns; routine REQUIRE_APPROVAL "
+            "events get auto-bypassed at runtime when "
+            "AEGIS_AUTONOMY_ENABLED=1. Outliers still surface via "
+            "`autonomy outliers` and `aegis doctor`."
+        ),
+    )
+    auto_sub = auto_p.add_subparsers(dest="autonomy_action", required=True)
+
+    a_learn = auto_sub.add_parser(
+        "learn",
+        help=(
+            "Mine the burn-in window of ContextMemory + write the "
+            "trust table to disk."
+        ),
+    )
+    a_learn.add_argument(
+        "--since", type=str, default="30d",
+        help="burn-in window (default 30d).",
+    )
+    a_learn.add_argument(
+        "--min-samples", dest="min_samples", type=int, default=5,
+        help=(
+            "minimum observations of a (tool, signature) pattern "
+            "to qualify as trusted (default 5)"
+        ),
+    )
+    a_learn.add_argument(
+        "--min-clean-rate", dest="min_clean_rate", type=float, default=0.95,
+        help=(
+            "minimum clean-followup rate to qualify a pattern "
+            "(default 0.95)"
+        ),
+    )
+    a_learn.add_argument(
+        "--out", type=str, default=None,
+        help="trust table path override (default: ~/.aegis/autonomy/trust_table.json)",
+    )
+    a_learn.add_argument(
+        "--context-memory", dest="context_memory", type=str, default=None,
+        help="ContextMemory path override",
+    )
+    a_learn.set_defaults(fn=cmd_autonomy_learn)
+
+    a_show = auto_sub.add_parser(
+        "show",
+        help="Render the current trust table + autonomy-enabled status.",
+    )
+    a_show.add_argument(
+        "--trust-table", dest="trust_table", type=str, default=None,
+        help="trust table path override",
+    )
+    a_show.set_defaults(fn=cmd_autonomy_show)
+
+    a_outliers = auto_sub.add_parser(
+        "outliers",
+        help=(
+            "Walk ContextMemory for auto-approved records that were "
+            "followed by a BLOCK — the autonomy-bypass postmortem."
+        ),
+    )
+    a_outliers.add_argument(
+        "--since", type=str, default="7d",
+        help="postmortem window (default 7d)",
+    )
+    a_outliers.add_argument(
+        "--block-lookahead", dest="block_lookahead", type=int, default=10,
+        help=(
+            "how many subsequent calls (same aid) to scan for a BLOCK "
+            "after an auto-approval (default 10)"
+        ),
+    )
+    a_outliers.add_argument(
+        "--json", dest="emit_json", action="store_true",
+        help="emit JSON instead of plain-text output",
+    )
+    a_outliers.add_argument(
+        "--context-memory", dest="context_memory", type=str, default=None,
+        help="ContextMemory path override",
+    )
+    a_outliers.set_defaults(fn=cmd_autonomy_outliers)
 
     # ── aegis doctor ─────────────────────────────────────────────
     dr = sub.add_parser(
