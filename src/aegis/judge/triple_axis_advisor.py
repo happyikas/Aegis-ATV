@@ -568,12 +568,32 @@ def _compose_cross_axis_summary(
 # ──────────────────────────────────────────────────────────────────
 
 
-def _build_sllm_prompt(s: AxisSignals, baseline: TripleAxisAdvice) -> str:
+def _build_sllm_prompt(
+    s: AxisSignals,
+    baseline: TripleAxisAdvice,
+    *,
+    knowledge_context: str | None = None,
+) -> str:
     """Render the AxisSignals + heuristic baseline into a tight
     prompt asking the sLLM to refine the per-axis prose. The
     heuristic baseline is included so the sLLM doesn't have to
     reinvent the wheel — its job is *scene interpretation*, not
-    score derivation."""
+    score derivation.
+
+    v0.5.16: when ``knowledge_context`` is provided (a markdown
+    block from :func:`aegis.knowledge.knowledge_context_for_advisor`),
+    it's spliced in between the instructions and the signals so the
+    sLLM reads "what we know about the agent's normal behavior" then
+    "what just happened" then "the heuristic baseline" before
+    composing its response. The context grounds the assessment in
+    history rather than the current window alone."""
+    knowledge_block = ""
+    if knowledge_context:
+        knowledge_block = (
+            "\n=== Knowledge context (agent background) ===\n"
+            f"{knowledge_context.rstrip()}\n"
+            "=== End knowledge context ===\n"
+        )
     return (
         "You are reading a compact summary of an AI agent's recent "
         "tool-call window. Assess the situation across THREE axes:\n"
@@ -589,6 +609,7 @@ def _build_sllm_prompt(s: AxisSignals, baseline: TripleAxisAdvice) -> str:
         "top-level 'summary' field with a one-sentence cross-axis "
         "synthesis. Do NOT change scores or severities — those stay "
         "as the heuristic assigned them.\n"
+        f"{knowledge_block}"
         "\n"
         "Signals:\n"
         f"  window: {s.n_total} calls over {s.window_seconds // 3600}h\n"
@@ -697,15 +718,25 @@ def assess_via_sllm(
     s: AxisSignals,
     *,
     llm_call: Callable[[str], str | None] | None = None,
+    knowledge_context: str | None = None,
 ) -> TripleAxisAdvice:
     """Heuristic baseline + sLLM prose refinement per axis. Falls
-    back to pure heuristic on any LLM / parse failure."""
+    back to pure heuristic on any LLM / parse failure.
+
+    v0.5.16: ``knowledge_context`` is the agent's wiki block from
+    :func:`aegis.knowledge.knowledge_context_for_advisor` — when
+    supplied, the sLLM sees the agent's typical behaviour profile
+    as background context, which produces interpretations that
+    distinguish "this agent is acting unusually" from "this is
+    business as usual for this agent"."""
     baseline = assess_via_heuristic(s)
     if s.n_total == 0:
         return baseline
     caller = llm_call if llm_call is not None else _default_llm_call
     try:
-        response = caller(_build_sllm_prompt(s, baseline))
+        response = caller(
+            _build_sllm_prompt(s, baseline, knowledge_context=knowledge_context),
+        )
     except Exception:  # noqa: BLE001 — advisor never raises
         return baseline
     if not response:
@@ -757,6 +788,8 @@ def assess_triple_axis(
     window_seconds: int = 7 * 86400,
     prefer_sllm: bool | None = None,
     llm_call: Callable[[str], str | None] | None = None,
+    aid: str | None = None,
+    use_knowledge: bool | None = None,
 ) -> TripleAxisAdvice:
     """Top-level entry — read a ContextMemory window and produce a
     triple-axis assessment.
@@ -766,6 +799,22 @@ def assess_triple_axis(
       2. Otherwise, ``AEGIS_TRIPLE_AXIS_PROVIDER=sllm`` env →
          sLLM path; anything else → heuristic.
       3. Default heuristic.
+
+    v0.5.16: ``aid`` + ``use_knowledge`` opt the advisor into
+    consuming the ContextMemory knowledge wiki built by
+    ``aegis knowledge build``. Selection rules:
+
+      1. Explicit ``use_knowledge=True`` kwarg wins.
+      2. Otherwise, ``AEGIS_ADVISOR_USE_KNOWLEDGE=1`` env opts in.
+      3. Default off (preserves v0.5.15 behaviour).
+
+    When opted in AND ``aid`` is provided, the wiki entries for
+    that agent (plus its top cross-referenced tools and patterns)
+    are spliced into the sLLM prompt as background context. The
+    knowledge lookup short-circuits silently if no wiki has been
+    built, so this is safe to enable globally — the advisor
+    simply falls back to the no-context prompt when no knowledge
+    is available.
     """
     signals = extract_axis_signals(records, window_seconds=window_seconds)
     if prefer_sllm is None:
@@ -773,9 +822,28 @@ def assess_triple_axis(
             "AEGIS_TRIPLE_AXIS_PROVIDER", "",
         ).lower().strip()
         prefer_sllm = env == "sllm"
-    if prefer_sllm:
-        return assess_via_sllm(signals, llm_call=llm_call)
-    return assess_via_heuristic(signals)
+    if not prefer_sllm:
+        return assess_via_heuristic(signals)
+
+    if use_knowledge is None:
+        try:
+            from aegis.knowledge.advisor import advisor_knowledge_enabled
+            use_knowledge = advisor_knowledge_enabled()
+        except ImportError:
+            use_knowledge = False
+    knowledge_context: str | None = None
+    if use_knowledge and aid:
+        try:
+            from aegis.knowledge.advisor import knowledge_context_for_advisor
+            knowledge_context = knowledge_context_for_advisor(aid)
+        except ImportError:
+            knowledge_context = None
+
+    return assess_via_sllm(
+        signals,
+        llm_call=llm_call,
+        knowledge_context=knowledge_context,
+    )
 
 
 # ──────────────────────────────────────────────────────────────────

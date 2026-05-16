@@ -97,16 +97,34 @@ _SLLM_FIELDS: Final[frozenset[str]] = frozenset(
 # ──────────────────────────────────────────────────────────────────
 
 
-def _build_prompt(baseline: ActionAdvice, *, current_tool: str = "") -> str:
+def _build_prompt(
+    baseline: ActionAdvice,
+    *,
+    current_tool: str = "",
+    knowledge_context: str | None = None,
+) -> str:
     """Compose a tight, structured prompt for the sLLM enhancement.
 
     The heuristic ``baseline`` is included so the LLM has full
     context: cited anomalies, current decision, the heuristic's
     own wording. We ask for a JSON object with three optional
     prose fields — anything else is ignored.
+
+    v0.5.16: ``knowledge_context`` (the agent's wiki block from
+    :func:`aegis.knowledge.knowledge_context_for_advisor`) is
+    spliced between the constraints and the baseline so the LLM
+    can use historical agent behaviour to inform its
+    ``alternative_tool`` and ``next_action_hint`` suggestions.
     """
     anomalies = ", ".join(baseline.cited_anomalies) or "none"
     turns = ", ".join(str(t) for t in baseline.cited_turns_rel) or "none"
+    knowledge_block = ""
+    if knowledge_context:
+        knowledge_block = (
+            "\n=== Knowledge context (agent background) ===\n"
+            f"{knowledge_context.rstrip()}\n"
+            "=== End knowledge context ===\n"
+        )
     return (
         "You are an agent-action advisor for a security firewall. "
         "Given the heuristic baseline below, produce a JSON object "
@@ -121,6 +139,7 @@ def _build_prompt(baseline: ActionAdvice, *, current_tool: str = "") -> str:
         "  - Cite anomalies by name when relevant.\n"
         "  - Keep each field under 200 characters.\n"
         "  - Output ONLY the JSON object, no prose.\n"
+        f"{knowledge_block}"
         "\n"
         f"Heuristic baseline:\n"
         f"  decision: {baseline.decision}\n"
@@ -359,6 +378,7 @@ def _local_phi_completion(prompt: str) -> str | None:
 def compose_advice_sllm(
     *,
     llm_call: Callable[[str], str | None] | None = None,
+    knowledge_context: str | None = None,
     **kwargs: Any,
 ) -> ActionAdvice:
     """Compose an ActionAdvice using the heuristic baseline +
@@ -368,6 +388,12 @@ def compose_advice_sllm(
     Default uses :func:`_default_llm_call` which dispatches based
     on ``AEGIS_JUDGE_PROVIDER``. Tests pass a stub that returns
     canned JSON.
+
+    ``knowledge_context`` (v0.5.16) is the agent's wiki block from
+    :func:`aegis.knowledge.knowledge_context_for_advisor`. When
+    provided, the sLLM prompt embeds the agent's typical-behaviour
+    profile as background context, which produces more targeted
+    ``alternative_tool`` / ``next_action_hint`` suggestions.
 
     All other keyword arguments are passed through to
     :func:`compose_advice_heuristic` so the call sites stay
@@ -389,7 +415,9 @@ def compose_advice_sllm(
     caller = llm_call if llm_call is not None else _default_llm_call
     try:
         prompt = _build_prompt(
-            baseline, current_tool=kwargs.get("current_tool", ""),
+            baseline,
+            current_tool=kwargs.get("current_tool", ""),
+            knowledge_context=knowledge_context,
         )
         response = caller(prompt)
     except Exception:  # noqa: BLE001 — never raise from advisor
@@ -405,6 +433,8 @@ def compose_advice(
     *,
     prefer_sllm: bool | None = None,
     llm_call: Callable[[str], str | None] | None = None,
+    aid: str | None = None,
+    use_knowledge: bool | None = None,
     **kwargs: Any,
 ) -> ActionAdvice:
     """Umbrella composer — picks heuristic vs sLLM based on env.
@@ -416,6 +446,18 @@ def compose_advice(
       3. Default is heuristic (preserves v0.5.8 byte-for-byte
          behavior — opt-in upgrade).
 
+    v0.5.16: ``aid`` + ``use_knowledge`` opt the sLLM path into
+    consuming the ContextMemory knowledge wiki. Selection rules:
+
+      1. Explicit ``use_knowledge=True`` kwarg wins.
+      2. Otherwise, ``AEGIS_ADVISOR_USE_KNOWLEDGE=1`` env opts in.
+      3. Default off.
+
+    When opted in AND ``aid`` is provided, the wiki for that
+    agent is fetched and embedded as a context block in the
+    sLLM prompt. The fetch is mtime-cached and silently falls
+    back to no-context if no wiki has been built.
+
     Use this instead of :func:`compose_advice_heuristic` /
     :func:`compose_advice_sllm` from new call sites so the
     provider switch is centralised.
@@ -425,9 +467,28 @@ def compose_advice(
             "AEGIS_ACTION_ADVICE_PROVIDER", "",
         ).lower().strip()
         prefer_sllm = env == "sllm"
-    if prefer_sllm:
-        return compose_advice_sllm(llm_call=llm_call, **kwargs)
-    return compose_advice_heuristic(**kwargs)
+    if not prefer_sllm:
+        return compose_advice_heuristic(**kwargs)
+
+    if use_knowledge is None:
+        try:
+            from aegis.knowledge.advisor import advisor_knowledge_enabled
+            use_knowledge = advisor_knowledge_enabled()
+        except ImportError:
+            use_knowledge = False
+    knowledge_context: str | None = None
+    if use_knowledge and aid:
+        try:
+            from aegis.knowledge.advisor import knowledge_context_for_advisor
+            knowledge_context = knowledge_context_for_advisor(aid)
+        except ImportError:
+            knowledge_context = None
+
+    return compose_advice_sllm(
+        llm_call=llm_call,
+        knowledge_context=knowledge_context,
+        **kwargs,
+    )
 
 
 __all__ = [

@@ -75,6 +75,11 @@ ActionAdvice) to read the wiki via :func:`get_entries_for_agent`
 + :func:`render_advisor_context`; v0.5.15 ships the layer alone
 so it can be reviewed in isolation."""
 
+from aegis.knowledge.advisor import (
+    advisor_knowledge_enabled,
+    clear_advisor_cache,
+    knowledge_context_for_advisor,
+)
 from aegis.knowledge.builder import (
     CONFIDENCE_FULL_AT,
     TOP_K_AGENTS_PER_PATTERN,
@@ -124,12 +129,15 @@ __all__ = [
     "TOP_K_AGENTS_PER_PATTERN",
     "TOP_K_PATTERNS_PER_TOOL",
     "TOP_K_TOOLS_PER_AGENT",
+    "advisor_knowledge_enabled",
     "build_knowledge",
+    "clear_advisor_cache",
     "entry_path",
     "get_entries_by_id",
     "get_entries_for_agent",
     "get_entry",
     "index_metadata",
+    "knowledge_context_for_advisor",
     "index_path",
     "knowledge_dir",
     "load_entry",

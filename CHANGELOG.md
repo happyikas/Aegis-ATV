@@ -4,6 +4,127 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.16] — 2026-05-16  ·  sLLM advisors consume the knowledge wiki
+
+v0.5.15 shipped the ContextMemory knowledge layer — wiki-shaped
+articles for agents / tools / patterns derived from raw events.
+v0.5.16 wires the sLLM advisors (`TripleAxisAdvisor` and
+`ActionAdvice`) to actually **consume** those entries. The
+infrastructure shipped previously; v0.5.16 is the deliberate
+consumption hookup.
+
+### How it works
+
+When the operator opts in (env or kwarg), the umbrella composer
+fetches the agent's wiki block via
+`knowledge_context_for_advisor(aid)` and embeds it in the sLLM
+prompt before the firewall signals + heuristic baseline:
+
+```
+Instructions
+=== Knowledge context (agent background) ===
+# Agent foo
+**Summary**: 1,247 calls, 1.8% BLOCK rate, $2.87 total cost.
+**Tags**: `high-volume`
+## Quick facts ...
+## Activity profile ...
+## Related ...
+---
+# Tool Bash
+**Summary**: 562 invocations, 92% ALLOW ...
+...
+=== End knowledge context ===
+
+Signals: (this window)
+  decisions: 12 ALLOW / 0 BLOCK / 3 REQUIRE_APPROVAL
+  ...
+
+Heuristic baseline (refine the prose, keep scores):
+  ...
+```
+
+The sLLM now has two layers of context: long-term agent profile
+(from the wiki) **and** the current window (from the signals).
+This lets the advisor distinguish "this agent is behaving
+unusually" from "business as usual for this agent" — the central
+shortcoming of context-less assessment.
+
+### Opt-in (default off)
+
+Selection rules (each composer):
+
+1. Explicit `use_knowledge=True` kwarg wins.
+2. Otherwise, `AEGIS_ADVISOR_USE_KNOWLEDGE=1` env opts in.
+3. Default off — preserves v0.5.15 byte-identical behaviour.
+
+Even when opted in, the wiki lookup short-circuits silently if
+no wiki exists for the agent, so this is safe to enable
+globally. The advisor falls back to the no-context prompt.
+
+### New module
+
+**`src/aegis/knowledge/advisor.py`** — the bridge:
+
+* `advisor_knowledge_enabled()` — reads the env flag.
+* `knowledge_context_for_advisor(aid, *, root=None, max_related=6, use_cache=True)`
+  — returns prompt-ready markdown or `None`. mtime-keyed in-memory
+  cache: subsequent calls with the same wiki return the same object
+  identity, amortising the JSON parse cost across the firewall hot
+  path. Never raises — broad exception suppression because the
+  advisor sits on the firewall hot path.
+* `clear_advisor_cache()` — for tests.
+
+### Modified
+
+* **`src/aegis/judge/triple_axis_advisor.py`**:
+  - `_build_sllm_prompt(s, baseline, *, knowledge_context=None)` —
+    splices the knowledge block between instructions and signals.
+  - `assess_via_sllm(s, *, llm_call=None, knowledge_context=None)`.
+  - `assess_triple_axis(records, *, aid=None, use_knowledge=None, ...)`
+    — new opt-in kwargs.
+
+* **`src/aegis/judge/action_advice_sllm.py`**:
+  - `_build_prompt(baseline, *, current_tool="", knowledge_context=None)`
+    — splices the block between constraints and the baseline.
+  - `compose_advice_sllm(*, knowledge_context=None, **kwargs)`.
+  - `compose_advice(*, aid=None, use_knowledge=None, **kwargs)` —
+    new opt-in kwargs.
+
+### Tests
+
+21 new tests in `tests/unit/test_advisor_knowledge_wiring.py`:
+
+* **Helper** (6) — empty aid, missing wiki, present wiki,
+  unknown aid, env-flag parsing, cache identity preserved.
+* **Prompt builders** (5) — both advisors: block absent without
+  context, present with context, positioned correctly relative
+  to signals / baseline.
+* **Umbrella composers** (7) — both advisors: default-off path,
+  env opt-in, kwarg overrides env, missing aid falls back,
+  heuristic path is unaffected.
+* **Hot-path safety** (3) — corrupted index → `None`, missing
+  dir → `None`, helper never raises.
+
+### Validation
+
+- `uv run ruff check .` → All checks passed
+- `uv run mypy src` → Success: no issues found in 229 source files
+- `uv run pytest -q` → **3414 passed**, 13 skipped (21 new)
+
+### Migration
+
+Operators with `AEGIS_ACTION_ADVICE_PROVIDER=sllm` or
+`AEGIS_TRIPLE_AXIS_PROVIDER=sllm` who want their sLLM to ground
+its assessment in wiki context should:
+
+1. Run `aegis knowledge build` after every burn-in window.
+2. Set `AEGIS_ADVISOR_USE_KNOWLEDGE=1`.
+3. Plumb `aid` through any explicit `compose_advice` /
+   `assess_triple_axis` call sites (existing call sites without
+   `aid` continue to work — they just don't get the wiki block).
+
+Other operators see no behaviour change.
+
 ## [0.5.15] — 2026-05-16  ·  ContextMemory knowledge layer (LLM-wiki)
 
 Until v0.5.14 ContextMemory was an analytics-shaped row-store
