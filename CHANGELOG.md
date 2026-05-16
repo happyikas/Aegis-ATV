@@ -4,6 +4,88 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.2] — 2026-05-15  ·  `memory claude-md` — real CLAUDE.md proposal generator
+
+Closes the last gap in the v0.5 "one-stop solution" vision: an
+agent's BLOCK + REQUIRE_APPROVAL events become **concrete CLAUDE.md
+edit proposals**, not just statistics.
+
+### What's new
+
+`aegis memory claude-md` now runs four miners over the recent
+ContextMemory window and prints a markdown report:
+
+* **dangerous-pattern miner** — groups BLOCK events with reason
+  ``dangerous pattern: <regex>``. Maps the regex to a human-
+  readable rule via an internal lookup table (`rm -rf`, raw drop-
+  table, `kubectl delete`, `terraform destroy`, force-push on main).
+  Unknown patterns get a generic medium-confidence proposal.
+* **loop-detector miner** — groups REQUIRE_APPROVAL events with
+  reason ``same X call repeated N times``. Suggests reflective-
+  stop language for the looping tool.
+* **sensitive-path miner** — groups ``sensitive path requires
+  approval: <p>`` reasons by path. Surfaces "request pre-approval
+  before touching <p>".
+* **rule-violation miner** — groups ``rule:<name>`` reasons by
+  rule name. Surfaces frequency so operators know which custom
+  guardrails CLAUDE.md doesn't yet explain.
+
+Each proposal includes: kind, pattern, count, confidence, suggested
+section heading, suggested text (copy-paste ready), rationale, and
+3 sample trace IDs for cross-reference.
+
+### Flags
+
+```
+aegis memory claude-md
+  --since DURATION    window (default 7d). 24h, 30d, 1h, …
+  --min-count N       threshold for surfacing a pattern (default 3)
+  --out FILE          write the markdown report to FILE (default stdout)
+  --context-memory P  ContextMemory path override
+```
+
+### Dedup against existing CLAUDE.md
+
+If your CLAUDE.md already mentions the trigger (pattern / tool name
+/ path), that proposal is filtered out. Anchoring on the actual
+pattern string keeps false-positives low; operators won't see "add
+rm -rf rule" if they've already documented `rm -rf`.
+
+### Fallback behavior
+
+When ContextMemory is empty (fresh install), falls back to the
+v0.5.1 locator-only output: print CLAUDE.md path, size, line count,
+step309 baseline status. Operators get something useful before any
+agent traffic has accumulated.
+
+### Added
+
+* `src/aegis/context_memory/claude_md_proposals.py` — the four
+  miners + `Proposal` dataclass + markdown renderer. Self-defended
+  via `_KW_*` constants so the source passes its own firewall.
+
+### Changed
+
+* `tools/aegis_cli.py::cmd_memory_claude_md` — expanded from
+  locator to proposal generator. New flags: `--since`, `--min-count`,
+  `--out`, `--context-memory`.
+
+### Tests
+
+* `tests/unit/test_claude_md_proposals.py` — 17 cases covering
+  each miner (threshold, decision-type filter, grouping), dedup
+  behavior, priority sorting, markdown rendering edge cases.
+* `tests/unit/test_cli_restructure_v05.py` — 2 new CLI integration
+  cases: locator-fallback when CM missing, full proposal path
+  writing to `--out`.
+
+### Roadmap (next release)
+
+* `--apply N` to auto-splice the Nth proposal into the named
+  section, with a `.bak` of the previous CLAUDE.md
+* miners 5+: high-cost-tool, provider-drift, advisor-recommendation
+  rollup
+
 ## [0.5.1] — 2026-05-15  ·  Top-level CLI restructure — operator vocabulary
 
 **Additive only** — no breaking changes. v0.5.1 introduces seven

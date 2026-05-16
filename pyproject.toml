@@ -1,6 +1,6 @@
 [project]
 name = "aegis-atv"
-version = "0.5.1"
+version = "0.5.2"
 description = "Aegis ATV — Agent Telemetry Vector. Action firewall + cryptographic audit chain + ContextMemory analytics for AI agents."
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]

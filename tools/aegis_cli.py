@@ -7017,13 +7017,43 @@ def cmd_memory_show(args: argparse.Namespace) -> int:
 
 
 def cmd_memory_claude_md(args: argparse.Namespace) -> int:
-    """``aegis memory claude-md`` — locate the project CLAUDE.md.
+    """``aegis memory claude-md`` — propose CLAUDE.md edits from
+    recent ContextMemory events.
 
-    v0.5.0 ships a minimal locator that surfaces the CLAUDE.md path,
-    size, and instruction-baseline drift status (if step309 baselining
-    is enabled). The full feedback loop — "given recent BLOCKs / advise
-    output, propose CLAUDE.md improvements" — is roadmapped for 0.5.x.
+    v0.5.2 expands the v0.5.1 locator-only behavior into a real
+    feedback loop:
+
+      1. Locate the project CLAUDE.md (or AGENTS.md fallback).
+      2. Read the last N days of ContextMemory.
+      3. Group BLOCK + REQUIRE_APPROVAL events by miner
+         (dangerous-pattern / loop-detector / sensitive-path /
+         rule-violation).
+      4. For each group above ``--min-count`` (default 3), emit a
+         markdown proposal — what to add, where, why.
+
+    Output is a markdown document on stdout (operators paste it into
+    a PR or hand it to Claude with "apply these"). ``--out FILE``
+    redirects to disk; otherwise stdout.
+
+    Flags:
+      --since DURATION    window (default 7d). Examples: 24h, 30d.
+      --min-count N       threshold for surfacing a pattern (default 3)
+      --out FILE          write the report to FILE instead of stdout
+      --context-memory P  ContextMemory path override
+
+    The original ``--locator-only`` behavior — print CLAUDE.md path
+    + size + step309 drift status — is available with no flags when
+    the store is empty; otherwise the full proposal report runs.
     """
+    import datetime as _dt
+
+    from aegis.context_memory import context_memory_path, read_window
+    from aegis.context_memory.claude_md_proposals import (
+        propose_edits,
+        render_proposals_markdown,
+    )
+
+    # ── 1. Locate the project instructions file ────────────────
     candidates = [
         Path.cwd() / "CLAUDE.md",
         Path.cwd() / "AGENTS.md",
@@ -7038,40 +7068,100 @@ def cmd_memory_claude_md(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        size = found.stat().st_size
-        lines = sum(1 for _ in found.open("rb"))
+        md_text = found.read_text(encoding="utf-8")
     except OSError as e:
         print(_red(f"error: {found} 읽기 실패: {e}"), file=sys.stderr)
         return 1
 
-    print(_green(f"Project instructions: {found}"))
-    print(f"  size:   {size:,} B")
-    print(f"  lines:  {lines:,}")
+    # ── 2. Locate + window the ContextMemory store ────────────
+    cm_path = (
+        Path(args.context_memory) if getattr(args, "context_memory", None)
+        else context_memory_path()
+    )
 
-    # If step309 baseline is configured, surface drift state.
+    if not cm_path.exists():
+        # No data → fall back to the v0.5.1 locator-only output so
+        # the command does *something* useful on a fresh install.
+        print(_green(f"Project instructions: {found}"))
+        print(f"  size:   {found.stat().st_size:,} B")
+        print(f"  lines:  {md_text.count(chr(10)) + 1:,}")
+        print(_yellow(
+            f"\n  ContextMemory is empty ({cm_path}). Run Aegis through "
+            "a few sessions, then re-run this command for analysis."
+        ))
+        return 0
+
+    since_spec = getattr(args, "since", None) or "7d"
+    try:
+        since_secs = _parse_window_secs(since_spec)
+    except ValueError as e:
+        print(_red(f"error: --since 파싱 실패: {e}"), file=sys.stderr)
+        return 1
+
+    now_ns = time.time_ns()
+    since_ns = now_ns - since_secs * 1_000_000_000
+    records = read_window(since_ns=since_ns, path=cm_path)
+
+    # ── 3. Run miners ──────────────────────────────────────────
+    min_count = int(getattr(args, "min_count", 3))
+    proposals = propose_edits(
+        records,
+        current_md_text=md_text,
+        min_count=min_count,
+    )
+
+    # ── 4. Render + emit ───────────────────────────────────────
+    md = render_proposals_markdown(
+        proposals,
+        window_seconds=since_secs,
+        md_path=found,
+        record_count=len(records),
+    )
+    # Footer with the original locator info — useful context for the
+    # operator regardless of how many proposals fired.
+    footer_lines = [
+        "## Current CLAUDE.md status",
+        "",
+        f"- path: `{found}`",
+        f"- size: {found.stat().st_size:,} B",
+        f"- lines: {md_text.count(chr(10)) + 1:,}",
+    ]
     baseline_path = os.environ.get("AEGIS_INSTRUCTION_BASELINE_PATH", "")
     if baseline_path:
         bp = Path(baseline_path)
         if bp.exists():
-            print(f"  baseline: {bp} (step309 drift-gate active)")
+            footer_lines.append(
+                f"- baseline: `{bp}` (step309 drift-gate active)"
+            )
         else:
-            print(_yellow(
-                f"  baseline: {bp} — path set but file missing; "
+            footer_lines.append(
+                f"- baseline: `{bp}` — path set but file missing; "
                 "run `aegis baseline reattest`"
-            ))
+            )
     else:
-        print(
-            "  baseline: not configured "
-            "(set AEGIS_INSTRUCTION_BASELINE_PATH to enable step309)"
+        footer_lines.append(
+            "- baseline: not configured (set "
+            "AEGIS_INSTRUCTION_BASELINE_PATH to enable step309)"
         )
+    footer_lines.append("")
+    footer_lines.append(
+        f"_Window: last {since_spec}; ts: "
+        f"{_dt.datetime.now(_dt.UTC).strftime('%Y-%m-%d %H:%M UTC')}_"
+    )
+    md = md + "\n" + "\n".join(footer_lines) + "\n"
 
-    print()
-    print(_yellow(
-        "  Future (0.5.x): this command will analyze recent BLOCK + "
-        "advise events and suggest concrete CLAUDE.md edits "
-        "(\"prefer rg over grep\", \"avoid kubectl delete without "
-        "--dry-run\", …)."
-    ))
+    out_path = getattr(args, "out", None)
+    if out_path:
+        try:
+            Path(out_path).write_text(md, encoding="utf-8")
+            print(_green(f"✓ proposals written: {out_path}"))
+            print(f"  proposals: {len(proposals)}")
+            print(f"  records analysed: {len(records):,}")
+            return 0
+        except OSError as e:
+            print(_red(f"error: {out_path} 쓰기 실패: {e}"), file=sys.stderr)
+            return 1
+    print(md)
     return 0
 
 
@@ -8387,7 +8477,40 @@ def build_parser() -> argparse.ArgumentParser:
 
     mm_md = mm_sub.add_parser(
         "claude-md",
-        help="Locate + summarize CLAUDE.md (drift status if step309 baseline is set).",
+        help=(
+            "Propose CLAUDE.md edits from recent BLOCK / REQUIRE_APPROVAL "
+            "events (dangerous-pattern · loop-detector · sensitive-path · "
+            "rule-violation miners)."
+        ),
+    )
+    mm_md.add_argument(
+        "--since",
+        type=str,
+        default="7d",
+        help="ContextMemory window (default 7d). Examples: 24h, 30d, 1h.",
+    )
+    mm_md.add_argument(
+        "--min-count",
+        dest="min_count",
+        type=int,
+        default=3,
+        help=(
+            "minimum hits in window before surfacing a pattern "
+            "(default: 3 — drops single-incident noise)"
+        ),
+    )
+    mm_md.add_argument(
+        "--out",
+        type=str,
+        default=None,
+        help="write the markdown report to FILE instead of stdout",
+    )
+    mm_md.add_argument(
+        "--context-memory",
+        dest="context_memory",
+        type=str,
+        default=None,
+        help="ContextMemory path override (default: ~/.aegis/context_memory.jsonl)",
     )
     mm_md.set_defaults(fn=cmd_memory_claude_md)
 
