@@ -4,6 +4,142 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.15] — 2026-05-16  ·  ContextMemory knowledge layer (LLM-wiki)
+
+Until v0.5.14 ContextMemory was an analytics-shaped row-store
+(one JSONL line per ATV decision) optimised for audit + replay
+but **not** for downstream LLM consumption. An sLLM advisor that
+wanted to give workflow advice had to scan thousands of raw rows
+and reconstruct patterns itself. v0.5.15 introduces a derived
+**LLM-wiki-shaped knowledge layer** on top of the raw store —
+each entity (agent / tool / pattern) becomes a self-contained
+wiki article the sLLM advisor can consume directly.
+
+### Architecture — additive layer, not a rewrite
+
+```
+~/.aegis/context_memory.jsonl     ← raw events (unchanged, audit responsibility)
+~/.aegis/knowledge/               ← derived wiki (NEW, sLLM-ready)
+  index.json                      ← catalog of entries
+  agent_foo.json                  ← per-entity articles
+  tool_Bash.json
+  pattern_loop_Bash.json
+```
+
+The raw store keeps its audit role; the wiki is a **derived
+semantic view** rebuilt on demand via `aegis knowledge build`.
+Same explicit-rebuild discipline as `aegis autonomy learn` —
+no streaming projection, no implicit auto-update.
+
+### LLM-wiki design choices (informed by Wikipedia / DBpedia /
+linked-notes patterns)
+
+| Wiki convention | ContextMemory mapping |
+|---|---|
+| Article entry | One entry per `agent` / `tool` / `pattern` |
+| Lead summary | `summary: str` — 1-2 sentences, always shown first |
+| Infobox | `InfoBox` dataclass — structured key-value table (LLMs parse these most reliably) |
+| Sections | `Section[]` — ordered markdown headers + bodies |
+| Cross-references | `related: tuple[str, ...]` — canonical entry_id URIs |
+| Categories / tags | `tags: tuple[str, ...]` — `high-cost`, `unstable`, `frequent`, … |
+| Stable URIs | `agent/foo`, `tool/Bash`, `pattern/loop:Bash` |
+| Confidence + provenance | `n_observations`, `confidence`, `ts_first_ns`, `ts_last_ns` |
+
+### Modules
+
+* **`src/aegis/knowledge/schema.py`** — `KnowledgeEntry`,
+  `InfoBox`, `Section`, `EntryKind` (StrEnum: agent/tool/pattern).
+  Round-trip JSON serialisation with defensive `from_dict` —
+  malformed payloads fall back to safe defaults, never raise.
+* **`src/aegis/knowledge/builder.py`** — pure function
+  `build_knowledge(records)` that aggregates per-entity stats
+  and synthesises wiki entries. Confidence is
+  `min(1.0, n / 50)` — same empirical threshold as the autonomy
+  learner. Per-kind builders: AGENT (activity / stability / cost
+  profile), TOOL (usage / patterns / top users), PATTERN
+  (firing conditions / outcomes / autonomy bypass rate).
+* **`src/aegis/knowledge/store.py`** — one JSON file per entry
+  plus a catalog `index.json`. Atomic writes via tempfile +
+  rename. Honours `AEGIS_KNOWLEDGE_DIR`. Per-entry files keep
+  selective loads O(entries) rather than O(corpus).
+* **`src/aegis/knowledge/render.py`** —
+  `render_entry_markdown(entry)` for one entry,
+  `render_advisor_context(entries, intro=...)` for the multi-
+  entry prompt composition the sLLM advisor will consume. Pure
+  CommonMark markdown — no HTML; LLMs parse markdown tables +
+  sections more reliably than prose or JSON.
+* **`src/aegis/knowledge/retrieve.py`** — three retrieval modes:
+  `get_entry(id)` for by-ID lookup, `get_entries_for_agent(aid)`
+  for the agent + cross-refs fanout (the default pre-pop for
+  advisor prompts), `search_by_kind_or_tag` for catalog
+  enumeration.
+
+### CLI
+
+* `aegis knowledge build [--since 30d]` — derive entries from
+  ContextMemory window into `~/.aegis/knowledge/`.
+* `aegis knowledge list [--kind agent|tool|pattern] [--tag X] [--limit N]`
+  — enumerate the catalog with filter support.
+* `aegis knowledge show <entry_id>` — render one entry as
+  markdown to stdout (or `--out` file).
+* `aegis knowledge advisor-context <aid> [--max-related N]` —
+  compose the multi-entry prompt for an sLLM advisor scoped
+  to one agent. **This is the integration hook** the next-PR
+  TripleAxisAdvisor will call.
+
+### Tests
+
+30 new tests in `tests/unit/test_knowledge.py`, organised by
+module: schema serialisation + defensive parsing (4), store
+round-trip + atomic write (5), builder per-kind derivation (5),
+renderer markdown structure (7), retrieval (7), full integration
+build → save → load → render (1). Full suite: **3393 passed**,
+13 skipped. Ruff + mypy clean (228 source files).
+
+### Smoke (real local ContextMemory, 7,344 records over 30 days)
+
+```
+$ aegis knowledge build --since 30d --out /tmp/aegis-wiki-smoke
+✓ knowledge wiki built at: /tmp/aegis-wiki-smoke
+  records scanned:    7,344
+  window:             30d
+  agents:             19
+  tools:              12
+  patterns:           15
+  total entries:      46
+```
+
+Sample `tool/Bash` entry rendered:
+
+```markdown
+# Tool Bash
+
+**Summary**: 3,859 invocations in window: 47.27% ALLOW, 34.80%
+REQUIRE_APPROVAL, 17.93% BLOCK. Average latency 114.4ms.
+
+**Tags**: `high-volume`, `unstable`
+
+## Quick facts
+| Field | Value |
+|-------|-------|
+| n_calls | 3,859 |
+| n_allow | 1,824 |
+| n_require_approval | 1,343 |
+...
+```
+
+### What this PR does NOT do
+
+* No sLLM advisor changes yet — `TripleAxisAdvisor` /
+  `ActionAdvice` still read raw records. The next PR (v0.5.16)
+  wires them to call `get_entries_for_agent` +
+  `render_advisor_context` instead.
+* No SESSION / INCIDENT / WORKFLOW entry kinds — reserved for
+  v0.6.
+* No embedding-based semantic search — structural retrieval
+  (by entry_id, by tag, by cross-ref) only in v0.5.15. Vector
+  search is a v0.6 candidate.
+
 ## [0.5.14] — 2026-05-16  ·  Explicit-deny CLI + doctor postmortem
 
 v0.5.12's Bayesian backbone wired the strongest negative-signal
