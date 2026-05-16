@@ -474,6 +474,112 @@ def test_memory_diff_missing_md_returns_1(
     assert rc == 1
 
 
+def test_atmu_recover_dry_run_reports_orphans(
+    tmp_path: Path,
+) -> None:
+    """`aegis atmu recover --dry-run` should report orphans without
+    mutating the WAL. Test sets up one old + one young row and
+    verifies the dry-run preview surfaces exactly one as eligible."""
+    import time as _time
+
+    from aegis.atmu import IntentLog, TxState
+
+    db = tmp_path / "intent.sqlite"
+    log = IntentLog(str(db))
+    rec_old = log.append_tentative(
+        aid="aid-old", tenant_id="t", trace_id="tr1",
+        span_id="sp1", parent_span_id=None,
+        tool_name="Bash", tool_args_hash="h",
+        blast_radius=5, atv_commitment="c",
+    )
+    log.append_tentative(
+        aid="aid-young", tenant_id="t", trace_id="tr2",
+        span_id="sp2", parent_span_id=None,
+        tool_name="Read", tool_args_hash="h",
+        blast_radius=1, atv_commitment="c",
+    )
+    now_ns = _time.time_ns()
+    log.conn.execute(
+        "UPDATE intent_log SET created_at_ns=? WHERE record_id=?",
+        (now_ns - 30 * 3600 * 1_000_000_000, rec_old["record_id"]),
+    )
+    log.close()
+
+    args = aegis_cli.build_parser().parse_args([
+        "atmu", "recover", "--db", str(db), "--dry-run",
+    ])
+    rc = args.fn(args)
+    assert rc == 0
+
+    # WAL untouched — the old row is still TENTATIVE.
+    log2 = IntentLog(str(db))
+    rec = log2.get(rec_old["record_id"])
+    assert rec is not None
+    assert rec["current_state"] == TxState.TENTATIVE.value
+    log2.close()
+
+
+def test_atmu_recover_executes(tmp_path: Path) -> None:
+    """`aegis atmu recover` (no --dry-run) actually transitions old
+    orphans to ABORTED."""
+    import time as _time
+
+    from aegis.atmu import IntentLog, TxState
+
+    db = tmp_path / "intent.sqlite"
+    log = IntentLog(str(db))
+    rec = log.append_tentative(
+        aid="aid", tenant_id="t", trace_id="tr",
+        span_id="sp", parent_span_id=None,
+        tool_name="Bash", tool_args_hash="h",
+        blast_radius=5, atv_commitment="c",
+    )
+    log.conn.execute(
+        "UPDATE intent_log SET created_at_ns=? WHERE record_id=?",
+        (_time.time_ns() - 50 * 3600 * 1_000_000_000, rec["record_id"]),
+    )
+    log.close()
+
+    args = aegis_cli.build_parser().parse_args([
+        "atmu", "recover", "--db", str(db),
+    ])
+    rc = args.fn(args)
+    assert rc == 0
+
+    log2 = IntentLog(str(db))
+    state = log2.get(rec["record_id"])["current_state"]
+    log2.close()
+    assert state == TxState.ABORTED.value
+
+
+def test_atmu_recover_zero_threshold_sweeps_all(tmp_path: Path) -> None:
+    """`--max-age-hours 0` sweeps every non-terminal row regardless
+    of age — useful as an operator escape hatch."""
+    from aegis.atmu import IntentLog, TxState
+
+    db = tmp_path / "intent.sqlite"
+    log = IntentLog(str(db))
+    for i in range(3):
+        log.append_tentative(
+            aid=f"a{i}", tenant_id="t", trace_id=f"tr{i}",
+            span_id=f"sp{i}", parent_span_id=None,
+            tool_name="Bash", tool_args_hash="h",
+            blast_radius=5, atv_commitment="c",
+        )
+    log.close()
+
+    args = aegis_cli.build_parser().parse_args([
+        "atmu", "recover", "--db", str(db), "--max-age-hours", "0",
+    ])
+    rc = args.fn(args)
+    assert rc == 0
+
+    log2 = IntentLog(str(db))
+    n_aborted = log2.count_state(TxState.ABORTED)
+    log2.close()
+    assert n_aborted == 3
+
+
 def test_memory_rotate_dry_run_reports_chain(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

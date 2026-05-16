@@ -105,6 +105,22 @@ def create_app(
     real_intent_log = (
         intent_log if intent_log is not None else IntentLog(settings.aegis_intent_log_db)
     )
+    # v0.5.8 — ATMU auto WAL replay (gap #2). Sweep orphans (rows
+    # stuck in TENTATIVE / PREPARED) older than 24 h to ABORTED so
+    # the WAL stays honest across crashes / restarts. Suppress
+    # silently on any failure — the sidecar must still come up.
+    try:
+        from aegis.atmu.recovery import recover_orphans
+        _atmu_sweep = recover_orphans(real_intent_log)
+        if _atmu_sweep.n_swept:
+            import sys as _sys
+            print(
+                f"[atmu] auto-recovery swept {_atmu_sweep.n_swept} "
+                f"orphan(s) (≥24 h non-terminal) → ABORTED",
+                file=_sys.stderr,
+            )
+    except Exception:  # noqa: BLE001 — startup never blocks
+        pass
     real_burnin = burnin_controller if burnin_controller is not None else BurnInController()
     # Gap C (#146) — expose the controller on app.state so tests and
     # future surfaces (`aegis burnin status --by-provider` via API)

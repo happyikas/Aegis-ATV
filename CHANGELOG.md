@@ -4,6 +4,94 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.8] — 2026-05-16  ·  ATMU auto WAL replay on startup (production gap #2)
+
+Closes the second of three production gaps from the v0.5.6
+self-audit. Before this release, an Aegis process that crashed
+mid-flight left rows stuck in non-terminal ATMU states
+(TENTATIVE / PREPARED) with no automatic remediation — operators
+had to discover and clean them up manually via `aegis rollback`
+or direct SQLite surgery.
+
+### Added
+
+* **`src/aegis/atmu/recovery.py`** — `find_orphans()` +
+  `recover_orphans()` + `render_sweep_summary()`. Sweeps
+  non-terminal rows older than `max_age_hours` (default 24 h),
+  transitioning them to ABORTED with a structured reason
+  ("orphaned at startup — auto-recovered (ATMU §5A)"). Idempotent,
+  per-row failure isolation, supports `dry_run=True` for preview.
+
+* **`aegis atmu recover`** CLI — on-demand sweep with the same
+  semantics. Flags: `--dry-run`, `--max-age-hours N`,
+  `--db PATH`.
+
+* **Automatic recovery on startup** —
+    * Sidecar (`src/aegis/main.py`): runs once during FastAPI
+      lifespan after `IntentLog` is opened. Prints a one-line
+      stderr summary when orphans are swept; silent on no-op.
+    * Local-mode hook (`tools/aegis_local_hook.py`): runs on
+      first lazy `_get_intent_log()` init per process. Same
+      silent-on-no-op contract; verbose mode prints the summary.
+
+### Policy
+
+* **Age threshold** — rows younger than `max_age_hours` are
+  presumed live (a slow tool call still in flight). Setting it
+  too low could ABORT a real in-flight transaction; setting it
+  too high lets crashed rows linger. 24 h is the chosen default;
+  operators override via `--max-age-hours` on the CLI.
+* **From-state policy** — TENTATIVE *and* PREPARED rows are
+  swept. Terminal states (COMMITTED, ABORTED, ROLLED_BACK,
+  COMPENSATED, QUARANTINED) are never touched by definition.
+* **Target state** — always ABORTED. We never auto-promote
+  orphans to COMMITTED because we have no evidence the side
+  effect happened. The compensation plan (if any) stays attached
+  so `aegis rollback <trace>` still works against the orphan.
+
+### Safety properties
+
+* **Idempotent** — second sweep produces no spurious work
+* **Read-only when `dry_run=True`** — fits the operator-preview
+  pattern used by `memory rotate --dry-run` and `memory claude-md`
+* **Per-row failure isolation** — a SQLite error or
+  `InvalidTransition` on one row doesn't abort the sweep; the
+  failing row lands in `result.failed` and the rest of the sweep
+  continues
+* **Startup never blocks** — every `Exception` is swallowed in
+  the sidecar / local-hook auto-recovery wrappers; if the sweep
+  itself raises, the process still comes up
+
+### New public API in `aegis.atmu`
+
+* `OrphanRecord`, `OrphanSweepResult` dataclasses
+* `find_orphans(intent_log, *, max_age_hours, now_ns=None) -> (eligible, too_young)` — pure (no mutation)
+* `recover_orphans(intent_log, *, max_age_hours, dry_run=False, ...) -> OrphanSweepResult`
+* `render_sweep_summary(result) -> str`
+* `NON_TERMINAL_STATES`, `DEFAULT_MAX_AGE_HOURS` constants
+
+### Tests
+
+* `tests/unit/test_atmu_recovery.py` — 18 cases: NON_TERMINAL
+  sanity, find_orphans correctness (empty, split-by-age, zero
+  threshold, terminal-state filter, no-mutation), recover_orphans
+  (dry-run, transitions to ABORTED, idempotent, age threshold,
+  PREPARED state, custom reason, per-row failure isolation),
+  render_sweep_summary (dry-run wording, long-list truncation,
+  empty summary), result shape.
+* `tests/unit/test_cli_restructure_v05.py` — 3 CLI cases:
+  dry-run reports without mutating, execute actually transitions,
+  `--max-age-hours 0` sweeps all.
+* Total: 3182 → 3203 (+21).
+
+### Production-gap status
+
+| Gap (from v0.5.6 audit) | Status |
+|---|---|
+| ContextMemory rotation | ✅ v0.5.7 |
+| **ATMU auto WAL replay on startup** | ✅ shipped (this release) |
+| ActionAdvice sLLM brain (PR-ζ-head) | open (v0.5.9 target) |
+
 ## [0.5.7] — 2026-05-16  ·  ContextMemory rotation (production gap #1)
 
 Closes one of the three production gaps identified in the v0.5.6

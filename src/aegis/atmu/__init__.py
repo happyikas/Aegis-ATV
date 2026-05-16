@@ -10,6 +10,15 @@ patent and documentation purposes.
 from aegis.atmu.checkpoint import HIGH_BLAST_THRESHOLD, make_checkpoint
 from aegis.atmu.compensating import plan_for
 from aegis.atmu.intent_log import IntentLog
+from aegis.atmu.recovery import (
+    DEFAULT_MAX_AGE_HOURS,
+    NON_TERMINAL_STATES,
+    OrphanRecord,
+    OrphanSweepResult,
+    find_orphans,
+    recover_orphans,
+    render_sweep_summary,
+)
 from aegis.atmu.state_machine import (
     TERMINAL_STATES,
     InvalidTransition,
@@ -19,13 +28,20 @@ from aegis.atmu.state_machine import (
 )
 
 __all__ = [
+    "DEFAULT_MAX_AGE_HOURS",
     "HIGH_BLAST_THRESHOLD",
     "IntentLog",
     "InvalidTransition",
+    "NON_TERMINAL_STATES",
+    "OrphanRecord",
+    "OrphanSweepResult",
     "TERMINAL_STATES",
     "TxState",
     "can_transition",
     "ensure_transition",
+    "find_orphans",
     "make_checkpoint",
     "plan_for",
+    "recover_orphans",
+    "render_sweep_summary",
 ]
