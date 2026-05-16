@@ -194,10 +194,12 @@ def test_memory_show_walks_jsonl_records(tmp_path: Path) -> None:
     assert rc == 0
 
 
-def test_memory_claude_md_locates_cwd_file(
+def test_memory_claude_md_locator_fallback_when_cm_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`memory claude-md` locates CLAUDE.md in cwd and prints stats."""
+    """When ContextMemory is empty / missing, fall back to the v0.5.1
+    locator-only behavior — print path + size, exit 0. Operators get
+    something useful on a fresh install before any agent traffic."""
     project = tmp_path / "project"
     project.mkdir()
     (project / "CLAUDE.md").write_text(
@@ -205,14 +207,87 @@ def test_memory_claude_md_locates_cwd_file(
     )
     monkeypatch.chdir(project)
 
-    args = aegis_cli.build_parser().parse_args(["memory", "claude-md"])
+    missing_cm = tmp_path / "no-such-cm.jsonl"
+    args = aegis_cli.build_parser().parse_args(
+        ["memory", "claude-md", "--context-memory", str(missing_cm)]
+    )
     rc = args.fn(args)
     assert rc == 0
 
 
-def test_memory_claude_md_returns_1_when_missing(
+def test_memory_claude_md_proposals_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """When ContextMemory contains BLOCK events above the threshold,
+    the command runs miners and writes a markdown report. Test:
+    construct a tmp CM with a synthetic loop-detector signal and
+    verify the report mentions both `Bash` (the looping tool) and
+    `Workflow Discipline` (the suggested section)."""
+    import json as _json
+    import time as _time
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "CLAUDE.md").write_text(
+        "# Project guide\n\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(project)
+
+    cm_path = tmp_path / "cm.jsonl"
+    now_ns = _time.time_ns()
+    rows = [
+        {
+            "schema_version": 1,
+            "ts_ns": now_ns - i * 1_000_000,
+            "trace_id": f"trace-{i:03d}",
+            "invocation_id": "inv",
+            "aid": "aid",
+            "tenant_id": "local",
+            "tool_name": "Bash",
+            "decision": "REQUIRE_APPROVAL",
+            "reason": "same Bash call repeated 3 times this session (threshold=3)",
+            "channel": None,
+            "provider": None,
+            "latency_ms": 10.0,
+            "cost_usd": 0.0,
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "step_traces": {},
+            "m13_score": None,
+            "advisor_invoked": False,
+            "recommended_advisors": [],
+            "atv_sha3": None,
+            "atv_dim": 0,
+            "is_sidechain": False,
+            "mode": "local",
+        }
+        for i in range(5)
+    ]
+    cm_path.write_text(
+        "\n".join(_json.dumps(r) for r in rows) + "\n",
+        encoding="utf-8",
+    )
+
+    out_md = tmp_path / "proposals.md"
+    args = aegis_cli.build_parser().parse_args([
+        "memory", "claude-md",
+        "--context-memory", str(cm_path),
+        "--since", "24h",
+        "--min-count", "3",
+        "--out", str(out_md),
+    ])
+    rc = args.fn(args)
+    assert rc == 0
+    report = out_md.read_text(encoding="utf-8")
+    assert "Bash" in report
+    assert "Workflow Discipline" in report
+    assert "loop-detector" in report
+
+
+def test_memory_claude_md_returns_1_when_no_md_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No CLAUDE.md / AGENTS.md in cwd → friendly error, rc=1."""
     monkeypatch.chdir(tmp_path)
     args = aegis_cli.build_parser().parse_args(["memory", "claude-md"])
     rc = args.fn(args)
