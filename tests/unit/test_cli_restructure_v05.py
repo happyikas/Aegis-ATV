@@ -474,6 +474,58 @@ def test_memory_diff_missing_md_returns_1(
     assert rc == 1
 
 
+def test_memory_rotate_dry_run_reports_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`aegis memory rotate --dry-run` should report the current
+    chain state without making changes."""
+    cm = tmp_path / "cm.jsonl"
+    cm.write_text("x" * 100, encoding="utf-8")
+    args = aegis_cli.build_parser().parse_args([
+        "memory", "rotate", "--context-memory", str(cm), "--dry-run",
+    ])
+    rc = args.fn(args)
+    assert rc == 0
+    # Dry-run leaves the file untouched.
+    assert cm.exists()
+    assert cm.read_text(encoding="utf-8") == "x" * 100
+
+
+def test_memory_rotate_executes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`aegis memory rotate` should rotate the file → slot 1 archive
+    + active file removed."""
+    from aegis.context_memory.rotation import compressed_rotation_path
+    monkeypatch.setenv("AEGIS_CONTEXT_MEMORY_MAX_ROTATIONS", "3")
+
+    cm = tmp_path / "cm.jsonl"
+    cm.write_text("payload\n", encoding="utf-8")
+    args = aegis_cli.build_parser().parse_args([
+        "memory", "rotate", "--context-memory", str(cm),
+    ])
+    rc = args.fn(args)
+    assert rc == 0
+    assert not cm.exists()
+    assert compressed_rotation_path(cm, 1).exists()
+
+
+def test_memory_rotate_disabled_returns_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When rotation is disabled via env, the CLI reports + exits 1."""
+    monkeypatch.setenv("AEGIS_CONTEXT_MEMORY_ROTATION_DISABLED", "1")
+    cm = tmp_path / "cm.jsonl"
+    cm.write_text("x" * 100, encoding="utf-8")
+    args = aegis_cli.build_parser().parse_args([
+        "memory", "rotate", "--context-memory", str(cm),
+    ])
+    rc = args.fn(args)
+    assert rc == 1
+    # File untouched.
+    assert cm.exists()
+
+
 def test_memory_diff_explicit_path_override(tmp_path: Path) -> None:
     """`--claude-md PATH` should override the cwd lookup."""
     md = tmp_path / "guide.md"

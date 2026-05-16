@@ -4,6 +4,88 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.7] — 2026-05-16  ·  ContextMemory rotation (production gap #1)
+
+Closes one of the three production gaps identified in the v0.5.6
+self-audit: ContextMemory was unbounded — `~/.aegis/context_memory
+.jsonl` grew forever, eventually filling the disk and slowing
+every `read_window()` linearly.
+
+### Added
+
+* **`src/aegis/context_memory/rotation.py`** — size-triggered
+  rotation with gzip archives and retention prune. Modeled after
+  `src/aegis/audit/rotation.py` but simpler: ContextMemory is
+  analytics-only, so no cross-file SHA3 chain continuity to
+  preserve — the oldest archive can be dropped without ceremony.
+* **`aegis memory rotate`** CLI — force-rotate on demand. `--dry-run`
+  reports what would happen without changing files;
+  `--context-memory PATH` overrides the default location.
+* **`include_rotated=True`** parameter on `iter_records()`,
+  `read_all()`, `read_window()` — walk archived rotations in
+  chronological order before the active file, so historical
+  windows reconstruct across rotation boundaries.
+
+### Storage layout
+
+```
+~/.aegis/
+├── context_memory.jsonl           (active, plain text)
+├── context_memory.jsonl.1.gz      (most recent archive)
+├── context_memory.jsonl.2.gz
+└── context_memory.jsonl.{K}.gz    (oldest retained)
+```
+
+### Trigger
+
+The writer calls `rotate_if_needed()` after every successful
+`append()`. When the active file crosses
+`AEGIS_CONTEXT_MEMORY_MAX_BYTES` (default 50 MB), the next append
+triggers a rotation: gzip the active to `.1.gz`, shift older
+archives up one slot, drop slot `K` (oldest beyond retention).
+Rotation latency for a 50 MB file is ~0.5–1 s; concurrent appends
+during rotation may lose a few records but never crash.
+
+### Configuration
+
+| env var | default | meaning |
+|---|---|---|
+| `AEGIS_CONTEXT_MEMORY_MAX_BYTES` | `52428800` (50 MB) | size trigger; `0` = off |
+| `AEGIS_CONTEXT_MEMORY_MAX_ROTATIONS` | `5` | keep K archives; `0` = no rotation at all |
+| `AEGIS_CONTEXT_MEMORY_ROTATION_DISABLED` | (unset) | `1` = unconditionally suppress |
+
+### Defensive contract
+
+Mirror of `writer.append()`'s "analytics never blocks verdict
+path" rule. Every step in `rotate()` suppresses `OSError` and
+returns gracefully on failure — a permission error or disk-full
+condition during rotation leaves the active file intact and the
+next append proceeds normally. Operators notice via `aegis memory
+show` reporting a stagnant size, not via a Claude Code session
+breaking.
+
+### Tests
+
+* `tests/unit/test_context_memory_rotation.py` — 19 new cases:
+  trigger gating (size, max-rotations=0, disable env), engine
+  correctness (slot-1 creation, slot shift, oldest drop,
+  no-op-when-missing, no-op-when-disabled), writer integration
+  (opportunistic rotation), reader integration (`include_rotated`
+  walks chronologically + handles malformed lines in archives),
+  helper functions (slot_path, open_rotation_text).
+* `tests/unit/test_cli_restructure_v05.py` — 3 new CLI cases:
+  dry-run reports without mutating, execute creates slot 1 archive,
+  disabled-via-env returns 1.
+* Total: 3160 → 3182 (+22).
+
+### Production gap status
+
+| Gap (from v0.5.6 audit) | Status |
+|---|---|
+| **ContextMemory rotation** | ✅ shipped (this release) |
+| ATMU auto WAL replay on startup | open |
+| ActionAdvice sLLM brain (PR-ζ-head) | open |
+
 ## [0.5.6] — 2026-05-16  ·  `aegis memory diff` — applied-proposal history
 
 Closes the proposal lifecycle loop. v0.5.2 *generated* proposals,
