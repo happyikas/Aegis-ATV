@@ -245,14 +245,17 @@ def test_wiring_epsilon_one_keeps_human_in_loop(
     monkeypatch.setenv("AEGIS_AUTONOMY_EPSILON", "0.5")
 
     # Find an atv_id that deterministically falls into the explore
-    # half. Because the test client doesn't expose atv_id directly,
-    # we rely on the fact that with ε=0.5 about half of all
-    # firewall-generated atv_ids will explore. To stabilise: issue
-    # 8 separate sessions; at ε=0.5, the probability that NONE
-    # explore is (1/2)^8 ≈ 0.4% — small enough.
+    # half. Because the test client doesn't expose atv_id directly
+    # (it's a fresh uuid4 per call inside _evaluate_impl), we rely
+    # on the fact that with ε=0.5 about half of all firewall-
+    # generated atv_ids land in the explore bucket. To stabilise
+    # against CI flakes: issue 16 separate sessions. False-negative
+    # probability = (1/2)^16 ≈ 0.0015% — well under 1 in 60,000
+    # runs, which is enough for a CI test that gets exercised
+    # thousands of times.
     explored = False
     client = TestClient(aegis_app)  # type: ignore[arg-type]
-    for sess in range(8):
+    for sess in range(16):
         for i in range(2):
             p = _evaluate_payload(
                 tool_name="Bash",
