@@ -7400,6 +7400,89 @@ def cmd_atmu_recover(args: argparse.Namespace) -> int:
     return 1 if result.n_failed else 0
 
 
+def cmd_assess(args: argparse.Namespace) -> int:
+    """``aegis assess`` — triple-axis scene interpretation (v0.5.10).
+
+    Reads a ContextMemory window and asks the sLLM (or the
+    deterministic heuristic baseline) to interpret the agent's
+    run-time context across three axes:
+
+      💰 token_efficiency  — wasted-token patterns
+      🧊 cache_performance — KV cache hit health
+      🛡️  stability        — loop / drift / safety risk
+
+    Each axis carries a score (0.0–1.0), severity (ok/warn/alert),
+    one-sentence interpretation, and (when applicable) a concrete
+    next-action recommendation. Cross-axis summary picks the worst
+    axis as overall_priority.
+
+    Flags:
+      --since DURATION       window (default 7d). 1h / 24h / 7d.
+      --sllm                 prefer the sLLM brain over the
+                              heuristic baseline (requires
+                              AEGIS_JUDGE_PROVIDER ≠ dummy).
+      --json                 emit JSON instead of human-readable
+                              output (for piping into jq / CI).
+      --context-memory PATH  override the default store location.
+    """
+    import datetime as _dt
+    from dataclasses import asdict
+
+    from aegis.context_memory import context_memory_path, read_window
+    from aegis.judge.triple_axis_advisor import (
+        assess_triple_axis,
+        render_triple_axis,
+    )
+
+    cm_override = getattr(args, "context_memory", None)
+    cm_path = Path(cm_override) if cm_override else context_memory_path()
+
+    if not cm_path.exists():
+        print(_yellow(
+            f"[assess] ContextMemory not found at {cm_path}.\n"
+            "  Run Aegis through a few sessions, then retry."
+        ))
+        return 1
+
+    since_spec = getattr(args, "since", None) or "7d"
+    try:
+        since_secs = _parse_window_secs(since_spec)
+    except ValueError as e:
+        print(_red(f"error: --since parse failed: {e}"), file=sys.stderr)
+        return 1
+
+    now_ns = time.time_ns()
+    since_ns = now_ns - since_secs * 1_000_000_000
+    records = read_window(since_ns=since_ns, path=cm_path)
+
+    advice = assess_triple_axis(
+        records,
+        window_seconds=since_secs,
+        prefer_sllm=bool(getattr(args, "prefer_sllm", False)) or None,
+    )
+
+    if getattr(args, "emit_json", False):
+        payload = {
+            "advisor_kind": advice.advisor_kind,
+            "advisor_hash": advice.advisor_hash,
+            "n_records": advice.n_records,
+            "window_seconds": advice.window_seconds,
+            "overall_priority": advice.overall_priority,
+            "summary": advice.summary,
+            "token_efficiency": asdict(advice.token_efficiency),
+            "cache_performance": asdict(advice.cache_performance),
+            "stability": asdict(advice.stability),
+            "produced_at": _dt.datetime.fromtimestamp(
+                advice.produced_at_ns / 1e9, tz=_dt.UTC,
+            ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+
+    print(render_triple_axis(advice))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="aegis",
@@ -8550,6 +8633,37 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     ad.set_defaults(fn=cmd_advise)
+
+    # ── aegis assess (v0.5.10) — triple-axis scene interpretation
+    assess_p = sub.add_parser(
+        "assess",
+        help=(
+            "Triple-axis scene interpretation — sLLM reads ATV "
+            "context window and assesses token-efficiency / cache-"
+            "performance / stability with per-axis next-actions."
+        ),
+    )
+    assess_p.add_argument(
+        "--since", type=str, default="7d",
+        help="ContextMemory window (default 7d). 1h / 24h / 7d.",
+    )
+    assess_p.add_argument(
+        "--sllm", dest="prefer_sllm", action="store_true",
+        help=(
+            "Prefer the sLLM brain over the deterministic heuristic. "
+            "Requires AEGIS_JUDGE_PROVIDER ≠ dummy. Default heuristic "
+            "(preserves byte-determinism for replay)."
+        ),
+    )
+    assess_p.add_argument(
+        "--json", dest="emit_json", action="store_true",
+        help="Emit JSON instead of human-readable output.",
+    )
+    assess_p.add_argument(
+        "--context-memory", dest="context_memory", type=str, default=None,
+        help="ContextMemory path override (default: ~/.aegis/context_memory.jsonl)",
+    )
+    assess_p.set_defaults(fn=cmd_assess)
 
     # ── aegis doctor ─────────────────────────────────────────────
     dr = sub.add_parser(
