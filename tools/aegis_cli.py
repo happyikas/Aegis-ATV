@@ -7742,6 +7742,225 @@ def cmd_autonomy_deny(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_knowledge_build(args: argparse.Namespace) -> int:
+    """``aegis knowledge build`` — derive the wiki layer from
+    ContextMemory.
+
+    Walks the raw JSONL store, accumulates per-agent /
+    per-tool / per-pattern statistics, and writes one
+    :class:`KnowledgeEntry` JSON file per entity to
+    ``~/.aegis/knowledge/`` (override via
+    ``AEGIS_KNOWLEDGE_DIR``). The catalog index is written last,
+    so a partial build leaves the previous index authoritative.
+
+    Cadence: re-run after every burn-in window. Same explicit-
+    rebuild contract as ``aegis autonomy learn`` — the wiki is
+    a derived view, not a streaming projection."""
+    from aegis.context_memory import context_memory_path, read_window
+    from aegis.knowledge import (
+        build_knowledge,
+        knowledge_dir,
+        save_entry,
+        save_index,
+    )
+
+    cm_override = getattr(args, "context_memory", None)
+    cm_path = Path(cm_override) if cm_override else context_memory_path()
+    if not cm_path.exists():
+        print(_yellow(
+            f"[knowledge build] ContextMemory not found at {cm_path}.\n"
+            "  Run Aegis through a few sessions first."
+        ))
+        return 1
+
+    since_spec = getattr(args, "since", None) or "30d"
+    try:
+        since_secs = _parse_window_secs(since_spec)
+    except ValueError as e:
+        print(_red(f"error: --since parse failed: {e}"), file=sys.stderr)
+        return 1
+    now_ns = time.time_ns()
+    records = read_window(
+        since_ns=now_ns - since_secs * 1_000_000_000, path=cm_path,
+    )
+    if not records:
+        print(_yellow(
+            f"[knowledge build] no records in {since_spec} window — "
+            "nothing to build"
+        ))
+        return 1
+
+    dir_override = getattr(args, "out", None)
+    root = Path(dir_override) if dir_override else knowledge_dir()
+    root.mkdir(parents=True, exist_ok=True)
+
+    entries = build_knowledge(records)
+    for entry in entries:
+        save_entry(entry, root=root)
+    save_index(
+        entries, root=root,
+        built_at_ns=now_ns, built_from_records=len(records),
+    )
+
+    n_agents = sum(1 for e in entries if e.kind.value == "agent")
+    n_tools = sum(1 for e in entries if e.kind.value == "tool")
+    n_patterns = sum(1 for e in entries if e.kind.value == "pattern")
+
+    print(_green(f"✓ knowledge wiki built at: {root}"))
+    print(f"  records scanned:    {len(records):,}")
+    print(f"  window:             {since_spec}")
+    print(f"  agents:             {n_agents}")
+    print(f"  tools:              {n_tools}")
+    print(f"  patterns:           {n_patterns}")
+    print(f"  total entries:      {len(entries)}")
+    print()
+    print(_yellow(
+        "  Next: `aegis knowledge list` or `aegis knowledge show <entry_id>`"
+    ))
+    return 0
+
+
+def cmd_knowledge_list(args: argparse.Namespace) -> int:
+    """``aegis knowledge list`` — enumerate the catalog with
+    optional kind / tag filters."""
+    from aegis.knowledge import (
+        EntryKind,
+        index_metadata,
+        knowledge_dir,
+        search_by_kind_or_tag,
+    )
+
+    dir_override = getattr(args, "dir", None)
+    root = Path(dir_override) if dir_override else knowledge_dir()
+    meta = index_metadata(root=root)
+    if not meta:
+        print(_yellow(
+            f"[knowledge list] no index at {root} — run `aegis knowledge build`"
+        ))
+        return 1
+
+    kind_filter: EntryKind | None = None
+    raw_kind = getattr(args, "kind", None)
+    if raw_kind:
+        try:
+            kind_filter = EntryKind(raw_kind)
+        except ValueError:
+            print(_red(
+                f"error: --kind must be one of: agent, tool, pattern; "
+                f"got {raw_kind!r}"
+            ), file=sys.stderr)
+            return 1
+    tag_filter = getattr(args, "tag", None)
+    limit = getattr(args, "limit", None)
+
+    rows = search_by_kind_or_tag(
+        kind=kind_filter, tag=tag_filter, root=root, limit=limit,
+    )
+    if not rows:
+        print(_yellow("  (no entries match the filters)"))
+        return 0
+
+    print(_green(
+        f"Knowledge catalog — {len(rows)} entries · built from "
+        f"{meta.get('built_from_records', '?')} records"
+    ))
+    print()
+    print(
+        f"  {'entry_id':<40} {'kind':<8} {'n_obs':>7} "
+        f"{'conf':>5}  summary"
+    )
+    print("  " + "-" * 100)
+    for row in rows:
+        summary = row.summary
+        if len(summary) > 50:
+            summary = summary[:47] + "..."
+        print(
+            f"  {row.entry_id:<40} {row.kind.value:<8} "
+            f"{row.n_observations:>7,} {row.confidence:>5.2f}  "
+            f"{summary}"
+        )
+    return 0
+
+
+def cmd_knowledge_show(args: argparse.Namespace) -> int:
+    """``aegis knowledge show <entry_id>`` — render one entry as
+    markdown to stdout (or to ``--out`` file)."""
+    from aegis.knowledge import (
+        get_entry,
+        knowledge_dir,
+        render_entry_markdown,
+    )
+
+    entry_id = getattr(args, "entry_id", "").strip()
+    if not entry_id:
+        print(_red("error: entry_id is required"), file=sys.stderr)
+        return 1
+    dir_override = getattr(args, "dir", None)
+    root = Path(dir_override) if dir_override else knowledge_dir()
+    entry = get_entry(entry_id, root=root)
+    if entry is None:
+        print(_red(
+            f"error: no entry {entry_id!r} at {root}\n"
+            "  Try `aegis knowledge list` to see available entries."
+        ), file=sys.stderr)
+        return 1
+    md = render_entry_markdown(entry)
+    out_path = getattr(args, "out", None)
+    if out_path:
+        Path(out_path).write_text(md, encoding="utf-8")
+        print(_green(f"✓ wrote: {out_path}"))
+        return 0
+    print(md)
+    return 0
+
+
+def cmd_knowledge_advisor_context(args: argparse.Namespace) -> int:
+    """``aegis knowledge advisor-context <aid>`` — emit the full
+    prompt context for an sLLM advisor scoped to one agent.
+
+    Composes the agent's entry plus its top cross-referenced
+    tools and patterns into a single markdown document. The
+    advisor implementation pipes this into its prompt as a
+    context block."""
+    from aegis.knowledge import (
+        get_entries_for_agent,
+        knowledge_dir,
+        render_advisor_context,
+    )
+
+    aid = getattr(args, "aid", "").strip()
+    if not aid:
+        print(_red("error: aid is required"), file=sys.stderr)
+        return 1
+    dir_override = getattr(args, "dir", None)
+    root = Path(dir_override) if dir_override else knowledge_dir()
+    max_related = int(getattr(args, "max_related", 8))
+    entries = get_entries_for_agent(
+        aid, root=root, max_related=max_related,
+    )
+    if not entries:
+        print(_red(
+            f"error: no entry for agent/{aid}\n"
+            "  Try `aegis knowledge build` first."
+        ), file=sys.stderr)
+        return 1
+    intro = (
+        "Below is structured knowledge about the agent's recent "
+        "activity. Use it to assess token efficiency, cache "
+        "performance, and workflow stability. Cross-references "
+        "between entries use `kind/slug` URIs."
+    )
+    md = render_advisor_context(entries, intro=intro)
+    out_path = getattr(args, "out", None)
+    if out_path:
+        Path(out_path).write_text(md, encoding="utf-8")
+        print(_green(f"✓ wrote advisor context: {out_path}"))
+        print(f"  entries:            {len(entries)}")
+        return 0
+    print(md)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="aegis",
@@ -9085,6 +9304,108 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     a_deny.set_defaults(fn=cmd_autonomy_deny)
+
+    # ── aegis knowledge (v0.5.15) — LLM-wiki layer over ContextMemory
+    kn_p = sub.add_parser(
+        "knowledge",
+        help=(
+            "ContextMemory knowledge layer — derived wiki-shaped "
+            "entries (one per agent / tool / pattern) consumed by "
+            "the sLLM advisor for workflow advice. Built from raw "
+            "ContextMemory; rebuild via `knowledge build`."
+        ),
+    )
+    kn_sub = kn_p.add_subparsers(dest="knowledge_action", required=True)
+
+    k_build = kn_sub.add_parser(
+        "build",
+        help=(
+            "Derive wiki entries from ContextMemory window into "
+            "~/.aegis/knowledge/."
+        ),
+    )
+    k_build.add_argument(
+        "--since", type=str, default="30d",
+        help="window for ContextMemory scan (default 30d)",
+    )
+    k_build.add_argument(
+        "--out", type=str, default=None,
+        help="knowledge directory override (default: ~/.aegis/knowledge)",
+    )
+    k_build.add_argument(
+        "--context-memory", dest="context_memory", type=str, default=None,
+        help="ContextMemory path override",
+    )
+    k_build.set_defaults(fn=cmd_knowledge_build)
+
+    k_list = kn_sub.add_parser(
+        "list",
+        help="List entries in the catalog with optional kind / tag filter.",
+    )
+    k_list.add_argument(
+        "--kind", type=str, default=None,
+        choices=["agent", "tool", "pattern"],
+        help="filter by entry kind",
+    )
+    k_list.add_argument(
+        "--tag", type=str, default=None,
+        help="filter by tag (e.g. high-cost, unstable, frequent)",
+    )
+    k_list.add_argument(
+        "--limit", type=int, default=None,
+        help="cap the number of rows shown",
+    )
+    k_list.add_argument(
+        "--dir", type=str, default=None,
+        help="knowledge directory override",
+    )
+    k_list.set_defaults(fn=cmd_knowledge_list)
+
+    k_show = kn_sub.add_parser(
+        "show",
+        help="Render one entry as markdown.",
+    )
+    k_show.add_argument(
+        "entry_id",
+        help=(
+            "canonical entry_id (e.g. agent/foo, tool/Bash, "
+            "pattern/Bash:loop:Bash)"
+        ),
+    )
+    k_show.add_argument(
+        "--out", type=str, default=None,
+        help="write to file instead of stdout",
+    )
+    k_show.add_argument(
+        "--dir", type=str, default=None,
+        help="knowledge directory override",
+    )
+    k_show.set_defaults(fn=cmd_knowledge_show)
+
+    k_ctx = kn_sub.add_parser(
+        "advisor-context",
+        help=(
+            "Emit the multi-entry advisor prompt for one agent "
+            "(agent entry + top tools + top patterns)."
+        ),
+    )
+    k_ctx.add_argument(
+        "aid",
+        help="agent id (the aid as recorded in ContextMemory)",
+    )
+    k_ctx.add_argument(
+        "--max-related", dest="max_related", type=int, default=8,
+        help="cap the number of related entries to include (default 8)",
+    )
+    k_ctx.add_argument(
+        "--out", type=str, default=None,
+        help="write to file instead of stdout",
+    )
+    k_ctx.add_argument(
+        "--dir", type=str, default=None,
+        help="knowledge directory override",
+    )
+    k_ctx.set_defaults(fn=cmd_knowledge_advisor_context)
 
     # ── aegis doctor ─────────────────────────────────────────────
     dr = sub.add_parser(
