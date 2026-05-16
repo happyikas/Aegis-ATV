@@ -80,6 +80,17 @@ def append(
             pass
         with p.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
+        # Opportunistic rotation check — runs after the line is
+        # committed so an in-flight append is never interrupted.
+        # The rotation module suppresses its own OSError and does
+        # nothing when the active file is under the size threshold,
+        # so this stays in the cheap stat()-only fast path 99% of
+        # the time.
+        try:
+            from aegis.context_memory.rotation import rotate_if_needed
+            rotate_if_needed(p)
+        except Exception:  # noqa: BLE001 — analytics never blocks
+            pass
         return True
     except (OSError, TypeError, ValueError):
         # Never block the verdict path. Failures are silent here;
@@ -91,10 +102,40 @@ def append(
 # ── read ──────────────────────────────────────────────────────────
 
 
-def iter_records(path: Path | None = None) -> Iterator[ContextMemoryRecord]:
+def iter_records(
+    path: Path | None = None,
+    *,
+    include_rotated: bool = False,
+) -> Iterator[ContextMemoryRecord]:
     """Yield records one at a time. Memory-friendly for large stores
-    (silicon-ready: the same stream becomes a DMA scan)."""
+    (silicon-ready: the same stream becomes a DMA scan).
+
+    ``include_rotated``: when True, walk archived rotations (.gz)
+    chronologically before the active file so historical windows
+    are reconstructed across rotation boundaries. Default False
+    keeps the hot path unchanged for callers that only care about
+    recent activity.
+    """
     p = path if path is not None else context_memory_path()
+
+    if include_rotated:
+        # Walk every rotation in chronological order: oldest archived
+        # first, active file last.
+        from aegis.context_memory.rotation import (
+            list_rotation_chain,
+            open_rotation_text,
+        )
+        for slot in list_rotation_chain(p):
+            for raw in open_rotation_text(slot):
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    yield ContextMemoryRecord.from_dict(json.loads(line))
+                except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                    continue
+        return
+
     if not p.exists():
         return
     try:
@@ -112,10 +153,14 @@ def iter_records(path: Path | None = None) -> Iterator[ContextMemoryRecord]:
         return
 
 
-def read_all(path: Path | None = None) -> list[ContextMemoryRecord]:
+def read_all(
+    path: Path | None = None,
+    *,
+    include_rotated: bool = False,
+) -> list[ContextMemoryRecord]:
     """Read all records into memory. Convenience for small stores
     and tests; for large stores prefer :func:`iter_records`."""
-    return list(iter_records(path))
+    return list(iter_records(path, include_rotated=include_rotated))
 
 
 def read_window(
@@ -123,6 +168,7 @@ def read_window(
     until_ns: int | None = None,
     *,
     path: Path | None = None,
+    include_rotated: bool = False,
 ) -> list[ContextMemoryRecord]:
     """Records with ``ts_ns`` in ``[since_ns, until_ns]``.
 
@@ -131,9 +177,13 @@ def read_window(
     store. Memory cost is O(matches), not O(file) — but the file is
     scanned linearly (silicon will replace this with an indexed
     range query).
+
+    ``include_rotated``: walk archived rotations as well — useful
+    for windows that extend past the most recent rotation boundary.
+    Default False matches pre-v0.5.7 behavior.
     """
     out: list[ContextMemoryRecord] = []
-    for rec in iter_records(path):
+    for rec in iter_records(path, include_rotated=include_rotated):
         if rec.ts_ns < since_ns:
             continue
         if until_ns is not None and rec.ts_ns > until_ns:

@@ -7271,6 +7271,79 @@ def cmd_memory_diff(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_memory_rotate(args: argparse.Namespace) -> int:
+    """``aegis memory rotate`` — force a ContextMemory rotation.
+
+    The writer rotates opportunistically when an append crosses the
+    size threshold (default 50 MB, tunable via
+    ``AEGIS_CONTEXT_MEMORY_MAX_BYTES``). This command lets operators
+    trigger a rotation on demand — useful when archiving an
+    ad-hoc window, before a long-running analysis, or when shrinking
+    the active file ahead of disk pressure.
+
+    Flags:
+      --context-memory PATH   override the default store location
+      --dry-run               report what *would* be rotated; no
+                              file changes
+    """
+    from aegis.context_memory import context_memory_path
+    from aegis.context_memory.rotation import (
+        list_rotation_chain,
+        max_bytes,
+        max_rotations,
+        rotate,
+        rotation_disabled,
+        should_rotate,
+    )
+
+    override = getattr(args, "context_memory", None)
+    cm_path = Path(override) if override else context_memory_path()
+
+    if rotation_disabled():
+        print(_yellow(
+            "[memory rotate] rotation is disabled via "
+            "AEGIS_CONTEXT_MEMORY_ROTATION_DISABLED=1. Unset to enable."
+        ))
+        return 1
+
+    print(_green("ContextMemory rotation"))
+    print(f"  path:         {cm_path}")
+    if cm_path.exists():
+        size = cm_path.stat().st_size
+        print(f"  active size:  {size:,} B")
+    else:
+        print("  active size:  (file missing — nothing to rotate)")
+        return 0
+    print(f"  threshold:    {max_bytes():,} B")
+    print(f"  retention:    {max_rotations()} archive(s)")
+    print(f"  size-triggered? {should_rotate(cm_path)}")
+    print()
+
+    chain_before = list_rotation_chain(cm_path)
+    print(f"  before: {len(chain_before)} file(s) in chain")
+    for f in chain_before:
+        print(f"    - {f.name} ({f.stat().st_size:,} B)")
+
+    if getattr(args, "dry_run", False):
+        print()
+        print(_yellow("  --dry-run: no changes made"))
+        return 0
+
+    new_slot = rotate(cm_path)
+    if new_slot is None:
+        print()
+        print(_red("  rotation skipped or failed"))
+        return 1
+
+    chain_after = list_rotation_chain(cm_path)
+    print()
+    print(_green(f"  ✓ rotated → slot {new_slot}"))
+    print(f"  after:  {len(chain_after)} file(s) in chain")
+    for f in chain_after:
+        print(f"    - {f.name} ({f.stat().st_size:,} B)")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="aegis",
@@ -8674,6 +8747,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="emit JSON instead of plain text (for piping into jq)",
     )
     mm_diff.set_defaults(fn=cmd_memory_diff)
+
+    mm_rotate = mm_sub.add_parser(
+        "rotate",
+        help=(
+            "Force a ContextMemory rotation now — archive the active "
+            "store to .1.gz, shift older slots, drop oldest beyond "
+            "retention. Writer rotates opportunistically once the "
+            "active file crosses AEGIS_CONTEXT_MEMORY_MAX_BYTES "
+            "(default 50 MB); use this for on-demand rotation."
+        ),
+    )
+    mm_rotate.add_argument(
+        "--context-memory",
+        dest="context_memory",
+        type=str,
+        default=None,
+        help="ContextMemory path override (default: ~/.aegis/context_memory.jsonl)",
+    )
+    mm_rotate.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help="report what would be rotated without changing any files",
+    )
+    mm_rotate.set_defaults(fn=cmd_memory_rotate)
 
     # `memory case <build|import|status>` is convenient alias for the
     # case-memory training command — it lives under coach (training)
