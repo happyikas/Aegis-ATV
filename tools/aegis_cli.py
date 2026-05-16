@@ -7344,6 +7344,62 @@ def cmd_memory_rotate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_atmu_recover(args: argparse.Namespace) -> int:
+    """``aegis atmu recover`` — sweep orphaned ATMU transactions.
+
+    Walks the ATMU intent log (``~/.aegis/intent_log.sqlite``) and
+    transitions rows stuck in non-terminal states (TENTATIVE /
+    PREPARED) older than the age threshold to ABORTED with a
+    structured "orphaned at startup" reason. Sidecar / local-mode
+    startup runs the same sweep automatically; this CLI is for
+    manual / on-demand recovery + reporting.
+
+    Flags:
+      --max-age-hours N    rows younger than N hours are presumed
+                           live (default 24.0)
+      --dry-run            preview the sweep without mutating the WAL
+      --db PATH            intent_log.sqlite path override
+                           (default: $AEGIS_INTENT_LOG_DB or
+                           ~/.aegis/intent_log.sqlite)
+    """
+    from aegis.atmu import IntentLog, recover_orphans, render_sweep_summary
+    from aegis.config import settings
+
+    db_path = (
+        getattr(args, "db_path", None)
+        or os.environ.get("AEGIS_INTENT_LOG_DB")
+        or settings.aegis_intent_log_db
+    )
+
+    try:
+        log = IntentLog(str(db_path))
+    except Exception as exc:  # noqa: BLE001
+        print(
+            _red(f"error: cannot open intent log {db_path}: {exc}"),
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        result = recover_orphans(
+            log,
+            max_age_hours=float(getattr(args, "max_age_hours", 24.0)),
+            dry_run=bool(getattr(args, "dry_run", False)),
+        )
+    finally:
+        log.close()
+
+    summary = render_sweep_summary(result)
+    if result.dry_run:
+        print(_yellow(summary))
+    else:
+        print(_green(summary))
+
+    # Surface a useful exit code: 0 when nothing to do or all
+    # swept cleanly; 1 when any row failed.
+    return 1 if result.n_failed else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="aegis",
@@ -7970,6 +8026,53 @@ def build_parser() -> argparse.ArgumentParser:
         help="(status) emit a JSON object instead of the human table",
     )
     au.set_defaults(fn=cmd_audit)
+
+    # ── `aegis atmu recover` — auto WAL replay on demand (v0.5.8) ──
+    atmu = sub.add_parser(
+        "atmu",
+        help=(
+            "ATMU (Agent Telemetry Management Unit) operations — "
+            "intent-log WAL recovery + state-machine inspection."
+        ),
+    )
+    atmu_sub = atmu.add_subparsers(dest="atmu_action", required=True)
+
+    atmu_rec = atmu_sub.add_parser(
+        "recover",
+        help=(
+            "Sweep orphaned ATMU transactions — non-terminal rows "
+            "older than --max-age-hours move to ABORTED. Idempotent + "
+            "safe to run any time."
+        ),
+    )
+    atmu_rec.add_argument(
+        "--max-age-hours",
+        dest="max_age_hours",
+        type=float,
+        default=24.0,
+        metavar="N",
+        help=(
+            "rows younger than N hours are presumed live (default 24.0). "
+            "Set to 0 to sweep every non-terminal row regardless of age."
+        ),
+    )
+    atmu_rec.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help="preview the sweep without mutating the WAL",
+    )
+    atmu_rec.add_argument(
+        "--db",
+        dest="db_path",
+        type=str,
+        default=None,
+        help=(
+            "intent_log.sqlite path override (default: $AEGIS_INTENT_LOG_DB "
+            "or ~/.aegis/intent_log.sqlite)"
+        ),
+    )
+    atmu_rec.set_defaults(fn=cmd_atmu_recover)
 
     # ── `aegis soak` and `aegis bench` — load test harness ──────────
     # Two parsers sharing one handler. Defaults differ (soak is the

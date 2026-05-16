@@ -297,6 +297,22 @@ def _get_intent_log() -> Any:
         from aegis.atmu import IntentLog
 
         _INTENT_LOG_SINGLETON = IntentLog(str(LOCAL_INTENT_LOG_PATH))
+        # v0.5.8 — auto WAL replay on first init. Sweep orphans
+        # (TENTATIVE / PREPARED rows ≥ 24 h old) to ABORTED so the
+        # intent log stays honest across Claude Code restarts /
+        # crashes. Suppress every failure mode — the hook MUST come
+        # up regardless of recovery outcome.
+        try:
+            from aegis.atmu.recovery import recover_orphans
+            _sweep = recover_orphans(_INTENT_LOG_SINGLETON)
+            if _sweep.n_swept and VERBOSE:
+                _emit(
+                    f"ATMU auto-recovery swept {_sweep.n_swept} "
+                    f"orphan(s) → ABORTED"
+                )
+        except Exception as _e:  # noqa: BLE001 — defensive sweep
+            if VERBOSE:
+                _emit(f"ATMU auto-recovery skipped: {_e}")
         return _INTENT_LOG_SINGLETON
     except Exception as e:  # noqa: BLE001 — never block on infra failure
         if VERBOSE:
