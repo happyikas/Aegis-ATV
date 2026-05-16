@@ -50,6 +50,11 @@ concurrency:
   group: quickstart-smoke-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Node 24 opt-in (deadline 2026-06-02). See release-pypi.yml for
+  # the deprecation rationale link.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   # ─────────────────────────────────────────────────────────────────────
   # Direct smoke — run scripts/quickstart_smoke.sh against a clean

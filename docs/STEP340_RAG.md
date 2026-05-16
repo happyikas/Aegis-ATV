@@ -3,6 +3,10 @@
 > Llama-3.2-1B 단독은 작아서 reasoning 능력이 약함. BGE 임베딩으로
 > **유사 과거 사례 N개** 를 retrieve 해서 LLM prompt 에 주입.
 > Patent step340 RAG 의 1차 구현.
+>
+> v0.5+: 아래 모든 `aegis case-memory <action>` 명령은 새 vocab
+> `aegis coach case-memory <action>` 와 동일하게 동작합니다 (이전
+> 이름은 alias 로 유지).
 
 ---
 

@@ -17,6 +17,11 @@ env:
   AEGIS_EMBEDDING_PROVIDER: dummy
   AEGIS_JUDGE_PROVIDER: dummy
   AEGIS_SAFETY_PROVIDER: dummy
+  # Node 24 opt-in for JavaScript-based actions (deadline 2026-06-02).
+  # See https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+  # Once Node 24 is the runner default, this line is a no-op and can
+  # be removed.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────
