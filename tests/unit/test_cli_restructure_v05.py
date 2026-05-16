@@ -416,6 +416,80 @@ def test_memory_claude_md_apply_out_of_range_returns_1(
     ).read_text(encoding="utf-8")
 
 
+def test_memory_diff_lists_applied_proposals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`aegis memory diff` should walk the project CLAUDE.md, find
+    every aegis-managed-proposal marker, and surface them. Test:
+    create a CLAUDE.md with one applied marker → diff finds it."""
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "CLAUDE.md").write_text(
+        "# Project\n\n## Workflow Discipline\n\n"
+        "<!-- aegis-managed-proposal: kind=loop-detector "
+        "pattern='repeated Bash' confidence=high -->\n"
+        "Avoid Bash loops.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(project)
+
+    args = aegis_cli.build_parser().parse_args(["memory", "diff"])
+    rc = args.fn(args)
+    assert rc == 0
+
+
+def test_memory_diff_json_emits_parseable_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """`--json` flag should print a parseable JSON object with the
+    expected keys."""
+    import json as _json
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "CLAUDE.md").write_text(
+        "# x\n\n## S\n\n"
+        "<!-- aegis-managed-proposal: kind=k pattern='p' confidence=high -->\n"
+        "body\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(project)
+
+    args = aegis_cli.build_parser().parse_args(["memory", "diff", "--json"])
+    rc = args.fn(args)
+    assert rc == 0
+    payload = _json.loads(capsys.readouterr().out)
+    assert payload["applied_count"] == 1
+    assert payload["applied"][0]["kind"] == "k"
+    assert payload["applied"][0]["pattern"] == "p"
+    assert "claude_md" in payload
+
+
+def test_memory_diff_missing_md_returns_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    args = aegis_cli.build_parser().parse_args(["memory", "diff"])
+    rc = args.fn(args)
+    assert rc == 1
+
+
+def test_memory_diff_explicit_path_override(tmp_path: Path) -> None:
+    """`--claude-md PATH` should override the cwd lookup."""
+    md = tmp_path / "guide.md"
+    md.write_text(
+        "# Guide\n\n## S\n\n"
+        "<!-- aegis-managed-proposal: kind=k pattern='p' confidence=low -->\n"
+        "body\n",
+        encoding="utf-8",
+    )
+    args = aegis_cli.build_parser().parse_args([
+        "memory", "diff", "--claude-md", str(md),
+    ])
+    rc = args.fn(args)
+    assert rc == 0
+
+
 def test_memory_claude_md_apply_with_no_proposals_returns_1(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
