@@ -118,21 +118,34 @@ def classify_record(
     record: ContextMemoryRecord,
     *,
     block_within: Iterable[ContextMemoryRecord] = (),
+    denied_trace_ids: frozenset[str] = frozenset(),
 ) -> RewardEvent | None:
     """Classify a single REQUIRE_APPROVAL record into one of the
     three reward events. Returns ``None`` if the record is not a
     REQUIRE_APPROVAL (no signal contribution).
 
-    ``block_within`` is the sliced subsequent timeline (typically
-    ≤10 records) within the same aid; we consult it to detect
-    BLOCK_FOLLOWUP. Pre-slicing the timeline at the call site
-    keeps this function O(window) rather than O(records)."""
+    Arguments:
+        record: The ContextMemory record to classify.
+        block_within: The sliced subsequent timeline (typically
+            ≤10 records) within the same aid; consulted to detect
+            BLOCK_FOLLOWUP. Pre-slicing the timeline at the call
+            site keeps this function O(window) rather than
+            O(records).
+        denied_trace_ids: Set of trace_ids that the operator has
+            explicitly marked via ``aegis autonomy deny``. A
+            record whose trace_id is in this set is classified
+            as ``EXPLICIT_DENY`` — equivalent to ``β += 10`` on
+            the pattern's posterior."""
     if record.decision != "REQUIRE_APPROVAL":
         return None
 
-    # Explicit user deny stamped via `aegis autonomy deny`. This
-    # is the strongest negative signal — overrides any silent
-    # clean reading from the timeline.
+    # Explicit user deny — strongest negative signal. Two
+    # pathways: (a) the record itself was stamped at write time,
+    # (b) the operator issued `aegis autonomy deny <trace_id>`
+    # after the fact (stored in ~/.aegis/autonomy/denials.jsonl).
+    # Both override any silent clean reading from the timeline.
+    if record.trace_id in denied_trace_ids:
+        return RewardEvent.EXPLICIT_DENY
     if _DENY_STAMP_KEY in (record.step_traces or {}):
         return RewardEvent.EXPLICIT_DENY
 

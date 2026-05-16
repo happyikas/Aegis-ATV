@@ -106,6 +106,7 @@ from aegis.autonomy.decay import (
     decay_weight,
     should_drop,
 )
+from aegis.autonomy.denials import load_denial_trace_ids
 from aegis.autonomy.drift import (
     DEFAULT_DRIFT_THRESHOLD,
     is_drifted,
@@ -390,6 +391,7 @@ def learn_with_diagnostics(
     apply_decay: bool = True,
     apply_drift: bool = True,
     apply_calibration: bool = True,
+    denied_trace_ids: frozenset[str] | None = None,
 ) -> LearnResult:
     """Build the trust table with full Bayesian diagnostics.
 
@@ -438,6 +440,15 @@ def learn_with_diagnostics(
 
     anchor_ns = now_ns if now_ns is not None else time.time_ns()
 
+    # Load explicit denials. Caller can pass a pre-built set
+    # (used by tests + the CLI when it wants to learn from a
+    # synthetic denial list); default is the on-disk log.
+    denials = (
+        denied_trace_ids
+        if denied_trace_ids is not None
+        else load_denial_trace_ids()
+    )
+
     # Index records by aid for the block-followup heuristic.
     by_aid: dict[str, list[ContextMemoryRecord]] = defaultdict(list)
     for r in rec_list:
@@ -483,7 +494,14 @@ def learn_with_diagnostics(
         followup_window = (
             aid_timeline[idx + 1 : idx + 11] if idx is not None else []
         )
-        event = classify_record(r, block_within=followup_window) or RewardEvent.CLEAN
+        event = (
+            classify_record(
+                r,
+                block_within=followup_window,
+                denied_trace_ids=denials,
+            )
+            or RewardEvent.CLEAN
+        )
 
         # Decay weight against anchor time.
         if apply_decay:
