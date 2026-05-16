@@ -4,6 +4,84 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.10] — 2026-05-16  ·  TripleAxisAdvisor — sLLM scene interpretation across 3 axes
+
+Closes the architectural gap the user audit surfaced: sLLM was
+producing a 3-class verdict (ALLOW/BLOCK/REQUIRE_APPROVAL), not
+**interpreting the run-time context** into the three axes the
+patent's advisor pipeline targets. v0.5.9 added sLLM prose
+refinement; v0.5.10 adds a structured per-axis assessment that
+matches the patent's "sLLM understands the scene" intent.
+
+### Added
+
+* **`src/aegis/judge/triple_axis_advisor.py`** — new module
+  exposing `assess_triple_axis()` (ContextMemory window → 3-axis
+  advice) + dataclasses + render.
+* **`aegis assess`** CLI — triple-axis scene interpretation
+  command. Flags: `--since DURATION`, `--sllm`, `--json`,
+  `--context-memory PATH`.
+
+### The three axes
+
+| Axis | Signals | Score formula (heuristic) |
+|---|---|---|
+| 💰 **token_efficiency** | repeat_call_ratio, top_cost_tool_share, avg_tokens_per_call | 1.0 − 0.5×repeat − 0.3×top_tool_share − 0.2×token_size |
+| 🧊 **cache_performance** | est_cache_hit_rate (inferred from repeat patterns), prefix instability, redundant Reads | est_hit_rate − 0.5×prefix_unstable |
+| 🛡️ **stability** | block_rate, approval_rate, loop_detected, dangerous_pattern, sensitive_path | 1.0 − block_rate − 0.3×appr_rate − loop − danger |
+
+Each axis carries: `score ∈ [0,1]`, `severity ∈ {ok, warn, alert}`,
+one-sentence `interpretation`, and (when applicable) `next_action`.
+
+### sLLM brain (`--sllm` flag or `AEGIS_TRIPLE_AXIS_PROVIDER=sllm`)
+
+The sLLM is asked to **refine the per-axis prose** (interpretation +
+next_action) — it cannot change scores or severity. Same defensive-
+fallback contract as the v0.5.9 ActionAdvice sLLM brain:
+
+* No LLM available → heuristic baseline
+* LLM raises / returns None / unparseable → heuristic baseline
+* LLM tries to inject `decision`/`score` keys → **ignored**
+  (prompt-injection defense)
+
+### Smoke against local ContextMemory (4,658 records, 24h window)
+
+```
+Triple-axis assessment (heuristic)
+  records: 4,658    window: 1d
+  overall priority: 🧊 Cache performance
+
+  💰 Token efficiency   score 0.50  🟡 warn
+    100% of calls in 3+ repeat pattern
+  🧊 Cache performance  score 0.00  🔴 alert
+    est cache hit rate ~0%; 1307 redundant Read calls;
+    230 prompt-prefix instability events
+  🛡️  Stability         score 0.69  🟡 warn
+    10.0% BLOCK rate; 230 step336 loop events;
+    208 dangerous-pattern hits
+```
+
+### Tests
+
+* `tests/unit/test_triple_axis_advisor.py` — 28 cases covering
+  signal extraction (counts, repeat-ratio, redundant Reads, top-
+  cost tool), heuristic per-axis assessment (empty window, high-
+  repeat penalty, loop drop, BLOCK drop), overall priority +
+  summary, sLLM refinement (success, fallback paths, score-
+  preservation, prompt-injection defense), umbrella selection
+  (default heuristic, env opt-in, kwarg override), rendering, and
+  data-shape invariants.
+* Total sweep: 3230 → 3258 (+28).
+
+### Production-gap status — all four closed
+
+| Gap | Status |
+|---|---|
+| ContextMemory rotation | ✅ v0.5.7 |
+| ATMU auto WAL replay | ✅ v0.5.8 |
+| ActionAdvice sLLM brain (prose) | ✅ v0.5.9 |
+| **sLLM scene interpretation (3-axis)** | ✅ this release |
+
 ## [0.5.9] — 2026-05-16  ·  ActionAdvice sLLM brain (PR-ζ-head, production gap #3)
 
 Closes the third and final production gap from the v0.5.6 self-
