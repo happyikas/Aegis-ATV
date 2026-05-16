@@ -12,12 +12,17 @@ for these admin actions.
 ## TL;DR
 
 1. **Yank** every existing `aegis-mvp` release on PyPI so
-   `pip install aegis-mvp` stops resolving anything.
-2. **Update** the project description on `aegis-mvp` to point at
-   `aegis-atv`.
+   `pip install aegis-mvp` stops resolving anything. Each yank's
+   *reason* string is shown to pip users as a redirect message.
+2. ~~Update the project description on `aegis-mvp`.~~ **Not possible
+   from the web UI** — PyPI sources description from the latest
+   non-yanked release's `pyproject.toml`. To change it, you'd have
+   to publish a new release (covered by step 3 below). For most
+   projects step 1 is enough.
 3. *(Optional)* publish a final `aegis-mvp` version whose `__init__`
    raises with a redirect message — for users who pinned an exact
-   version and bypass yanking.
+   version and bypass yanking. This also has the side effect of
+   updating the displayed project description.
 4. Leave the project itself in place — **do not delete** —
    for archival reasons + so the historical name is reserved.
 
@@ -43,9 +48,18 @@ Walk through each version. URLs (replace 0.X.Y per row):
 
 On each page:
 
-1. Scroll to **"Yank"** at the bottom.
-2. Reason: `Renamed to aegis-atv on PyPI; install with `pip install aegis-atv`.`
-3. Confirm.
+1. Scroll to the blue **"Yank release"** section (NOT the red
+   "Delete release" section — that's irreversible and frees up the
+   name for hijacking).
+2. Click **"Yank release"**. A confirmation modal opens.
+3. **Reason** (optional but recommended):
+   ``Renamed to aegis-atv on PyPI; install with `pip install aegis-atv`.``
+4. **Version** field — type **just the version number** (e.g.
+   `0.4.0`), NOT `aegis-mvp 0.4.0`. The placeholder text shows the
+   latter format but PyPI accepts the bare version. The
+   confirmation button stays disabled until the version field
+   exactly matches.
+5. Click the (now-enabled) **"Yank release"** button in the modal.
 
 Verify after the sweep:
 
@@ -61,24 +75,35 @@ print([v for v,rs in d['releases'].items() \
 distribution found for aegis-mvp` (because every available
 distribution is yanked).
 
-## Step 2 — Update the project description
+## Step 2 — Update the project description ~~(web UI)~~ — NOT POSSIBLE
 
-The PyPI project description still says "Aegis ATV / Aegis MVP"
-without explicit redirect. Add a top-of-`README` note that gets
-re-uploaded with any future `aegis-mvp` publish — but since we're
-**not** going to publish again, the cleanest way is to edit the
-project's PyPI-side metadata directly:
+This step **does not work the way the playbook originally claimed.**
+We attempted it on 2026-05-16 and discovered that PyPI's settings
+page (<https://pypi.org/manage/project/aegis-mvp/settings/>) is
+explicit:
 
-1. <https://pypi.org/manage/project/aegis-mvp/settings/>
-2. Update the **Short description** to:
-   ```
-   DEPRECATED — renamed to aegis-atv. Install with `pip install
-   aegis-atv`. See https://github.com/happyikas/Aegis-ATV.
-   ```
-3. (Optional) Replace the **long description** with the same
-   pointer. PyPI displays the long description on the project page;
-   updating it via the web UI requires a fresh sdist upload, which
-   we're avoiding — the short description is enough.
+> "To set the 'aegis-mvp' description, author, links, classifiers,
+> and other details for **your next release**, use the project
+> metadata fields in your `pyproject.toml` file. Updating these
+> fields will **not change the metadata for past releases**."
+
+In other words — PyPI doesn't expose a "edit description" form for
+already-published projects. The Summary / long description always
+comes from the most recent non-yanked release's `pyproject.toml`.
+
+**Two takeaways:**
+
+1. **For most deprecation flows, step 1 (yank-with-reason) is
+   enough.** The reason text propagates to pip's error message
+   automatically. Anyone running `pip install aegis-mvp` sees the
+   redirect. The displayed project page still carries the old
+   description, but the "Releases: 0" badge in the sidebar + the
+   yank strikethrough on every version make the deprecation clear.
+
+2. **If you need to update the displayed description,** the only
+   path is **step 3** — publish a new release whose `pyproject.toml`
+   has the deprecation text. That release is the new "latest", so
+   PyPI surfaces its description.
 
 ## Step 3 (optional) — Final "redirect" version
 
@@ -121,12 +146,22 @@ by the same account.
 
 ## Status checklist
 
-- [ ] All 5 `aegis-mvp` releases yanked (step 1)
-- [ ] PyPI short description updated to mention `aegis-atv` (step 2)
+- [x] All 5 `aegis-mvp` releases yanked, 2026-05-16 (step 1)
+- [n/a] PyPI short description update — **not possible from web
+  UI** (see step 2 above); skipped as not worth a redirect-shim
+  release.
 - [ ] *(optional)* `aegis-mvp 0.4.1` redirect shim published (step 3)
-- [ ] Project NOT deleted (step 4 — verify)
+- [x] Project NOT deleted, verified 2026-05-16 (step 4)
 
-When the four boxes are checked, the migration is complete:
-`pip install aegis-mvp` fails with a redirect-able error, the
-PyPI project page tells visitors where to go, and the name stays
-locked to prevent supply-chain hijacking.
+`pip install aegis-mvp` now fails with the redirect text:
+
+```
+WARNING: aegis-mvp was yanked. Reason: Renamed to aegis-atv on
+PyPI; install with pip install aegis-atv.
+ERROR: No matching distribution found for aegis-mvp
+```
+
+The deprecation is functionally complete. Anyone landing on the
+PyPI project page sees the Releases:0 badge + yanked strikethrough
+on every version; anyone reaching for `pip install` sees the
+redirect message above. The project name remains locked.
