@@ -4,6 +4,130 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.12] — 2026-05-16  ·  Autonomy Bayesian backbone (anti-overfitting)
+
+v0.5.11 shipped the human-in-the-loop minimiser as a point-estimate
+classifier — `clean_rate * sample_weight`. That formulation exhibited
+six classical ML-training side-effects which v0.5.12 closes
+systematically. Each side-effect now has a named, tested defence.
+
+### Side-effect → defence
+
+| Side-effect | v0.5.11 exposure | v0.5.12 defence |
+|---|---|---|
+| **Overfitting** at small n | trust ≈ 0.70 for 5-of-5 clean | Beta(α, β) posterior + LCB(95%); 5-of-5 → LCB 0.30, well below 0.85 |
+| **Self-confirming loop** (bypass kills feedback) | not addressed | ε-greedy forced exploration (default 5%, deterministic by BLAKE2b(atv_id)) |
+| **Spurious correlation** | each pattern fitted independently | Empirical-Bayes hierarchical prior per tool (shrinkage toward tool baseline) |
+| **Catastrophic staleness** | 90-day patterns still 100% | Exponential decay (30-day half-life); 90-day obs weighs ⅛ |
+| **Distribution drift** | invisible | Jensen-Shannon between baseline (older 2/3) and recent (newer 1/3); drifted patterns dropped |
+| **Reward sparsity** | binary clean / not-clean | Ternary shaping: CLEAN(+1) / BLOCK_FOLLOWUP(+3 to β) / EXPLICIT_DENY(+10 to β) |
+| **Calibration miscarry** | not measured | 80/20 train/val split + ECE; learner refuses to persist when ECE > 0.10 |
+| **Multiple comparisons** | flat min_samples=5 | Bonferroni-style ln(N) adjustment of min_samples |
+
+### New modules
+
+* **`src/aegis/autonomy/bayesian.py`** — `BetaPosterior` dataclass +
+  pure-Python inverse-CDF (verified vs scipy to 1e-15) + LCB metric.
+  `ToolBaseline` + `empirical_bayes_prior` for hierarchical
+  regularisation. `adjusted_min_samples` for Bonferroni-style
+  scaling. `make_posterior` is the single constructor.
+* **`src/aegis/autonomy/reward.py`** — `RewardEvent` enum +
+  `classify_record` event extractor + `RewardCounts` accumulator.
+  Weights are constants (CLEAN=1, BLOCK=3, DENY=10) — not runtime
+  tunable to prevent accidentally zeroing out the negative-signal
+  pathway.
+* **`src/aegis/autonomy/decay.py`** — `decay_weight()` + `should_drop`.
+  Pure-math; uses `math.exp(-ln(2) Δd / τ)`. Half-life via
+  `AEGIS_AUTONOMY_HALF_LIFE_DAYS` env (defensive parse).
+* **`src/aegis/autonomy/drift.py`** — `kl_divergence_beta` (closed
+  form via digamma) + `jensen_shannon_beta` + `is_drifted`.
+  No scipy dependency.
+* **`src/aegis/autonomy/calibration.py`** — `trace_split` (BLAKE2b
+  mod 5; bucket 4 = val) + `compute_calibration` returning
+  `CalibrationReport` with per-bucket ECE.
+
+### Refactored
+
+* **`src/aegis/autonomy/learner.py`** — new entry point
+  `learn_with_diagnostics` returning a `LearnResult` (trust table
+  + calibration + drop counts by gate + chosen thresholds).
+  Backward-compatible `learn_trusted_patterns` is a thin wrapper
+  with v0.5.11 admission policy preserved exactly.
+* **`src/aegis/autonomy/runtime.py`** — ε-greedy in
+  `apply_autonomy_bypass`. Deterministic via BLAKE2b(atv_id)
+  mod 1000, threshold = ε × 1000. New env
+  `AEGIS_AUTONOMY_EPSILON` (default 0.05, clamped to [0.0, 0.5]).
+  Forced-exploration calls leave the verdict unchanged but stamp
+  `STEP_TRACE_EXPLORE_KEY` so the operator sees exploration
+  happening. Drift-flagged patterns are also refused at runtime
+  (never auto-approve a `drifted=True` entry regardless of trust
+  score).
+* **`TrustedPattern`** gains optional posterior fields (`alpha`,
+  `beta`, `posterior_mean`, `posterior_std`, `n_effective`,
+  `n_explicit_deny`, `drift_score`, `drifted`, `credibility`,
+  `prior_alpha`, `prior_beta`) — all default-safe so v0.5.11
+  trust tables on disk continue to load and decide identically.
+
+### CLI
+
+* `aegis autonomy learn` accepts new flags:
+  `--min-trust` (LCB threshold, default 0.85),
+  `--credibility` (default 0.95),
+  `--half-life-days` (default 30),
+  `--ece-threshold` (default 0.10),
+  `--force` (persist despite calibration failure, audit hazard).
+  The output prints sample counts, drop counts per gate, the
+  Bonferroni-adjusted `min_samples`, and the calibration ECE.
+  A failed calibration check **refuses** to persist the new
+  table; the previous one stays authoritative.
+* `aegis autonomy show -v` prints the Bayesian posterior
+  (α, β, LCB, drift) per pattern. Also surfaces the current
+  ε-greedy rate from the env.
+
+### Tests
+
+52 new tests in `tests/unit/test_autonomy_bayesian.py`, organised
+by side-effect (`TestOverfittingResistance`, `TestExplorationBreaksLoop`,
+`TestDecayReducesStaleWeight`, `TestDriftDetectionFlagsShift`,
+`TestRewardShapingMagnitude`, `TestCalibrationRejectsMiscalibrated`,
+`TestBonferroniRaisesThreshold`, `TestEmpiricalBayesPrior`,
+`TestLearnWithDiagnostics`, `TestApplyAutonomyBypassExploration`).
+
+All 31 v0.5.11 autonomy tests continue to pass — backward
+compatibility is preserved.
+
+Full suite: 3341 passed, 13 skipped.
+
+### Smoke (real local ContextMemory, 6,536 records over 30 days)
+
+```
+records scanned:    6,536
+patterns considered:4
+patterns learned:   2
+  dropped (never-trust):    0
+  dropped (low samples):    0
+  dropped (low trust LCB):  2
+  dropped (drifted):        0
+min_samples (after Bonferroni): 7
+min_trust (LCB threshold):      0.85
+credibility:                    0.95
+half-life:                      30.0 day(s)
+calibration ECE:                0.0051 (pass)
+
+✓ autonomy trust table updated
+
+tool         signature                  n      α      β   LCB  drift
+----------------------------------------------------------------------
+Bash         loop:Bash                170  171.1    0.2  0.99  0.003
+Bash         cost-divergence           68   70.7    0.2  0.99  0.003
+```
+
+Note: two patterns from v0.5.11's table (low-sample variants) now
+drop under the LCB threshold — the v0.5.12 contract specifically
+filters those out. The remaining two are well above the threshold
+with tight posteriors (β ≈ 0.2 reflects empirical-Bayes shrinkage
+toward the Bash tool's clean baseline).
+
 ## [0.5.11] — 2026-05-16  ·  Autonomy — human-in-the-loop minimiser
 
 Closes the autonomous-agent UX gap surfaced in the user audit:
