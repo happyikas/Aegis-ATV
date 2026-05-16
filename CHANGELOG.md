@@ -4,6 +4,75 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.4] — 2026-05-15  ·  `memory claude-md --apply N` — auto-splice proposals
+
+v0.5.2 generated proposals; v0.5.4 closes the loop by **applying
+them in one command**. The natural follow-up flow becomes:
+
+```bash
+aegis memory claude-md              # see proposals
+aegis memory claude-md --apply 1    # splice proposal #1 (writes .bak)
+git diff CLAUDE.md                  # review
+git commit -m "docs: aegis-managed proposal #1"
+```
+
+### Added
+
+* **`--apply N`** — splice the Nth (1-indexed) proposal from the
+  current window into the project CLAUDE.md.
+  * If the proposal's `suggested_section` heading exists anywhere in
+    the file (case-insensitive substring match, **bidirectional** —
+    "Security" matches "Security Notes" and vice versa), the new
+    text lands immediately after that heading.
+  * Otherwise, a fresh `## <section>` block is appended at EOF.
+  * Stamped with an `<!-- aegis-managed-proposal: ... -->` HTML
+    marker carrying `kind`, `pattern`, `confidence` for downstream
+    traceability (markdown renderers ignore HTML comments — invisible
+    in rendered docs).
+* **`--no-bak`** — skip the `<CLAUDE.md>.bak` backup. By default,
+  the splicer writes the backup before mutating the file.
+
+### New public API
+
+* `apply_proposal(proposal, md_path, *, write_backup=True) -> ApplyResult`
+  in `aegis.context_memory.claude_md_proposals`.
+* `ApplyResult` dataclass: `md_path`, `bak_path`, `inserted_under`
+  (heading text or `"(appended new section)"`), `new_lines_added`.
+
+### Changed
+
+* The `aegis memory claude-md` output footer now reads
+  "_Auto-apply: `aegis memory claude-md --apply N` splices …_"
+  (previously: "_Apply manually for now…_").
+
+### Edge cases handled
+
+* Out-of-range N (e.g. `--apply 99` when there are 3 proposals)
+  prints a clear error + exits 1.
+* No proposals in window (--since too small, --min-count too high)
+  + `--apply` → exits 1 with a hint to widen the window.
+* Trailing newline of the original file is preserved.
+* `.bak` is written **before** the modification so an interrupted
+  apply leaves both copies recoverable.
+
+### Tests
+
+* `tests/unit/test_claude_md_proposals.py` — 6 new cases for
+  `apply_proposal`: insert under matching heading, append new
+  section when no match, case-insensitive bidirectional match,
+  `--no-bak`, trailing-newline preservation, marker metadata.
+* `tests/unit/test_cli_restructure_v05.py` — 4 new CLI cases for
+  `--apply`: happy path with .bak, --no-bak path, out-of-range,
+  empty-window.
+
+### Total
+
+* +10 new tests (3127 → 3137 passed, 13 skipped)
+* +1 source file modified (`tools/aegis_cli.py`)
+* `src/aegis/context_memory/claude_md_proposals.py` — +`ApplyResult`,
+  +`apply_proposal`, +`_find_section_insertion_point`,
+  +`_format_apply_marker`
+
 ## [0.5.3] — 2026-05-15  ·  Chore — Node 24 workflow opt-in + docs vocab refresh
 
 No code changes. Two infrastructure clean-ups so the v0.5 surface

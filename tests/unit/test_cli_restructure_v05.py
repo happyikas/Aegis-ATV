@@ -294,6 +294,157 @@ def test_memory_claude_md_returns_1_when_no_md_file(
     assert rc == 1
 
 
+def _write_cm_with_loop_signal(cm_path: Path, n: int = 5) -> None:
+    """Helper: write a synthetic ContextMemory with `n` loop-detector
+    events for the Bash tool. Used by --apply tests below to drive
+    the proposal generator deterministically."""
+    import json as _json
+    import time as _time
+
+    now_ns = _time.time_ns()
+    rows = [
+        {
+            "schema_version": 1,
+            "ts_ns": now_ns - i * 1_000_000,
+            "trace_id": f"trace-{i:03d}",
+            "invocation_id": "inv",
+            "aid": "aid",
+            "tenant_id": "local",
+            "tool_name": "Bash",
+            "decision": "REQUIRE_APPROVAL",
+            "reason": "same Bash call repeated 3 times this session (threshold=3)",
+            "channel": None, "provider": None,
+            "latency_ms": 10.0,
+            "cost_usd": 0.0, "tokens_in": 0, "tokens_out": 0,
+            "step_traces": {}, "m13_score": None,
+            "advisor_invoked": False, "recommended_advisors": [],
+            "atv_sha3": None, "atv_dim": 0,
+            "is_sidechain": False, "mode": "local",
+        }
+        for i in range(n)
+    ]
+    cm_path.write_text(
+        "\n".join(_json.dumps(r) for r in rows) + "\n", encoding="utf-8",
+    )
+
+
+def test_memory_claude_md_apply_splices_into_md(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--apply 1` writes the chosen proposal into CLAUDE.md and a
+    `.bak` copy of the original next to it."""
+    project = tmp_path / "project"
+    project.mkdir()
+    md = project / "CLAUDE.md"
+    md.write_text(
+        "# Project\n\n## Workflow Discipline\n\nUse small commits.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(project)
+
+    cm = tmp_path / "cm.jsonl"
+    _write_cm_with_loop_signal(cm)
+
+    args = aegis_cli.build_parser().parse_args([
+        "memory", "claude-md",
+        "--context-memory", str(cm),
+        "--apply", "1",
+    ])
+    rc = args.fn(args)
+    assert rc == 0
+
+    # CLAUDE.md was modified
+    new = md.read_text(encoding="utf-8")
+    assert "aegis-managed-proposal" in new
+    assert "kind=loop-detector" in new
+    # .bak preserves original
+    bak = project / "CLAUDE.md.bak"
+    assert bak.exists()
+    assert "aegis-managed-proposal" not in bak.read_text(encoding="utf-8")
+
+
+def test_memory_claude_md_apply_no_bak_skips_backup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    md = project / "CLAUDE.md"
+    md.write_text(
+        "# Project\n\n## Workflow Discipline\n\nUse small commits.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(project)
+
+    cm = tmp_path / "cm.jsonl"
+    _write_cm_with_loop_signal(cm)
+
+    args = aegis_cli.build_parser().parse_args([
+        "memory", "claude-md",
+        "--context-memory", str(cm),
+        "--apply", "1",
+        "--no-bak",
+    ])
+    rc = args.fn(args)
+    assert rc == 0
+    assert not (project / "CLAUDE.md.bak").exists()
+
+
+def test_memory_claude_md_apply_out_of_range_returns_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "CLAUDE.md").write_text(
+        "# Project\n\n## Workflow Discipline\n\nUse small commits.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(project)
+
+    cm = tmp_path / "cm.jsonl"
+    _write_cm_with_loop_signal(cm, n=5)  # 1 proposal
+
+    args = aegis_cli.build_parser().parse_args([
+        "memory", "claude-md",
+        "--context-memory", str(cm),
+        "--apply", "999",
+    ])
+    rc = args.fn(args)
+    assert rc == 1
+    # Original CLAUDE.md was NOT modified.
+    assert "aegis-managed-proposal" not in (
+        project / "CLAUDE.md"
+    ).read_text(encoding="utf-8")
+
+
+def test_memory_claude_md_apply_with_no_proposals_returns_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Empty window → nothing to apply → friendly error."""
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "CLAUDE.md").write_text(
+        "# Project\n", encoding="utf-8",
+    )
+    monkeypatch.chdir(project)
+
+    # ContextMemory exists but has zero loop events. The miners will
+    # produce no proposals; --apply 1 has nothing to act on.
+    cm = tmp_path / "cm.jsonl"
+    cm.write_text(
+        '{"ts_ns": 1700000000000000000, "decision": "ALLOW", '
+        '"reason": "", "tool_name": "Bash"}\n',
+        encoding="utf-8",
+    )
+
+    args = aegis_cli.build_parser().parse_args([
+        "memory", "claude-md",
+        "--context-memory", str(cm),
+        "--apply", "1",
+    ])
+    rc = args.fn(args)
+    assert rc == 1
+
+
 # ── top-level help banner ──────────────────────────────────────────
 
 

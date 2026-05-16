@@ -10,10 +10,13 @@ test file when an operator edits it under an active hook.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Final
 
 from aegis.context_memory.claude_md_proposals import (
+    ApplyResult,
     Proposal,
+    apply_proposal,
     propose_edits,
     render_proposals_markdown,
 )
@@ -358,3 +361,125 @@ def test_render_window_label_handles_sub_day() -> None:
         record_count=0,
     )
     assert "3h" in md
+
+
+# ── apply_proposal ─────────────────────────────────────────────────
+
+
+def _make_proposal(
+    *, section: str = "Workflow Discipline", text: str = "Do the thing."
+) -> Proposal:
+    return Proposal(
+        kind="loop-detector",
+        pattern="repeated X",
+        count=5,
+        suggested_section=section,
+        suggested_text=text,
+        rationale="Because.",
+        sample_trace_ids=(),
+        confidence="high",
+    )
+
+
+def test_apply_proposal_inserts_under_matching_heading(tmp_path):
+    """When the suggested section already exists as a heading, the
+    splice lands immediately after that heading and a .bak is
+    written."""
+    md = tmp_path / "CLAUDE.md"
+    md.write_text(
+        "# Project\n\n## Workflow Discipline\n\nUse small commits.\n\n## Other\n\nMisc.\n",
+        encoding="utf-8",
+    )
+    p = _make_proposal()
+    result = apply_proposal(p, md)
+
+    assert isinstance(result, ApplyResult)
+    assert result.bak_path is not None
+    assert Path(str(result.bak_path)).exists()
+    assert result.inserted_under == "Workflow Discipline"
+    assert result.new_lines_added > 0
+
+    new = md.read_text(encoding="utf-8")
+    # Splice landed AFTER the Workflow Discipline heading but BEFORE
+    # the existing "Use small commits" body — the standard insertion
+    # point is right after the heading line.
+    h_pos = new.index("## Workflow Discipline")
+    body_pos = new.index("Use small commits")
+    splice_pos = new.index("Do the thing.")
+    assert h_pos < splice_pos < body_pos
+    # Marker present + carries the kind for traceability.
+    assert "aegis-managed-proposal" in new
+    assert "kind=loop-detector" in new
+    # The "Other" section is untouched.
+    assert "## Other" in new and "Misc." in new
+
+
+def test_apply_proposal_appends_new_section_when_no_match(tmp_path):
+    """No matching heading → append `## <section>` block at EOF."""
+    md = tmp_path / "CLAUDE.md"
+    md.write_text("# Project\n\nNothing else.\n", encoding="utf-8")
+    p = _make_proposal(section="Brand New Section", text="Mind this.")
+    result = apply_proposal(p, md)
+
+    assert result.inserted_under == "(appended new section)"
+    new = md.read_text(encoding="utf-8")
+    assert "## Brand New Section" in new
+    assert "Mind this." in new
+    # New content is at the END of the file, not before the original.
+    assert new.index("Nothing else.") < new.index("## Brand New Section")
+
+
+def test_apply_proposal_case_insensitive_heading_match(tmp_path):
+    """Heading matching is case-insensitive substring — operators
+    won't always write the section label the same way we suggested."""
+    md = tmp_path / "CLAUDE.md"
+    md.write_text(
+        "# Project\n\n## Security\n\nWatch out.\n",
+        encoding="utf-8",
+    )
+    p = _make_proposal(section="Security Notes")
+    # The miner suggested "Security Notes" but the project has just
+    # "Security". Substring match should still find it.
+    result = apply_proposal(p, md)
+    assert result.inserted_under == "Security"
+
+
+def test_apply_proposal_no_bak_when_write_backup_false(tmp_path):
+    md = tmp_path / "CLAUDE.md"
+    md.write_text("# x\n\n## Section\n\nbody\n", encoding="utf-8")
+    p = _make_proposal(section="Section")
+    result = apply_proposal(p, md, write_backup=False)
+    assert result.bak_path is None
+    assert not (tmp_path / "CLAUDE.md.bak").exists()
+
+
+def test_apply_proposal_preserves_trailing_newline(tmp_path):
+    """If the original file ends with a newline, the new file should
+    too — otherwise diff tools complain. Same for no-trailing-newline
+    (we preserve the convention of the input)."""
+    md = tmp_path / "CLAUDE.md"
+    md.write_text("# x\n\n## Section\n\nbody\n", encoding="utf-8")
+    p = _make_proposal(section="Section")
+    apply_proposal(p, md)
+    assert md.read_text(encoding="utf-8").endswith("\n")
+
+
+def test_apply_proposal_marker_includes_metadata(tmp_path):
+    md = tmp_path / "CLAUDE.md"
+    md.write_text("# x\n\n## Section\n\nbody\n", encoding="utf-8")
+    p = Proposal(
+        kind="dangerous-pattern",
+        pattern="my-pattern",
+        count=7,
+        suggested_section="Section",
+        suggested_text="Avoid X.",
+        rationale="r",
+        sample_trace_ids=(),
+        confidence="medium",
+    )
+    apply_proposal(p, md)
+    new = md.read_text(encoding="utf-8")
+    assert "aegis-managed-proposal" in new
+    assert "kind=dangerous-pattern" in new
+    assert "pattern='my-pattern'" in new
+    assert "confidence=medium" in new
