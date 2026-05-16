@@ -4,6 +4,98 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.9] — 2026-05-16  ·  ActionAdvice sLLM brain (PR-ζ-head, production gap #3)
+
+Closes the third and final production gap from the v0.5.6 self-
+audit. The `ActionAdvice` dataclass has carried the full sLLM-
+ready schema since v2.5; up to v0.5.8 the *brain* generating
+those advices was always `compose_advice_heuristic` — a small
+template-based composer the module docstring explicitly marked
+as a placeholder ("PR-ζ-head will swap the body for an actual
+sLLM call"). This release ships that swap.
+
+### Added
+
+* **`src/aegis/judge/action_advice_sllm.py`** — sLLM composer +
+  umbrella `compose_advice()`.
+* **`compose_advice_sllm(...)`** — runs the heuristic composer
+  to get a baseline, then asks a configured sLLM to refine the
+  prose fields (`reason`, `next_action_hint`,
+  `alternative_tool`). Verdict-class fields stay heuristic.
+* **`compose_advice(prefer_sllm=None, ...)`** — umbrella entry
+  point. Picks sLLM vs heuristic based on `prefer_sllm` kwarg
+  → `AEGIS_ACTION_ADVICE_PROVIDER=sllm` env var → default
+  (heuristic, preserves v0.5.8 byte-for-byte).
+* **Default LLM-call adapter** — dispatches on
+  `AEGIS_JUDGE_PROVIDER`:
+    * `haiku` → Anthropic Haiku via the existing client
+    * `local-phi` / `phi` → llama-cpp `Llama` via
+      `_load_real_phi` (lazy GGUF load, cached)
+    * `hybrid` → Haiku when API key set, else Phi
+    * `dummy` / unset → `None` (fall back to heuristic)
+
+### Design decisions
+
+* **Heuristic-first, sLLM-enhanced.** The decision class
+  (ALLOW/BLOCK/REQUIRE_APPROVAL/DEFER), confidence,
+  cited_anomalies, cited_turns_rel, and recommended_advisors all
+  stay heuristic. Those fields have hard contracts + extensive CI
+  coverage; we don't want the LLM rewriting them. The sLLM only
+  touches *prose* fields (`reason`, `next_action_hint`,
+  `alternative_tool`). This also defends against
+  prompt-injection: an attacker who somehow biases the LLM
+  toward "ALLOW" can't actually flip the verdict — the parser
+  ignores any `decision` key in the response.
+
+* **No new Judge interface.** The sLLM call piggybacks on the
+  LLM client surface that `LocalPhiJudge` / `HaikuJudge` already
+  expose, bypassing the verdict-shaped `Judge.evaluate()`
+  contract. Keeps the public API surface stable.
+
+* **Opt-in.** `AEGIS_ACTION_ADVICE_PROVIDER` defaults to
+  heuristic so v0.5.8 audit replay byte-matches. Operators flip
+  the env var when they're ready.
+
+* **Defensive fallback at every layer:**
+    * No LLM available → heuristic
+    * LLM raises → heuristic (advisor sits on firewall hot path)
+    * Response unparseable → heuristic
+    * Response is non-object JSON → heuristic
+    * Response identical to baseline → heuristic
+    * String fields capped at 400 chars (defense against runaway
+      output)
+
+### Response parsing — robust to LLM quirks
+
+* Plain JSON: `{"reason": "..."}`
+* Markdown fence: ` ```json\\n{...}\\n``` `
+* Markdown fence (no lang tag): ` ```\\n{...}\\n``` `
+* Leading prose + JSON
+* Nested braces (balanced-brace walker)
+* All accepted by `_extract_json_blob()`.
+
+### Tests
+
+* `tests/unit/test_action_advice_sllm.py` — 27 cases:
+  prompt builder shape, JSON extraction (plain, fenced, prose-
+  wrapped, nested, empty), response parsing (partial fields,
+  null-string handling, malformed JSON, non-object, None,
+  no-op detection, runaway-string truncation), end-to-end
+  composer (LLM success, fallback on None/raise, decision-class
+  immutable against prompt injection), default LLM-call adapter
+  with dummy provider, umbrella (default heuristic, env opt-in,
+  kwarg overrides env, unknown env), audit-field preservation,
+  produced_at_ns timestamping.
+* Full sweep: 3203 → 3230 (+27).
+
+### Production-gap status — all closed
+
+| Gap (from v0.5.6 audit) | Status |
+|---|---|
+| ContextMemory rotation | ✅ v0.5.7 |
+| ATMU auto WAL replay on startup | ✅ v0.5.8 |
+| **ActionAdvice sLLM brain (PR-ζ-head)** | ✅ this release |
+
 ## [0.5.8] — 2026-05-16  ·  ATMU auto WAL replay on startup (production gap #2)
 
 Closes the second of three production gaps from the v0.5.6
