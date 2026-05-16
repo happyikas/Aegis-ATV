@@ -53,7 +53,15 @@ if TYPE_CHECKING:
 
 # Stable advisor kind tags. Adding a new advisor → append here +
 # update consumers (audit verifier, etc.).
-AdvisorKind = Literal["heuristic", "sllm-phi3", "sllm-haiku", "learned-head"]
+AdvisorKind = Literal[
+    "heuristic", "sllm-phi3", "sllm-haiku", "learned-head",
+    # v0.5.9 — generic sLLM tag used by compose_advice_sllm when the
+    # specific backend (phi/haiku) can't be determined at parse time.
+    # Audit consumers should treat this as "some sLLM enhanced the
+    # prose fields"; for byte-replay-precise pinning, prefer the
+    # specific tags above.
+    "sllm",
+]
 
 Decision = Literal["ALLOW", "BLOCK", "REQUIRE_APPROVAL", "DEFER"]
 
