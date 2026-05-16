@@ -792,6 +792,30 @@ def handle_pretool(stdin: Any, stdout: Any) -> int:
             if VERBOSE:
                 _emit(f"M12 escalation skipped: {e}")
 
+    # v0.5.13: step331 — autonomy bypass. Short-circuits when
+    # AEGIS_AUTONOMY_ENABLED is off (the operator's opt-in flag),
+    # so legacy installs see byte-identical behaviour. When
+    # enabled, downgrades a REQUIRE_APPROVAL whose (tool,
+    # reason_signature) is in the learned trust table to ALLOW
+    # + a permanent step_traces stamp; ε-greedy forced
+    # exploration still asks the human in a deterministic
+    # fraction of cases for drift / IPW coverage. Placed AFTER
+    # the M12 cost-divergence escalation so the bypass evaluates
+    # the *final* REQUIRE_APPROVAL signal, and BEFORE
+    # _atmu_finalize_intent so ATMU records the bypassed verdict.
+    try:
+        from aegis.autonomy import apply_autonomy_bypass
+
+        bypass_tool = event.get("tool_name", "") or inp.tool_name
+        verdict, _autonomy_av = apply_autonomy_bypass(
+            verdict,
+            tool_name=bypass_tool,
+            reason=verdict.reason or "",
+        )
+    except Exception as e:  # noqa: BLE001 — autonomy must never block
+        if VERBOSE:
+            _emit(f"autonomy bypass skipped: {e}")
+
     # M10 ATMU phase 1.5 — transition based on the (possibly M12-updated) verdict.
     _atmu_finalize_intent(intent_record_id, verdict.decision, verdict.reason or "")
 

@@ -4,6 +4,75 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.13] — 2026-05-16  ·  Autonomy runtime wiring (substrate activated)
+
+v0.5.11 + v0.5.12 shipped the entire autonomy substrate — the trust
+learner, runtime bypass shim, Bayesian backbone — but the
+production paths were never wired to call it. Setting
+`AEGIS_AUTONOMY_ENABLED=1` did nothing because no production code
+path invoked `apply_autonomy_bypass`. v0.5.13 closes that gap with
+two one-line wiring patches:
+
+* **`src/aegis/api/evaluate.py`** — sidecar `_evaluate_impl` now
+  calls `apply_autonomy_bypass(verdict, tool_name=..., reason=...)`
+  immediately after `run_firewall`. The bypass-stamped verdict
+  flows through step350 approval dispatch and step360 audit
+  signing so the bypass is reproducible from the audit log.
+* **`tools/aegis_local_hook.py`** — local hook calls the same shim
+  AFTER the M12 cost-divergence escalation (so the bypass
+  evaluates the *final* REQUIRE_APPROVAL signal, including
+  M12 upgrades) and BEFORE `_atmu_finalize_intent` (so ATMU
+  records the bypassed verdict). Wrapped in try/except — autonomy
+  must never block a tool call on error.
+
+Both wiring sites are byte-identical with v0.5.12 when the env
+flag is off: the shim short-circuits at the top and returns the
+verdict unchanged.
+
+### Tests
+
+`tests/integration/test_autonomy_wiring.py` — 5 new tests that
+hit the real FastAPI `POST /evaluate` route through the
+`aegis_app` fixture:
+
+1. **Default off** — without `AEGIS_AUTONOMY_ENABLED`, no step331
+   stamp ever appears in step_traces.
+2. **Bypass engages** — with a populated trust table + the loop
+   detector tripped on three identical Bash calls, the verdict
+   downgrades to ALLOW and the step331 stamp lands.
+3. **Never-trust filter holds** — a `dangerous_pattern` trust
+   entry is refused at runtime even if a stale trust table lists
+   it.
+4. **ε-greedy exploration** — with `AEGIS_AUTONOMY_EPSILON=0.5`,
+   at least one of 8 sessions stays REQUIRE_APPROVAL with the
+   explore stamp set.
+5. **Drift refusal** — `drifted=True` patterns are refused
+   regardless of trust score.
+
+Full suite: **3346 passed**, 13 skipped (5 new integration tests).
+Ruff + mypy clean (221 source files).
+
+### Migration
+
+Operators upgrading from v0.5.11 / v0.5.12 who built a trust
+table on disk see no behaviour change until they set the env
+flag. Wiring is **strictly additive** — no existing code path
+is altered when `AEGIS_AUTONOMY_ENABLED` is unset.
+
+The "moment" the autonomy module starts mattering is when an
+operator runs:
+
+```
+$ AEGIS_AUTONOMY_ENABLED=1 \
+  AEGIS_AUTONOMY_TRUST_TABLE=~/.aegis/autonomy/trust_table.json \
+  uv run aegis install --mode local   # or sidecar
+```
+
+…after which routine REQUIRE_APPROVAL patterns in the trust
+table get auto-bypassed (5% are still forced to the human for
+drift coverage via ε-greedy). Outliers surface through
+`aegis autonomy outliers` and (next PR) `aegis doctor`.
+
 ## [0.5.12] — 2026-05-16  ·  Autonomy Bayesian backbone (anti-overfitting)
 
 v0.5.11 shipped the human-in-the-loop minimiser as a point-estimate

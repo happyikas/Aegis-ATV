@@ -197,6 +197,22 @@ def _evaluate_impl(
     # Firewall 310..340 (pre-commit gate)
     verdict = run_firewall(atv, inp, atv_id=atv_id)
 
+    # v0.5.13: step331 — autonomy bypass. Short-circuits when
+    # AEGIS_AUTONOMY_ENABLED is off, so legacy installs see
+    # byte-identical behaviour. When enabled, downgrades a
+    # REQUIRE_APPROVAL whose (tool, reason_signature) is in the
+    # learned trust table to ALLOW + a permanent step_traces
+    # stamp. Drift / ε-greedy / never-trust filters are enforced
+    # inside the call (see :mod:`aegis.autonomy.runtime`). The
+    # stamped step_traces flow through to step360 audit signing
+    # below so the bypass is reproducible from the audit log.
+    from aegis.autonomy import apply_autonomy_bypass
+    verdict, _ = apply_autonomy_bypass(
+        verdict,
+        tool_name=inp.tool_name,
+        reason=verdict.reason or "",
+    )
+
     # M10: ATMU first transition — prepared (firewall passed) or aborted (block).
     # APPROVAL stays in TENTATIVE → PREPARED so the human can later commit.
     if intent_log is not None and intent_record_id:
