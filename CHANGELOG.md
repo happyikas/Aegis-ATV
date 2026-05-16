@@ -4,6 +4,116 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.11] — 2026-05-16  ·  Autonomy — human-in-the-loop minimiser
+
+Closes the autonomous-agent UX gap surfaced in the user audit:
+every REQUIRE_APPROVAL today interrupts the agent and asks the
+operator. For routine patterns the operator has seen + cleared
+many times, this becomes pure friction. v0.5.11 ships a burn-in
+trust learner + runtime bypass + outlier postmortem that lets
+the operator stay in the loop **only for non-routine events**,
+while every bypassed event is still permanently traced for audit.
+
+### Added
+
+* **`src/aegis/autonomy/`** package — learner + outlier detector
+  + runtime shim.
+
+  * `learner.py` — `learn_trusted_patterns()` mines the burn-in
+    window of ContextMemory and produces a trust table
+    `{(tool_name, reason_signature) → TrustedPattern}`. Three
+    safety gates:
+      1. `n_seen ≥ min_samples` (default 5).
+      2. `clean_rate ≥ min_clean_rate` (default 0.95) — pattern
+         is dropped if subsequent BLOCKs from the same aid
+         followed too often.
+      3. Never-trust filter — patterns whose reason contains
+         `dangerous pattern`, `rule:git_destructive`,
+         `rule:cloud_destructive`, `sensitive path`, or
+         `cumulative_dollars` are NEVER trusted even with high
+         sample count.
+    `evaluate_autonomy_request()` is the runtime query — returns
+    `AutonomyVerdict(auto_approve, matched_pattern, confidence,
+    reason, outlier_signals)`.
+
+  * `outliers.py` — `detect_outliers()` walks ContextMemory for
+    records carrying the `step331: auto-approved` step_traces
+    stamp and surfaces any that were followed by a BLOCK within
+    a `block_lookahead` (default 10) window from the same aid.
+    This is the postmortem signal — false-positive trust
+    patterns surface within a single session.
+
+  * `runtime.py` — `apply_autonomy_bypass(verdict, *,
+    tool_name, reason, trust_table=None)` is the Verdict shim.
+    When `AEGIS_AUTONOMY_ENABLED=1` and the verdict is
+    REQUIRE_APPROVAL and the trust table contains a high-trust
+    match (default ≥ 0.85), the verdict is downgraded to ALLOW
+    with a permanent stamp in `step_traces[aegis.autonomy
+    .step331.run]`. Otherwise the verdict is returned unchanged.
+    Trust table persists at `~/.aegis/autonomy/trust_table.json`.
+
+* **CLI** — `aegis autonomy {learn, show, outliers}`:
+  * `learn --since DURATION` — re-mine + save trust table.
+  * `show` — render current trust table + enabled status.
+  * `outliers --since DURATION` — postmortem walk.
+
+### Safety properties
+
+* **Off by default.** `AEGIS_AUTONOMY_ENABLED` unset →
+  `apply_autonomy_bypass` is a no-op; existing deployments see
+  byte-identical behavior. Operators opt in explicitly.
+* **Never-trust filter enforced twice.** Once at learning time
+  (the pattern never enters the table) and once at runtime
+  (even if a malicious / stale table contains it, the bypass is
+  refused).
+* **Every bypass is traceable.** The `step331` step_trace stamp
+  carries `tool=X signature=Y trust=0.92 (was REQUIRE_APPROVAL:
+  '...')` so audit replay re-derives the bypass decision.
+* **Outlier feedback loop closes within a session.** `aegis
+  autonomy outliers` (and the next-PR `aegis doctor` integration)
+  walks the recent window and surfaces any auto-approval that
+  was followed by a BLOCK. Trust patterns that turn out poorly
+  show up immediately, not weeks later.
+
+### Smoke (real local data — 5,960 ContextMemory records, 30d)
+
+```
+$ aegis autonomy learn --since 30d
+✓ autonomy trust table updated: ~/.aegis/autonomy/trust_table.json
+  records scanned:    5,960
+  patterns learned:   2
+  min_samples:        5
+  min_clean_rate:     0.95
+
+$ aegis autonomy show
+Autonomy bypass — 🟡 disabled
+  tool           signature                 seen  clean  trust
+  Bash           loop:Bash                  155   100%   1.00
+  Bash           cost-divergence             62   100%   1.00
+```
+
+Engaging the bypass would auto-approve 217 of the operator's
+REQUIRE_APPROVAL events in a 30-day window — a meaningful
+reduction in friction without losing audit visibility.
+
+### Tests
+
+* `tests/unit/test_autonomy.py` — 31 cases covering reason
+  signature canonicalisation, learner thresholds, never-trust
+  filter at both learning and runtime, trust table round-trip,
+  Verdict bypass (off / verdict-class filter / downgrade /
+  step_traces preservation), outlier detection (empty, clean,
+  flagged, lookahead bounds). Full sweep: 3258 → 3289.
+
+### Wiring (next PR)
+
+This PR ships the autonomy module + CLI but **does not** wire
+the bypass into `tools/aegis_local_hook.py` or `src/aegis/api/
+evaluate.py` yet. The hook-side wiring is a small follow-up
+that needs broader integration testing across all hook
+surfaces. The autonomy module is fully usable from Python today;
+the next PR will activate the runtime bypass via the env flag.
+
 ## [0.5.10] — 2026-05-16  ·  TripleAxisAdvisor — sLLM scene interpretation across 3 axes
 
 Closes the architectural gap the user audit surfaced: sLLM was
