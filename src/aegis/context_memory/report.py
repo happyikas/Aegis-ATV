@@ -18,7 +18,15 @@ identical bytes, modulo the embedded "Generated at" timestamp.
 from __future__ import annotations
 
 import datetime as _dt
+from dataclasses import dataclass, field
 
+# v0.5.14: import the autonomy outlier walker so `aegis doctor`
+# can surface auto-approval postmortems alongside its other
+# sections. The outliers module has zero side-effects at import
+# time and only depends on aegis.context_memory.record, so the
+# import is safe to keep at module top despite the cross-package
+# dependency.
+from aegis.autonomy.outliers import OutlierEvent, detect_outliers
 from aegis.context_memory.advisor import (
     Recommendation,
     cost_advice,
@@ -67,6 +75,7 @@ def render_doctor_report(
     c_stats = cost_stats(records)
     p_stats = performance_stats(records)
     s_stats = security_stats(records)
+    a_stats = autonomy_stats(records)
 
     parts: list[str] = []
     parts.append(_header(summary, since_seconds))
@@ -74,10 +83,113 @@ def render_doctor_report(
     parts.append(_cost_section(c_stats, cost_advice(c_stats)))
     parts.append(_performance_section(p_stats, performance_advice(p_stats)))
     parts.append(_security_section(s_stats, security_advice(s_stats)))
+    parts.append(_autonomy_section(a_stats))
     parts.append(_next_actions(c_stats, p_stats, s_stats))
     parts.append(_footer(summary, generated_at, context_memory_path_str))
 
     return "\n\n".join(parts).rstrip() + "\n"
+
+
+# ──────────────────────────────────────────────────────────────────
+# Autonomy section — v0.5.14 doctor postmortem integration
+# ──────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class AutonomyStats:
+    """Snapshot of autonomy activity in a doctor window.
+
+    ``n_bypass``  — records carrying the step331.run stamp
+                    (REQUIRE_APPROVAL auto-approved by trust)
+    ``n_explore`` — records carrying the step331.explore stamp
+                    (trusted pattern matched but ε-greedy forced
+                    the human back into the loop)
+    ``outliers``  — auto-approvals followed by a BLOCK within
+                    the lookahead window
+    ``n_records`` — total records in the window (denominator)
+    """
+
+    n_bypass: int = 0
+    n_explore: int = 0
+    outliers: tuple[OutlierEvent, ...] = field(default_factory=tuple)
+    n_records: int = 0
+
+
+def autonomy_stats(records: list[ContextMemoryRecord]) -> AutonomyStats:
+    """Compute the autonomy snapshot for the window.
+
+    Pure function: deterministic given the same records, no env
+    reads, no I/O. The doctor section calls this and renders the
+    output; tests assert against the dataclass directly."""
+    n_bypass = 0
+    n_explore = 0
+    for r in records:
+        traces = r.step_traces or {}
+        if "aegis.autonomy.step331.run" in traces:
+            n_bypass += 1
+        if "aegis.autonomy.step331.explore" in traces:
+            n_explore += 1
+    return AutonomyStats(
+        n_bypass=n_bypass,
+        n_explore=n_explore,
+        outliers=tuple(detect_outliers(records)),
+        n_records=len(records),
+    )
+
+
+def _autonomy_section(stats: AutonomyStats) -> str:
+    """Render the autonomy section. Stays silent (single-line
+    "no data") when the operator hasn't enabled autonomy — keeps
+    the report concise for default deployments."""
+    n_bypass = stats.n_bypass
+    n_explore = stats.n_explore
+    outliers = stats.outliers
+    n_records = stats.n_records
+
+    if n_bypass == 0 and n_explore == 0 and not outliers:
+        return (
+            "## 🤖 Autonomy (v0.5.13+)\n\n"
+            "_(autonomy disabled or no bypass events in this window)_"
+        )
+
+    bypass_pct = (n_bypass / n_records * 100.0) if n_records > 0 else 0.0
+    lines = [
+        "## 🤖 Autonomy (v0.5.13+)",
+        "",
+        f"- **자동 승인**: {n_bypass:,} 건 "
+        f"(전체의 {bypass_pct:.2f}%)",
+        f"- **강제 탐색 (ε-greedy)**: {n_explore:,} 건",
+    ]
+    if outliers:
+        lines.append(
+            f"- **⚠️ Outliers**: {len(outliers)} 건 "
+            f"(auto-approve 직후 BLOCK 발생)"
+        )
+        lines.append("")
+        lines.append("| trace_id | tool | bypass signature | follow-up BLOCK |")
+        lines.append("|---|---|---|---|")
+        for ev in outliers[:5]:
+            sig = (ev.bypass_stamp or "").split("signature=", 1)
+            sig_text = sig[1].split(" ")[0] if len(sig) > 1 else "?"
+            follow = ev.followup_block_reason or "(unknown)"
+            if len(follow) > 60:
+                follow = follow[:57] + "..."
+            lines.append(
+                f"| `{ev.trace_id[:16]}` | {ev.tool_name} | "
+                f"{sig_text} | {follow} |"
+            )
+        if len(outliers) > 5:
+            lines.append("")
+            lines.append(f"_(+{len(outliers) - 5} more — see `aegis autonomy outliers`)_")
+        lines.append("")
+        lines.append(
+            "**다음 액션**: 의심스러운 trace_id 에 대해 "
+            "`aegis autonomy deny <trace_id>` 실행 → "
+            "`aegis autonomy learn` 재실행으로 trust table 갱신."
+        )
+    else:
+        lines.append("- **Outliers**: 0 건 — clean window")
+    return "\n".join(lines)
 
 
 # ── section renderers ────────────────────────────────────────────
@@ -281,4 +393,4 @@ def _humanise_duration(seconds: int) -> str:
     return f"최근 {days:.1f} 일"
 
 
-__all__ = ["render_doctor_report"]
+__all__ = ["AutonomyStats", "autonomy_stats", "render_doctor_report"]

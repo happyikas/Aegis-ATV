@@ -7699,6 +7699,49 @@ def cmd_autonomy_outliers(args: argparse.Namespace) -> int:
     return 1 if events else 0
 
 
+def cmd_autonomy_deny(args: argparse.Namespace) -> int:
+    """``aegis autonomy deny <trace_id> [--note ...]`` — mark a
+    past REQUIRE_APPROVAL bypass as a mistake.
+
+    Writes one line to ``~/.aegis/autonomy/denials.jsonl``. The
+    next ``aegis autonomy learn`` reads the file and treats every
+    matching record as ``EXPLICIT_DENY`` — adding ``β += 10`` to
+    the pattern's Beta posterior. The strongest negative signal
+    available; one deny ≈ ten clean follow-ups.
+
+    The trace_id is the value the operator copied from
+    ``aegis autonomy outliers`` (the ``trace_id`` column) or
+    from the audit log. We do *not* verify that the trace exists
+    in ContextMemory at deny time — a deny entry for a trace_id
+    that hasn't been recorded yet is fine (the learner simply
+    ignores it). This lets the operator pre-deny known-bad
+    patterns before they re-occur."""
+    from aegis.autonomy import append_denial, denials_path
+
+    trace_id = getattr(args, "trace_id", "").strip()
+    if not trace_id:
+        print(_red("error: trace_id is required"), file=sys.stderr)
+        return 1
+    note = getattr(args, "note", None) or ""
+    path_override = getattr(args, "out", None)
+    target = Path(path_override) if path_override else denials_path()
+    try:
+        record = append_denial(trace_id, note=note, path=target)
+    except (OSError, ValueError) as e:
+        print(_red(f"error: deny failed: {e}"), file=sys.stderr)
+        return 1
+    print(_green(f"✓ deny recorded: {target}"))
+    print(f"  trace_id:           {record.trace_id}")
+    if record.note:
+        print(f"  note:               {record.note}")
+    print()
+    print(_yellow(
+        "  Run `aegis autonomy learn` to rebuild the trust table\n"
+        "  with this negative signal applied (β += 10)."
+    ))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="aegis",
@@ -9012,6 +9055,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="ContextMemory path override",
     )
     a_outliers.set_defaults(fn=cmd_autonomy_outliers)
+
+    a_deny = auto_sub.add_parser(
+        "deny",
+        help=(
+            "Mark a past auto-approval as a mistake. Appends to "
+            "~/.aegis/autonomy/denials.jsonl; the next "
+            "`aegis autonomy learn` treats the matching record as "
+            "EXPLICIT_DENY (β += 10 on the pattern's posterior)."
+        ),
+    )
+    a_deny.add_argument(
+        "trace_id",
+        help=(
+            "trace_id of the past REQUIRE_APPROVAL that shouldn't have "
+            "been auto-approved (copy from `aegis autonomy outliers` or "
+            "the audit log)"
+        ),
+    )
+    a_deny.add_argument(
+        "--note", type=str, default=None,
+        help="optional free-text note explaining why this was a mistake",
+    )
+    a_deny.add_argument(
+        "--out", type=str, default=None,
+        help=(
+            "denials file path override (default: "
+            "~/.aegis/autonomy/denials.jsonl)"
+        ),
+    )
+    a_deny.set_defaults(fn=cmd_autonomy_deny)
 
     # ── aegis doctor ─────────────────────────────────────────────
     dr = sub.add_parser(

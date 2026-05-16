@@ -4,6 +4,87 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.14] — 2026-05-16  ·  Explicit-deny CLI + doctor postmortem
+
+v0.5.12's Bayesian backbone wired the strongest negative-signal
+pathway — `EXPLICIT_DENY` worth β += 10 — but never gave the
+operator a way to *produce* the signal. v0.5.14 closes that loop
+with two complementary additions.
+
+### Item 1 — `aegis autonomy deny <trace_id>`
+
+A new CLI subcommand that lets the operator mark a past auto-
+approval as a mistake. One deny ≈ ten clean follow-ups on the
+pattern's posterior.
+
+* **`src/aegis/autonomy/denials.py`** — append-only JSONL log at
+  `~/.aegis/autonomy/denials.jsonl` (override via
+  `AEGIS_AUTONOMY_DENIALS`). `append_denial(trace_id, note=...)`
+  for the writer, `load_denial_trace_ids()` for the learner.
+  Defensive loader: missing file → empty set, malformed lines
+  skipped silently, never raises. A corrupted deny log can never
+  block training.
+* **`classify_record`** gains a `denied_trace_ids` kwarg.
+  A record whose trace_id is in the set is classified as
+  `EXPLICIT_DENY` regardless of the timeline followup — this is
+  the strongest negative signal we have.
+* **`learn_with_diagnostics`** accepts `denied_trace_ids` and
+  defaults to reading the on-disk log.
+* **`aegis autonomy deny <trace_id> [--note "reason"]`** — CLI
+  subcommand. Writes one line, echoes the persisted record,
+  prompts the operator to re-run `aegis autonomy learn`.
+
+Why a separate file rather than mutating ContextMemory? Because
+ContextMemory is append-only by audit contract — rewriting past
+records would invalidate the SHA3 hash chain that
+`aegis verify-audit` relies on. The deny log is operator metadata
+about past decisions and belongs in its own file.
+
+### Item 2 — `aegis doctor` autonomy section
+
+The standalone `aegis autonomy outliers` already existed for
+postmortem walks; v0.5.14 surfaces the same signal inside the
+periodic `aegis doctor` report so it lands in the same eyeballs
+that scan cost / performance / security.
+
+* **`src/aegis/context_memory/report.py`** — new `AutonomyStats`
+  dataclass + `autonomy_stats()` pure function counting bypass /
+  explore stamps and surfacing outliers. New `_autonomy_section`
+  renders a markdown subsection between Security and Next Actions.
+* When the window contains no autonomy activity, the section
+  collapses to a one-line "_(autonomy disabled or no bypass
+  events)_" so the report stays compact for default deployments.
+* When outliers are present, the section renders a markdown
+  table (trace_id, tool, bypass signature, follow-up BLOCK
+  reason) plus an action prompt:
+  ```
+  의심스러운 trace_id 에 대해 `aegis autonomy deny <trace_id>`
+  실행 → `aegis autonomy learn` 재실행으로 trust table 갱신.
+  ```
+
+### Tests
+
+17 new tests in `tests/unit/test_autonomy_denials.py`:
+
+* **Denial file** (6 tests) — create parent dirs, JSONL format,
+  empty trace_id rejected, missing file → empty set, malformed
+  lines skipped, round-trip via dataclass.
+* **classify_record** (3 tests) — denied returns EXPLICIT_DENY,
+  not denied returns CLEAN, denied overrides BLOCK_FOLLOWUP.
+* **learn_with_diagnostics** (2 tests) — explicit deny drops
+  pattern LCB, denials loaded from env-configured path.
+* **Doctor autonomy section** (6 tests) — empty window, bypass
+  + explore counts, outlier detection, report integration,
+  silent rendering, outlier table rendering.
+
+### Validation
+
+- `uv run ruff check .` → All checks passed
+- `uv run mypy src` → Success: no issues found in 222 source files
+- `uv run pytest -q` → **3363 passed**, 13 skipped (17 new)
+- Real local smoke: `aegis doctor --since 7d` renders the new
+  autonomy section; `aegis autonomy deny` writes a clean JSONL line.
+
 ## [0.5.13] — 2026-05-16  ·  Autonomy runtime wiring (substrate activated)
 
 v0.5.11 + v0.5.12 shipped the entire autonomy substrate — the trust
