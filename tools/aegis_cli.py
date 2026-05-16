@@ -7110,6 +7110,49 @@ def cmd_memory_claude_md(args: argparse.Namespace) -> int:
         min_count=min_count,
     )
 
+    # ── 3b. --apply N: short-circuit into the splicer ─────────
+    apply_n = getattr(args, "apply_n", None)
+    if apply_n is not None:
+        from aegis.context_memory.claude_md_proposals import apply_proposal
+        if not proposals:
+            print(_yellow(
+                "[memory claude-md --apply] no proposals to apply for "
+                f"the current window (--since {since_spec}, "
+                f"--min-count {min_count}). Nothing to do."
+            ))
+            return 1
+        if apply_n < 1 or apply_n > len(proposals):
+            print(_red(
+                f"error: --apply {apply_n} out of range "
+                f"(1..{len(proposals)})"
+            ), file=sys.stderr)
+            return 1
+        chosen = proposals[apply_n - 1]
+        write_bak = bool(getattr(args, "write_bak", True))
+        try:
+            result = apply_proposal(
+                chosen, found, write_backup=write_bak,
+            )
+        except OSError as e:
+            print(_red(f"error: apply failed: {e}"), file=sys.stderr)
+            return 1
+        print(_green(f"✓ applied proposal #{apply_n}: {chosen.pattern}"))
+        print(f"  kind:            {chosen.kind} ({chosen.confidence})")
+        print(f"  inserted under:  {result.inserted_under}")
+        print(f"  lines added:     {result.new_lines_added}")
+        if result.bak_path is not None:
+            print(f"  backup:          {result.bak_path}")
+        else:
+            print("  backup:          skipped (--no-bak)")
+        print()
+        print(_yellow(
+            "  Review with `git diff`; revert with "
+            f"`mv {result.bak_path} {result.md_path}` if needed."
+            if result.bak_path is not None
+            else "  Review with `git diff`."
+        ))
+        return 0
+
     # ── 4. Render + emit ───────────────────────────────────────
     md = render_proposals_markdown(
         proposals,
@@ -8511,6 +8554,25 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="ContextMemory path override (default: ~/.aegis/context_memory.jsonl)",
+    )
+    mm_md.add_argument(
+        "--apply",
+        dest="apply_n",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "splice proposal N (1-indexed) into the project "
+            "CLAUDE.md under its suggested section. A `.bak` of the "
+            "original is written next to it unless --no-bak is set."
+        ),
+    )
+    mm_md.add_argument(
+        "--no-bak",
+        dest="write_bak",
+        action="store_false",
+        default=True,
+        help="(with --apply N) skip writing the `.bak` backup file",
     )
     mm_md.set_defaults(fn=cmd_memory_claude_md)
 

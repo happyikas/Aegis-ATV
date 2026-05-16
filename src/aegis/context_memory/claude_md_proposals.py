@@ -1,11 +1,14 @@
-"""``aegis memory claude-md`` proposal generator (v0.5.2).
+"""``aegis memory claude-md`` proposal generator (v0.5.2 + v0.5.4).
 
 Pattern-mines recent BLOCK + REQUIRE_APPROVAL events from
 ContextMemory and proposes concrete, copy-pasteable CLAUDE.md edits.
+v0.5.4 adds :func:`apply_proposal` which splices the chosen proposal
+into the project CLAUDE.md (with a `.bak` of the original).
 
 The pitch: instead of telling an operator "your agent had 7 firewall
 hits", we tell them *exactly which two sentences to add to their
-CLAUDE.md* so the agent stops walking into the same wall.
+CLAUDE.md* so the agent stops walking into the same wall — and
+offer to splice it in one command.
 
 Heuristics (all tunable via ``min_count``):
 
@@ -26,9 +29,13 @@ Heuristics (all tunable via ``min_count``):
    *frequency* so operators know which rules CLAUDE.md doesn't yet
    explain.
 
-Output is markdown — operators paste it into a PR or `claude` chat
-and ask Claude to apply it. ``--apply`` is roadmapped for the next
-release; this module is intentionally read-only.
+Output is markdown (read-only) plus :func:`apply_proposal` for the
+one-command splice. The splicer locates the proposal's
+``suggested_section`` heading anywhere in the file
+(case-insensitive, bidirectional substring) and inserts immediately
+after; falls back to appending a new ``## <section>`` block at EOF.
+An HTML comment marker (``<!-- aegis-managed-proposal: ... -->``)
+stamps each splice for downstream traceability.
 
 Note on self-defense: prose strings reference destructive commands
 (`rm -rf`, the SQL drop-table verb). We compose those at module-load
@@ -501,16 +508,176 @@ def render_proposals_markdown(
     out.append("---")
     out.append("")
     out.append(
-        "_Apply manually for now: copy the suggested block into the "
-        "named section of your CLAUDE.md. Auto-apply (`--apply N`) is "
-        "roadmapped for the next release._"
+        "_Auto-apply: `aegis memory claude-md --apply N` splices "
+        "proposal **N** into the named section of your CLAUDE.md "
+        "(a `.bak` is created first; pass `--no-bak` to skip)._"
     )
     out.append("")
     return "\n".join(out)
 
 
+# ──────────────────────────────────────────────────────────────────
+# --apply N: splice the chosen proposal into CLAUDE.md
+# ──────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ApplyResult:
+    """Outcome of :func:`apply_proposal`. ``inserted_under`` reports
+    where the splice happened — the exact heading text when an
+    existing section matched, or ``"(appended new section)"`` when
+    we created a fresh ``## <section>`` block at the end of the
+    file."""
+
+    md_path: object
+    bak_path: object | None
+    inserted_under: str
+    new_lines_added: int
+
+
+# Marker we drop into the spliced block so a future operator (or
+# future Aegis) can recognise auto-applied content. Markdown
+# renderers ignore HTML comments, so this never shows up in any
+# rendered view.
+_APPLY_MARKER_PREFIX = "<!-- aegis-managed-proposal: "
+
+
+def _format_apply_marker(p: Proposal) -> str:
+    """Marker stamped above each auto-applied block. Includes the
+    miner kind, pattern, and confidence — enough metadata to find
+    + remove the splice later without parsing prose."""
+    return (
+        f"{_APPLY_MARKER_PREFIX}kind={p.kind} "
+        f"pattern={p.pattern!r} confidence={p.confidence} -->"
+    )
+
+
+def _find_section_insertion_point(
+    md_lines: list[str], section: str
+) -> int | None:
+    """Locate the line index *after* a heading whose text matches
+    ``section`` (case-insensitive substring match against the
+    heading-text portion of a ``#``-prefixed line).
+
+    Returns the line index of the FIRST blank line after the heading
+    — that's the natural splice point. Returns ``None`` if no
+    matching heading is found.
+
+    Match rule: any ATX heading (`#`, `##`, `###`, …) where the
+    heading text and ``section`` share a substring **in either
+    direction** — i.e. the heading is in the section or the section
+    is in the heading, after case-folding. Lenient on purpose; the
+    operator's headings won't always exactly match the miner's
+    suggested label ("Security" vs "Security Notes", "Workflow"
+    vs "Workflow Discipline").
+    """
+    needle = section.lower().strip()
+    if not needle:
+        return None
+    for i, line in enumerate(md_lines):
+        stripped = line.lstrip()
+        if not stripped.startswith("#"):
+            continue
+        # Strip the # marks + any leading whitespace from the heading
+        # text. Up to 6 hashes.
+        heading_text = stripped.lstrip("#").strip().lower()
+        if not heading_text:
+            continue
+        if needle in heading_text or heading_text in needle:
+            # Insertion point = first line after the heading. We
+            # don't try to find a "good" sub-position; appending
+            # right after the heading is the most predictable
+            # behavior and lets the operator re-order manually if
+            # they want.
+            return i + 1
+    return None
+
+
+def apply_proposal(
+    proposal: Proposal,
+    md_path: object,
+    *,
+    write_backup: bool = True,
+) -> ApplyResult:
+    """Splice ``proposal`` into the CLAUDE.md at ``md_path``.
+
+    Strategy:
+
+    * Read the existing file.
+    * Try to find the proposal's ``suggested_section`` as a heading
+      anywhere in the file (case-insensitive substring match — see
+      :func:`_find_section_insertion_point`).
+    * If found, splice the new text immediately after that heading.
+    * If not found, append a fresh ``## <section>`` block at the
+      end of the file.
+    * Stamp an ``aegis-managed-proposal`` HTML comment marker above
+      the new text so the splice is traceable.
+    * Write a ``<md_path>.bak`` copy of the original first unless
+      ``write_backup=False`` is passed.
+
+    Returns an :class:`ApplyResult` describing what changed.
+    """
+    from pathlib import Path as _Path
+
+    p_path = _Path(str(md_path))
+    original = p_path.read_text(encoding="utf-8")
+    lines = original.splitlines()
+
+    # Compose the splice block. Trailing blank line keeps the next
+    # section visually separated.
+    marker = _format_apply_marker(proposal)
+    splice_block = [
+        "",
+        marker,
+        proposal.suggested_text,
+        "",
+    ]
+
+    insert_at = _find_section_insertion_point(lines, proposal.suggested_section)
+    if insert_at is not None:
+        new_lines = lines[:insert_at] + splice_block + lines[insert_at:]
+        inserted_under = (
+            lines[insert_at - 1].lstrip("#").strip()
+            if insert_at > 0 else proposal.suggested_section
+        )
+    else:
+        # No matching section heading — append a new one at EOF.
+        # Add a blank line before the new heading if the file
+        # doesn't already end with one.
+        prefix: list[str] = []
+        if lines and lines[-1].strip():
+            prefix.append("")
+        new_section = [
+            f"## {proposal.suggested_section}",
+            *splice_block[1:],  # skip the leading "" we'd otherwise duplicate
+        ]
+        new_lines = lines + prefix + new_section
+        inserted_under = "(appended new section)"
+
+    new_text = "\n".join(new_lines)
+    # Preserve trailing-newline convention of the original file.
+    if original.endswith("\n") and not new_text.endswith("\n"):
+        new_text += "\n"
+
+    bak_path: object | None = None
+    if write_backup:
+        bak_path = p_path.with_suffix(p_path.suffix + ".bak")
+        _Path(str(bak_path)).write_text(original, encoding="utf-8")
+
+    p_path.write_text(new_text, encoding="utf-8")
+
+    return ApplyResult(
+        md_path=p_path,
+        bak_path=bak_path,
+        inserted_under=inserted_under,
+        new_lines_added=len(new_lines) - len(lines),
+    )
+
+
 __all__ = [
+    "ApplyResult",
     "Proposal",
+    "apply_proposal",
     "propose_edits",
     "render_proposals_markdown",
 ]
