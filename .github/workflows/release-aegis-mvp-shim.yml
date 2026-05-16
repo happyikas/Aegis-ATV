@@ -1,0 +1,115 @@
+name: release-aegis-mvp-shim
+
+# Tag-triggered publish of `aegis-mvp 0.4.1` — the deprecation shim
+# that surfaces a redirect ImportError when someone pins
+# `aegis-mvp==0.4.1` after the v0.5.0 rename to `aegis-atv`.
+#
+# The shim lives under `aegis-mvp-shim/` in this repo so the
+# canonical project (aegis-atv) and the deprecation shim stay
+# version-controlled together. This workflow only triggers on tags
+# of the shape `aegis-mvp-v*` — distinct from the `v*` tags that
+# drive `release-pypi.yml` for the main aegis-atv package.
+#
+# Authentication: PyPI Trusted Publisher for the `aegis-mvp` project.
+# Setup steps (one-time, before pushing the first aegis-mvp-v* tag):
+#
+#   1. https://pypi.org/manage/project/aegis-mvp/settings/publishing/
+#   2. Add a new publisher:
+#        Owner:               happyikas
+#        Repository:          Aegis-ATV
+#        Workflow filename:   release-aegis-mvp-shim.yml
+#        Environment name:    pypi-aegis-mvp
+#
+# Once configured, `git tag aegis-mvp-v0.4.1 && git push --tags` runs
+# this workflow → builds the shim wheel from `aegis-mvp-shim/` →
+# trusted-publisher OIDC → uploads to the `aegis-mvp` PyPI project.
+
+on:
+  push:
+    tags:
+      - "aegis-mvp-v*"
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Build only; skip PyPI upload."
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write   # required for trusted-publisher OIDC
+
+env:
+  # Node 24 opt-in — see release-pypi.yml for the deprecation
+  # rationale link.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build:
+    name: build aegis-mvp shim wheel + sdist
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: aegis-mvp-shim
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Verify tag version matches shim pyproject.toml
+        if: startsWith(github.ref, 'refs/tags/aegis-mvp-v')
+        run: |
+          tag_version="${GITHUB_REF#refs/tags/aegis-mvp-v}"
+          file_version=$(uv run python -c "import tomllib; print(tomllib.loads(open('pyproject.toml','rb').read().decode())['project']['version'])")
+          if [ "$tag_version" != "$file_version" ]; then
+            echo "::error::tag aegis-mvp-v$tag_version doesn't match shim pyproject.toml version $file_version"
+            exit 1
+          fi
+          echo "tag $tag_version matches aegis-mvp-shim/pyproject.toml — OK"
+
+      - name: Build (wheel + sdist)
+        run: uv build
+
+      - name: List artifacts
+        run: ls -lh dist/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-mvp-shim-dist
+          path: aegis-mvp-shim/dist/
+          retention-days: 7
+
+  publish:
+    name: publish aegis-mvp shim to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: |
+      startsWith(github.ref, 'refs/tags/aegis-mvp-v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.dry-run == false)
+    environment:
+      name: pypi-aegis-mvp
+      url: https://pypi.org/p/aegis-mvp
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: aegis-mvp-shim-dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Trusted publisher — see the one-time setup notes at the
+          # top of this file.
+          packages-dir: dist/
+          # Hard-fail on duplicate version (0.4.1 should only be
+          # uploaded once). If you need to re-cut the shim, bump to
+          # 0.4.2 in `aegis-mvp-shim/pyproject.toml`.
+          skip-existing: false
