@@ -382,6 +382,150 @@ def _mine_rule_violations(
 
 
 # ──────────────────────────────────────────────────────────────────
+# v0.5.5 — high-cost-tool + advisor-recommendation miners
+# ──────────────────────────────────────────────────────────────────
+
+# A tool that spent more than this much $ in the window is worth a
+# CLAUDE.md mention (cache / batch hint). 1¢ is intentionally low —
+# accumulated over many calls, even a "cheap" tool can become the
+# top-cost driver. Operators can re-tune via --min-cost-usd.
+_DEFAULT_TOOL_COST_THRESHOLD_USD: Final[float] = 0.01
+
+
+def _mine_high_cost_tools(
+    records: Iterable[ContextMemoryRecord],
+    *,
+    min_count: int,
+    min_total_usd: float = _DEFAULT_TOOL_COST_THRESHOLD_USD,
+) -> list[Proposal]:
+    """Surface tools whose cumulative cost in the window exceeds
+    ``min_total_usd``. The proposal suggests cache / batch hints —
+    the most actionable CLAUDE.md guidance is usually "before
+    calling this tool again, check if you can reuse a recent
+    result".
+
+    Two thresholds gate this miner:
+
+    * ``min_count`` — at least N calls of the tool in the window.
+      Single-call tool spikes are anomalies, not patterns; CLAUDE.md
+      can't help with one-shots.
+    * ``min_total_usd`` — at least $X in cumulative cost. Drops
+      free-tier tools (dummy embedder, local hooks) from the noise.
+    """
+    by_tool: dict[str, list[ContextMemoryRecord]] = defaultdict(list)
+    for r in records:
+        if r.cost_usd <= 0:
+            continue
+        # Only count records that actually executed (ALLOW) — BLOCKs
+        # don't charge cost, and REQUIRE_APPROVAL is operator-paused.
+        if r.decision != "ALLOW":
+            continue
+        by_tool[r.tool_name].append(r)
+
+    out: list[Proposal] = []
+    for tool, recs in by_tool.items():
+        if len(recs) < min_count:
+            continue
+        total = sum(r.cost_usd for r in recs)
+        if total < min_total_usd:
+            continue
+        # Build a confidence signal: more calls × more $ = more
+        # confident the pattern is worth documenting. Low-call high-$
+        # (e.g. a single expensive LLM call) flagged at medium; high-
+        # call high-$ flagged at high.
+        confidence = "high" if len(recs) >= 10 else "medium"
+        out.append(Proposal(
+            kind="high-cost-tool",
+            pattern=f"tool:{tool}",
+            count=len(recs),
+            suggested_section="Cost Discipline",
+            suggested_text=(
+                f"`{tool}` is one of the more expensive tools in this "
+                "project. Before calling it, check whether a recent "
+                "result is reusable; prefer batching multiple queries "
+                "into a single call when the API supports it."
+            ),
+            rationale=(
+                f"`{tool}` accumulated ${total:.4f} across {len(recs)} "
+                "ALLOW-ed calls in this window. Even a brief CLAUDE.md "
+                "guideline about caching / batching this tool tends to "
+                "halve the call-count on routine sessions."
+            ),
+            sample_trace_ids=tuple(r.trace_id for r in recs[:3]),
+            confidence=confidence,
+        ))
+    return out
+
+
+def _mine_advisor_recommendations(
+    records: Iterable[ContextMemoryRecord],
+    *,
+    min_count: int,
+) -> list[Proposal]:
+    """Roll up the ``recommended_advisors`` list across the window.
+
+    Each ATV record carries the advisors the sLLM judge thought were
+    relevant for that call (cost / cache / security / …). If the
+    same advisor was recommended N+ times, the project is repeatedly
+    hitting situations where that advisor's guidance applies —
+    CLAUDE.md should explain the project-specific take on that
+    advisor so the agent stops triggering it.
+
+    Confidence is medium across the board: advisor recommendations
+    are sLLM signals, not deterministic firewall hits.
+    """
+    by_advisor: Counter[str] = Counter()
+    by_advisor_traces: dict[str, list[str]] = defaultdict(list)
+    for r in records:
+        for a in r.recommended_advisors:
+            if not a:
+                continue
+            by_advisor[a] += 1
+            by_advisor_traces[a].append(r.trace_id)
+
+    out: list[Proposal] = []
+    for advisor, count in by_advisor.most_common():
+        if count < min_count:
+            continue
+        # Map advisor name to a CLAUDE.md section. Unknown advisors
+        # land under a generic "Project Guardrails" — operators will
+        # rename as appropriate.
+        section_map = {
+            "cost": "Cost Discipline",
+            "cache": "Cost Discipline",
+            "security": "Security Notes",
+            "performance": "Workflow Discipline",
+            "policy": "Project Guardrails",
+        }
+        # Heuristic: first matching keyword wins.
+        section = "Project Guardrails"
+        for keyword, sect in section_map.items():
+            if keyword in advisor.lower():
+                section = sect
+                break
+        out.append(Proposal(
+            kind="advisor-recommendation",
+            pattern=f"advisor:{advisor}",
+            count=count,
+            suggested_section=section,
+            suggested_text=(
+                f"The `{advisor}` advisor has been recommended on "
+                f"{count} recent calls. Inspect the latest recommendations "
+                f"with `aegis advise` and document the project-specific "
+                "take here so the agent stops triggering them."
+            ),
+            rationale=(
+                f"sLLM judge picked the `{advisor}` advisor on {count} "
+                "calls in this window — that's a project-specific signal "
+                "worth turning into explicit CLAUDE.md guidance."
+            ),
+            sample_trace_ids=tuple(by_advisor_traces[advisor][:3]),
+            confidence="medium",
+        ))
+    return out
+
+
+# ──────────────────────────────────────────────────────────────────
 # Public API
 # ──────────────────────────────────────────────────────────────────
 
@@ -391,6 +535,7 @@ def propose_edits(
     *,
     current_md_text: str | None = None,
     min_count: int = 3,
+    min_tool_cost_usd: float = _DEFAULT_TOOL_COST_THRESHOLD_USD,
 ) -> list[Proposal]:
     """Run all miners over the window and return sorted proposals.
 
@@ -398,6 +543,9 @@ def propose_edits(
     Proposals whose trigger (pattern / tool name / path) already
     appears in the markdown are filtered out — we don't want to
     suggest something the operator has already done.
+
+    ``min_tool_cost_usd`` gates the high-cost-tool miner only;
+    other miners use ``min_count`` exclusively.
 
     Sorting: highest ``priority_score`` first, ties broken by `kind`
     name (stable across runs). Operators read top-down and stop when
@@ -409,6 +557,12 @@ def propose_edits(
     proposals.extend(_mine_loop_detector(rec_list, min_count=min_count))
     proposals.extend(_mine_sensitive_paths(rec_list, min_count=min_count))
     proposals.extend(_mine_rule_violations(rec_list, min_count=min_count))
+    proposals.extend(_mine_high_cost_tools(
+        rec_list, min_count=min_count, min_total_usd=min_tool_cost_usd,
+    ))
+    proposals.extend(_mine_advisor_recommendations(
+        rec_list, min_count=min_count,
+    ))
 
     if current_md_text:
         normalised_md = current_md_text.lower()

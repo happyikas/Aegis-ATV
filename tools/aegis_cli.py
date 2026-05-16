@@ -7104,10 +7104,12 @@ def cmd_memory_claude_md(args: argparse.Namespace) -> int:
 
     # ── 3. Run miners ──────────────────────────────────────────
     min_count = int(getattr(args, "min_count", 3))
+    min_tool_cost = float(getattr(args, "min_tool_cost_usd", 0.01))
     proposals = propose_edits(
         records,
         current_md_text=md_text,
         min_count=min_count,
+        min_tool_cost_usd=min_tool_cost,
     )
 
     # ── 3b. --apply N: short-circuit into the splicer ─────────
@@ -8554,6 +8556,19 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="ContextMemory path override (default: ~/.aegis/context_memory.jsonl)",
+    )
+    mm_md.add_argument(
+        "--min-tool-cost-usd",
+        dest="min_tool_cost_usd",
+        type=float,
+        default=0.01,
+        metavar="USD",
+        help=(
+            "(high-cost-tool miner only) minimum cumulative $ a tool "
+            "must accumulate in the window to be surfaced. Default 0.01 "
+            "($0.01); raise to filter out cheap-but-frequent tools, "
+            "lower to surface them."
+        ),
     )
     mm_md.add_argument(
         "--apply",

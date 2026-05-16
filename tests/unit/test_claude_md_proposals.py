@@ -41,10 +41,12 @@ _PATH_SECRET_B: Final[str] = "/etc/" + "shadow"
 def _rec(
     *,
     decision: str,
-    reason: str,
+    reason: str = "",
     tool: str = "Bash",
     trace_id: str = "deadbeef",
     ts_ns: int = 1_700_000_000_000_000_000,
+    cost_usd: float = 0.0,
+    recommended_advisors: tuple[str, ...] = (),
 ) -> ContextMemoryRecord:
     """Minimal record factory with sensible defaults for the fields
     miners don't read. Keeps test cases short."""
@@ -60,13 +62,13 @@ def _rec(
         channel=None,
         provider=None,
         latency_ms=10.0,
-        cost_usd=0.0,
+        cost_usd=cost_usd,
         tokens_in=0,
         tokens_out=0,
         step_traces={},
         m13_score=None,
         advisor_invoked=False,
-        recommended_advisors=(),
+        recommended_advisors=recommended_advisors,
         atv_sha3=None,
         atv_dim=0,
         is_sidechain=False,
@@ -258,6 +260,170 @@ def test_rule_violation_decision_wording() -> None:
                   if p.pattern == "rule:bar")
     assert "blocks" in p_block.suggested_text.lower()
     assert "requires approval" in p_appr.suggested_text.lower()
+
+
+# ── high-cost-tool miner ───────────────────────────────────────────
+
+
+def test_high_cost_tool_surfaces_when_cumulative_above_threshold() -> None:
+    """A tool with cumulative cost above the threshold AND call-count
+    above min_count should surface as a high-cost-tool proposal."""
+    records = [
+        _rec(decision="ALLOW", tool="ExpensiveLLM", cost_usd=0.005,
+             trace_id=f"e{i}") for i in range(5)  # total = $0.025
+    ]
+    proposals = propose_edits(records, min_count=3)
+    cost_props = [p for p in proposals if p.kind == "high-cost-tool"]
+    assert len(cost_props) == 1
+    p = cost_props[0]
+    assert p.pattern == "tool:ExpensiveLLM"
+    assert p.count == 5
+    assert p.suggested_section == "Cost Discipline"
+
+
+def test_high_cost_tool_skips_below_dollar_threshold() -> None:
+    """Many calls but tiny total cost → below threshold → skip."""
+    records = [
+        _rec(decision="ALLOW", tool="CheapTool", cost_usd=0.0001,
+             trace_id=f"c{i}") for i in range(10)  # total = $0.001
+    ]
+    proposals = propose_edits(records, min_count=3)
+    assert [p for p in proposals if p.kind == "high-cost-tool"] == []
+
+
+def test_high_cost_tool_skips_block_and_approval() -> None:
+    """Only ALLOW records get charged. BLOCK + REQUIRE_APPROVAL
+    records (which carry cost_usd in some edge cases) must not feed
+    the high-cost-tool miner — the agent didn't actually pay for those."""
+    records = (
+        [_rec(decision="BLOCK", tool="X", cost_usd=1.00) for _ in range(5)]
+        + [_rec(decision="REQUIRE_APPROVAL", tool="X", cost_usd=1.00)
+           for _ in range(5)]
+    )
+    proposals = propose_edits(records, min_count=3)
+    assert [p for p in proposals if p.kind == "high-cost-tool"] == []
+
+
+def test_high_cost_tool_below_min_count_skipped() -> None:
+    """One expensive call ≠ pattern. Below min_count → skip even if
+    the single call is over the $-threshold."""
+    records = [
+        _rec(decision="ALLOW", tool="X", cost_usd=10.00, trace_id="big"),
+    ]
+    proposals = propose_edits(records, min_count=3)
+    assert [p for p in proposals if p.kind == "high-cost-tool"] == []
+
+
+def test_high_cost_tool_confidence_scales_with_call_count() -> None:
+    """≥10 calls = high confidence; fewer = medium."""
+    few = [
+        _rec(decision="ALLOW", tool="ToolA", cost_usd=0.01, trace_id=f"a{i}")
+        for i in range(5)  # 5 calls × $0.01 = $0.05
+    ]
+    many = [
+        _rec(decision="ALLOW", tool="ToolB", cost_usd=0.01, trace_id=f"b{i}")
+        for i in range(12)
+    ]
+    p_few = next(p for p in propose_edits(few, min_count=3)
+                 if p.pattern == "tool:ToolA")
+    p_many = next(p for p in propose_edits(many, min_count=3)
+                  if p.pattern == "tool:ToolB")
+    assert p_few.confidence == "medium"
+    assert p_many.confidence == "high"
+
+
+def test_high_cost_tool_custom_threshold_via_propose_edits() -> None:
+    """`min_tool_cost_usd` raises the $-threshold for the high-cost
+    miner only — other miners are unaffected."""
+    records = [
+        _rec(decision="ALLOW", tool="X", cost_usd=0.05, trace_id=f"x{i}")
+        for i in range(5)  # total = $0.25
+    ]
+    # Default 0.01 threshold → fires.
+    assert any(
+        p.kind == "high-cost-tool"
+        for p in propose_edits(records, min_count=3)
+    )
+    # Custom $1.00 threshold → suppressed.
+    assert not any(
+        p.kind == "high-cost-tool"
+        for p in propose_edits(
+            records, min_count=3, min_tool_cost_usd=1.0,
+        )
+    )
+
+
+# ── advisor-recommendation miner ───────────────────────────────────
+
+
+def test_advisor_recommendation_rolls_up_by_advisor_name() -> None:
+    records = (
+        [_rec(decision="ALLOW", recommended_advisors=("cost-watcher",),
+              trace_id=f"c{i}") for i in range(5)]
+        + [_rec(decision="ALLOW", recommended_advisors=("security-reviewer",),
+                trace_id=f"s{i}") for i in range(3)]
+    )
+    proposals = propose_edits(records, min_count=3)
+    adv = [p for p in proposals if p.kind == "advisor-recommendation"]
+    assert len(adv) == 2
+    by_pattern = {p.pattern: p for p in adv}
+    assert by_pattern["advisor:cost-watcher"].count == 5
+    assert by_pattern["advisor:security-reviewer"].count == 3
+
+
+def test_advisor_recommendation_below_threshold_skipped() -> None:
+    records = [
+        _rec(decision="ALLOW", recommended_advisors=("rare-advisor",))
+        for _ in range(2)
+    ]
+    assert [p for p in propose_edits(records, min_count=3)
+            if p.kind == "advisor-recommendation"] == []
+
+
+def test_advisor_recommendation_section_keyword_routing() -> None:
+    """The advisor name's keyword determines which CLAUDE.md section
+    to suggest. cost-* → Cost Discipline, security-* → Security
+    Notes, etc."""
+    records = (
+        [_rec(decision="ALLOW", recommended_advisors=("cost-budget-watcher",),
+              trace_id=f"c{i}") for i in range(3)]
+        + [_rec(decision="ALLOW", recommended_advisors=("security-pii",),
+                trace_id=f"s{i}") for i in range(3)]
+        + [_rec(decision="ALLOW", recommended_advisors=("zzz-uncategorised",),
+                trace_id=f"z{i}") for i in range(3)]
+    )
+    by_advisor = {p.pattern: p for p in propose_edits(records, min_count=3)
+                  if p.kind == "advisor-recommendation"}
+    assert by_advisor["advisor:cost-budget-watcher"].suggested_section == "Cost Discipline"
+    assert by_advisor["advisor:security-pii"].suggested_section == "Security Notes"
+    assert by_advisor["advisor:zzz-uncategorised"].suggested_section == "Project Guardrails"
+
+
+def test_advisor_recommendation_multiple_advisors_per_record() -> None:
+    """A single record can carry multiple advisors in the tuple —
+    each one counts."""
+    records = [
+        _rec(decision="ALLOW",
+             recommended_advisors=("a", "b"), trace_id=f"t{i}")
+        for i in range(3)
+    ]
+    advs = [p for p in propose_edits(records, min_count=3)
+            if p.kind == "advisor-recommendation"]
+    # Both "a" and "b" surface — each fired 3 times across the 3 records.
+    assert {p.pattern for p in advs} == {"advisor:a", "advisor:b"}
+
+
+def test_advisor_recommendation_ignores_empty_strings() -> None:
+    """Empty string advisor names (defensive against bad data) are
+    skipped silently."""
+    records = [
+        _rec(decision="ALLOW",
+             recommended_advisors=("", "real-advisor"), trace_id=f"t{i}")
+        for i in range(3)
+    ]
+    advs = [p for p in propose_edits(records, min_count=3)
+            if p.kind == "advisor-recommendation"]
+    assert {p.pattern for p in advs} == {"advisor:real-advisor"}
 
 
 # ── dedup against current CLAUDE.md ────────────────────────────────
