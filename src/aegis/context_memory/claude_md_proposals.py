@@ -828,10 +828,162 @@ def apply_proposal(
     )
 
 
+# ──────────────────────────────────────────────────────────────────
+# v0.5.6 — `aegis memory diff`: reverse-lookup applied proposals
+# ──────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class AppliedProposal:
+    """One previously-spliced proposal recovered from CLAUDE.md.
+
+    The marker we drop on splice (``<!-- aegis-managed-proposal:
+    kind=... pattern=... confidence=... -->``) carries the metadata
+    we need to reconstruct an audit trail. ``body`` is the actual
+    text that was spliced in, ``section`` is the heading the body
+    landed under (or ``"(top-level)"`` if no heading was above the
+    marker).
+    """
+
+    kind: str
+    pattern: str
+    confidence: str
+    section: str
+    body: str
+    line_number: int   # 1-indexed for git/editor parity
+
+
+# Marker regex. The marker is single-line HTML comment with named
+# fields. We anchor on the unique prefix + parse with a lenient
+# pattern so future marker fields don't break older diff readers.
+_MARKER_RE: Final[re.Pattern[str]] = re.compile(
+    r"<!--\s*aegis-managed-proposal:\s*"
+    r"kind=(?P<kind>\S+)\s+"
+    r"pattern=(?P<pattern>'[^']*'|\"[^\"]*\"|\S+)\s+"
+    r"confidence=(?P<confidence>\w+)\s*-->"
+)
+
+
+def _strip_quotes(s: str) -> str:
+    """Marker pattern field is shell-style quoted; strip outer
+    quotes if present. Defensive — handles old markers that may
+    have used a different quoting style."""
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"'):
+        return s[1:-1]
+    return s
+
+
+def extract_applied_proposals(md_text: str) -> list[AppliedProposal]:
+    """Parse CLAUDE.md content and return every aegis-managed splice.
+
+    Walking algorithm:
+
+    * Track the current section heading as we descend the file.
+    * On each marker line, capture the surrounding context:
+      - the heading we're currently under (defaults to
+        ``"(top-level)"``);
+      - the body lines after the marker, up to the next marker /
+        next ATX heading / blank-line-then-EOF.
+    * Each marker becomes one ``AppliedProposal``.
+
+    Returns proposals in file order (top-to-bottom). The CLI
+    ``aegis memory diff`` renders them as a list.
+    """
+    lines = md_text.splitlines()
+    current_section = "(top-level)"
+    out: list[AppliedProposal] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.lstrip()
+        # Heading update — note we DON'T treat the marker line as a
+        # heading change, only ATX headings.
+        if stripped.startswith("#") and not stripped.startswith("<!--"):
+            current_section = stripped.lstrip("#").strip() or "(empty heading)"
+            i += 1
+            continue
+        m = _MARKER_RE.search(line)
+        if m is None:
+            i += 1
+            continue
+        # Capture body: lines immediately after the marker, up to
+        # the first blank line (which `--apply` emits as a paragraph
+        # separator between the marker block and surrounding text).
+        # Also bound by the next marker / next heading as defensive
+        # stops for hand-edited or older-format markers.
+        body_lines: list[str] = []
+        j = i + 1
+        while j < len(lines):
+            next_line = lines[j]
+            ns = next_line.lstrip()
+            if not next_line.strip():
+                # Blank line — end of body. Skip the blank and stop.
+                j += 1
+                break
+            if ns.startswith("#"):
+                break
+            if _MARKER_RE.search(next_line):
+                break
+            body_lines.append(next_line)
+            j += 1
+
+        out.append(AppliedProposal(
+            kind=m.group("kind"),
+            pattern=_strip_quotes(m.group("pattern")),
+            confidence=m.group("confidence"),
+            section=current_section,
+            body="\n".join(body_lines),
+            line_number=i + 1,
+        ))
+        i = j
+    return out
+
+
+def render_diff_text(
+    applied: list[AppliedProposal],
+    *,
+    md_path: object | None = None,
+) -> str:
+    """Plain-text rendering of the diff list — git-log-like, one
+    block per applied proposal. Operators read top-down."""
+    out: list[str] = []
+    if md_path is not None:
+        out.append(f"aegis memory diff — {md_path}")
+        out.append("=" * 60)
+    if not applied:
+        out.append("No aegis-managed proposals found yet.")
+        out.append("")
+        out.append(
+            "Run `aegis memory claude-md` to see proposals, then "
+            "`aegis memory claude-md --apply N` to splice one."
+        )
+        return "\n".join(out)
+
+    out.append(f"{len(applied)} applied proposal(s):")
+    out.append("")
+    for i, a in enumerate(applied, start=1):
+        out.append(
+            f"#{i}  [{a.kind} · {a.confidence}]  "
+            f"{a.pattern}"
+        )
+        out.append(f"    section: {a.section}   line {a.line_number}")
+        if a.body:
+            # Indent the body two spaces under "    body:" so a
+            # multi-line proposal stays visually grouped.
+            for j, body_line in enumerate(a.body.splitlines()):
+                prefix = "    body:  " if j == 0 else "           "
+                out.append(f"{prefix}{body_line}")
+        out.append("")
+    return "\n".join(out)
+
+
 __all__ = [
+    "AppliedProposal",
     "ApplyResult",
     "Proposal",
     "apply_proposal",
+    "extract_applied_proposals",
     "propose_edits",
+    "render_diff_text",
     "render_proposals_markdown",
 ]

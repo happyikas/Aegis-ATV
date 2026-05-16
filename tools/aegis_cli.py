@@ -7210,6 +7210,67 @@ def cmd_memory_claude_md(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_memory_diff(args: argparse.Namespace) -> int:
+    """``aegis memory diff`` — reverse-lookup of previously-applied
+    proposals in the project CLAUDE.md.
+
+    Walks the file looking for ``<!-- aegis-managed-proposal: ... -->``
+    markers (stamped by ``--apply``), reconstructs the metadata, and
+    prints a git-log-like list with kind / pattern / confidence /
+    section / line / body.
+
+    Flags:
+      --claude-md PATH   CLAUDE.md / AGENTS.md path override
+      --json             emit JSON (one object per applied proposal)
+                         instead of plain text — handy for piping to
+                         `jq` or stamping into a CI artifact.
+    """
+    from dataclasses import asdict
+
+    from aegis.context_memory.claude_md_proposals import (
+        extract_applied_proposals,
+        render_diff_text,
+    )
+
+    # Resolve target file. Explicit override wins; otherwise we look
+    # for CLAUDE.md then AGENTS.md in cwd (same precedence as
+    # `memory claude-md`).
+    override = getattr(args, "claude_md_path", None)
+    if override:
+        found: Path | None = Path(override)
+        if not found.exists():
+            print(_red(f"error: {found} does not exist"), file=sys.stderr)
+            return 1
+    else:
+        candidates = [Path.cwd() / "CLAUDE.md", Path.cwd() / "AGENTS.md"]
+        found = next((p for p in candidates if p.exists()), None)
+        if found is None:
+            print(_yellow(
+                "[memory diff] no CLAUDE.md / AGENTS.md found in cwd."
+            ))
+            return 1
+
+    try:
+        md_text = found.read_text(encoding="utf-8")
+    except OSError as e:
+        print(_red(f"error: {found} read failed: {e}"), file=sys.stderr)
+        return 1
+
+    applied = extract_applied_proposals(md_text)
+
+    if getattr(args, "emit_json", False):
+        payload = {
+            "claude_md": str(found),
+            "applied_count": len(applied),
+            "applied": [asdict(a) for a in applied],
+        }
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+
+    print(render_diff_text(applied, md_path=found))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="aegis",
@@ -8590,6 +8651,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="(with --apply N) skip writing the `.bak` backup file",
     )
     mm_md.set_defaults(fn=cmd_memory_claude_md)
+
+    mm_diff = mm_sub.add_parser(
+        "diff",
+        help=(
+            "Show previously-applied `memory claude-md --apply` "
+            "proposals — reverse-lookup of the aegis-managed-proposal "
+            "markers in CLAUDE.md."
+        ),
+    )
+    mm_diff.add_argument(
+        "--claude-md",
+        dest="claude_md_path",
+        type=str,
+        default=None,
+        help="CLAUDE.md path override (default: ./CLAUDE.md or ./AGENTS.md)",
+    )
+    mm_diff.add_argument(
+        "--json",
+        dest="emit_json",
+        action="store_true",
+        help="emit JSON instead of plain text (for piping into jq)",
+    )
+    mm_diff.set_defaults(fn=cmd_memory_diff)
 
     # `memory case <build|import|status>` is convenient alias for the
     # case-memory training command — it lives under coach (training)

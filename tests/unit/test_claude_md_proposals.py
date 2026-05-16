@@ -14,10 +14,13 @@ from pathlib import Path
 from typing import Final
 
 from aegis.context_memory.claude_md_proposals import (
+    AppliedProposal,
     ApplyResult,
     Proposal,
     apply_proposal,
+    extract_applied_proposals,
     propose_edits,
+    render_diff_text,
     render_proposals_markdown,
 )
 from aegis.context_memory.record import ContextMemoryRecord
@@ -649,3 +652,145 @@ def test_apply_proposal_marker_includes_metadata(tmp_path):
     assert "kind=dangerous-pattern" in new
     assert "pattern='my-pattern'" in new
     assert "confidence=medium" in new
+
+
+# ── extract_applied_proposals + render_diff_text ───────────────────
+
+
+def test_extract_applied_recovers_marker_metadata():
+    """The marker stamped by apply_proposal should round-trip
+    through extract_applied_proposals — kind, pattern, confidence,
+    section, and body all come back intact."""
+    md = (
+        "# Project\n"
+        "\n"
+        "## Workflow Discipline\n"
+        "\n"
+        "<!-- aegis-managed-proposal: kind=loop-detector "
+        "pattern='repeated Bash' confidence=high -->\n"
+        "Stop and reconsider when calling Bash 3x in a row.\n"
+        "\n"
+        "Pre-existing content here.\n"
+    )
+    applied = extract_applied_proposals(md)
+    assert len(applied) == 1
+    a = applied[0]
+    assert isinstance(a, AppliedProposal)
+    assert a.kind == "loop-detector"
+    assert a.pattern == "repeated Bash"
+    assert a.confidence == "high"
+    assert a.section == "Workflow Discipline"
+    assert a.body == "Stop and reconsider when calling Bash 3x in a row."
+    # Body STOPS at the blank line — doesn't include the pre-existing
+    # paragraph below.
+    assert "Pre-existing" not in a.body
+
+
+def test_extract_applied_multiple_markers_under_different_sections():
+    md = (
+        "# Project\n"
+        "## Workflow Discipline\n"
+        "<!-- aegis-managed-proposal: kind=loop-detector "
+        "pattern='X' confidence=high -->\n"
+        "Body A.\n"
+        "\n"
+        "## Security Notes\n"
+        "<!-- aegis-managed-proposal: kind=dangerous-pattern "
+        "pattern='Y' confidence=medium -->\n"
+        "Body B.\n"
+    )
+    applied = extract_applied_proposals(md)
+    assert len(applied) == 2
+    assert applied[0].section == "Workflow Discipline"
+    assert applied[0].pattern == "X"
+    assert applied[0].body == "Body A."
+    assert applied[1].section == "Security Notes"
+    assert applied[1].pattern == "Y"
+    assert applied[1].confidence == "medium"
+    assert applied[1].body == "Body B."
+
+
+def test_extract_applied_no_markers_returns_empty():
+    md = "# Project\n\nNo aegis marks here.\n"
+    assert extract_applied_proposals(md) == []
+
+
+def test_extract_applied_marker_before_any_heading():
+    """A marker spliced before any heading lands under the
+    sentinel `(top-level)` section. Defensive — apply_proposal
+    always splices under a heading, but old / hand-edited CLAUDE.md
+    files may put a marker at the very top."""
+    md = (
+        "<!-- aegis-managed-proposal: kind=rule-violation "
+        "pattern='rule:foo' confidence=medium -->\n"
+        "Body up top.\n"
+    )
+    applied = extract_applied_proposals(md)
+    assert len(applied) == 1
+    assert applied[0].section == "(top-level)"
+
+
+def test_extract_applied_double_quoted_pattern():
+    """The regex accepts single- or double-quoted pattern strings.
+    The quote choice is invisible after parsing."""
+    md_double = (
+        "## S\n"
+        "<!-- aegis-managed-proposal: kind=k "
+        "pattern=\"with spaces\" confidence=low -->\n"
+        "body\n"
+    )
+    md_single = md_double.replace('"with spaces"', "'with spaces'")
+    a1 = extract_applied_proposals(md_double)
+    a2 = extract_applied_proposals(md_single)
+    assert a1[0].pattern == "with spaces"
+    assert a2[0].pattern == "with spaces"
+
+
+def test_extract_applied_round_trip_with_apply_proposal(tmp_path):
+    """End-to-end: apply_proposal writes a marker, extract reads it
+    back. The exact pattern + confidence + body must round-trip."""
+    md = tmp_path / "CLAUDE.md"
+    md.write_text(
+        "# Project\n\n## Workflow Discipline\n\nbody\n", encoding="utf-8",
+    )
+    p = Proposal(
+        kind="loop-detector",
+        pattern="repeated Bash",
+        count=5,
+        suggested_section="Workflow Discipline",
+        suggested_text="If you call Bash 3x in a row, stop.",
+        rationale="r",
+        sample_trace_ids=(),
+        confidence="high",
+    )
+    apply_proposal(p, md)
+    applied = extract_applied_proposals(md.read_text(encoding="utf-8"))
+    assert len(applied) == 1
+    assert applied[0].kind == "loop-detector"
+    assert applied[0].pattern == "repeated Bash"
+    assert applied[0].confidence == "high"
+    assert applied[0].section == "Workflow Discipline"
+    assert applied[0].body == "If you call Bash 3x in a row, stop."
+
+
+def test_render_diff_text_empty_shows_hint():
+    out = render_diff_text([], md_path="/path/CLAUDE.md")
+    assert "No aegis-managed proposals" in out
+    assert "/path/CLAUDE.md" in out
+    assert "aegis memory claude-md" in out  # hint to next step
+
+
+def test_render_diff_text_lists_entries():
+    a = AppliedProposal(
+        kind="loop-detector", pattern="repeated Bash",
+        confidence="high", section="Workflow Discipline",
+        body="line1\nline2", line_number=5,
+    )
+    out = render_diff_text([a], md_path="/x")
+    assert "#1" in out
+    assert "loop-detector" in out
+    assert "repeated Bash" in out
+    assert "Workflow Discipline" in out
+    assert "line 5" in out
+    # Multi-line body is preserved (both line1 and line2 appear).
+    assert "line1" in out and "line2" in out

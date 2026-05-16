@@ -4,6 +4,56 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.6] — 2026-05-16  ·  `aegis memory diff` — applied-proposal history
+
+Closes the proposal lifecycle loop. v0.5.2 *generated* proposals,
+v0.5.4 *applied* them, v0.5.6 *audits* what's been applied so far.
+
+### Added
+
+* **`aegis memory diff`** — walks the project CLAUDE.md, finds
+  every ``<!-- aegis-managed-proposal: ... -->`` marker stamped by
+  ``--apply``, and prints a git-log-like list with kind, pattern,
+  confidence, section, line number, and body.
+* **`--json`** — emit a structured JSON payload (one object per
+  applied proposal) for piping into `jq` or CI artifacts.
+* **`--claude-md PATH`** — file path override; same precedence as
+  ``aegis memory claude-md``.
+
+### New public API in `aegis.context_memory.claude_md_proposals`
+
+* `AppliedProposal(kind, pattern, confidence, section, body,
+  line_number)` — dataclass for one recovered splice.
+* `extract_applied_proposals(md_text) -> list[AppliedProposal]` —
+  parses CLAUDE.md text and returns markers in file order. Tracks
+  the surrounding heading; falls back to `"(top-level)"` for
+  markers before any heading. Body capture stops at the first
+  blank line (matching the spacing `--apply` emits), so the
+  reverse-lookup doesn't pick up pre-existing prose that happens
+  to sit below.
+* `render_diff_text(applied, *, md_path=None) -> str` — plain-text
+  rendering for the CLI default output.
+
+### End-to-end roundtrip
+
+`apply_proposal()` writes a marker → `extract_applied_proposals()`
+reads it back. Kind, pattern, confidence, section, and body all
+round-trip intact. Test
+`test_extract_applied_round_trip_with_apply_proposal` locks this
+invariant.
+
+### Tests
+
+* `tests/unit/test_claude_md_proposals.py` — 8 new module tests:
+  metadata recovery, multi-marker / multi-section, no-marker, marker
+  before any heading (top-level fallback), quote-style flexibility
+  (single + double), apply→extract round-trip, empty render hint,
+  populated render contract.
+* `tests/unit/test_cli_restructure_v05.py` — 4 new CLI tests:
+  basic happy path, `--json` emits parseable payload, missing
+  CLAUDE.md returns 1, `--claude-md PATH` override.
+* Total: 3148 → 3160 (+12).
+
 ## [0.5.5] — 2026-05-16  ·  Two more `memory claude-md` miners
 
 Grows the miner count from 4 → 6. New surfaces cover *cost* and
