@@ -7487,13 +7487,18 @@ def cmd_autonomy_learn(args: argparse.Namespace) -> int:
     """``aegis autonomy learn`` — mine the burn-in window and write
     the trust table to disk.
 
-    The trust table is what the runtime bypass consults — see
-    ``aegis autonomy show`` to inspect the current table.
+    v0.5.12: uses the full Bayesian diagnostics path
+    (:func:`learn_with_diagnostics`). The output reports calibration
+    ECE, drop counts per gate, drift score range, and refuses to
+    persist a trust table whose calibration fails — unless
+    ``--force`` is passed.
     """
     from aegis.autonomy import (
-        DEFAULT_MIN_CLEAN_RATE,
+        DEFAULT_HALF_LIFE_DAYS,
         DEFAULT_MIN_SAMPLES,
-        learn_trusted_patterns,
+        ECE_THRESHOLD,
+        MIN_TRUST_FOR_BYPASS,
+        learn_with_diagnostics,
         save_trust_table,
         trust_table_path,
     )
@@ -7519,42 +7524,96 @@ def cmd_autonomy_learn(args: argparse.Namespace) -> int:
     records = read_window(since_ns=since_ns, path=cm_path)
 
     min_samples = int(getattr(args, "min_samples", DEFAULT_MIN_SAMPLES))
-    min_clean = float(getattr(args, "min_clean_rate", DEFAULT_MIN_CLEAN_RATE))
+    min_trust = float(getattr(args, "min_trust", MIN_TRUST_FOR_BYPASS))
+    credibility = float(getattr(args, "credibility", 0.95))
+    half_life = float(getattr(args, "half_life_days", DEFAULT_HALF_LIFE_DAYS))
+    ece_threshold = float(getattr(args, "ece_threshold", ECE_THRESHOLD))
+    force = bool(getattr(args, "force", False))
 
-    table = learn_trusted_patterns(
+    result = learn_with_diagnostics(
         records,
         min_samples=min_samples,
-        min_clean_rate=min_clean,
+        min_trust=min_trust,
+        credibility=credibility,
+        half_life_days=half_life,
+        ece_threshold=ece_threshold,
+        now_ns=now_ns,
     )
+
+    cal = result.calibration
+
+    print(f"  records scanned:    {len(records):,}")
+    print(f"  window:             {since_spec}")
+    print(f"  patterns considered:{result.n_patterns_considered}")
+    print(f"  patterns learned:   {len(result.trust_table)}")
+    print(f"    dropped (never-trust):    "
+          f"{result.n_patterns_dropped_never_trust}")
+    print(f"    dropped (low samples):    "
+          f"{result.n_patterns_dropped_low_samples}")
+    print(f"    dropped (low trust LCB):  "
+          f"{result.n_patterns_dropped_low_trust}")
+    print(f"    dropped (drifted):        "
+          f"{result.n_patterns_dropped_drift}")
+    print(f"  min_samples (after Bonferroni): "
+          f"{result.min_samples_effective}")
+    print(f"  min_trust (LCB threshold):      {min_trust:.2f}")
+    print(f"  credibility:                    {credibility:.2f}")
+    print(f"  half-life:                      {half_life:.1f} day(s)")
+    print(f"  calibration ECE:                "
+          f"{cal.expected_calibration_error:.4f} "
+          f"({'pass' if cal.passed else 'FAIL'})")
+    if cal.rejection_reason:
+        print(f"  calibration note:               {cal.rejection_reason}")
+
+    if not cal.passed and not force:
+        print()
+        print(_red(
+            "✗ calibration check FAILED — refusing to persist the trust\n"
+            f"  table. ECE {cal.expected_calibration_error:.3f} exceeds\n"
+            f"  threshold {ece_threshold:.3f}. The previous trust table\n"
+            "  remains authoritative.\n"
+            "\n"
+            "  Options:\n"
+            "    • run with a wider window (more samples = better fit)\n"
+            "    • raise --ece-threshold if you accept the miscalibration\n"
+            "    • re-run with --force to persist anyway (audit hazard)"
+        ))
+        return 2
+
     out_path_override = getattr(args, "out", None)
     out_path = Path(out_path_override) if out_path_override else trust_table_path()
     saved = save_trust_table(
-        table, path=out_path,
+        result.trust_table, path=out_path,
         learned_from_records=len(records),
         min_samples=min_samples,
-        min_clean_rate=min_clean,
+        min_clean_rate=min_trust,
     )
+    print()
     print(_green(f"✓ autonomy trust table updated: {saved}"))
-    print(f"  records scanned:    {len(records):,}")
-    print(f"  window:             {since_spec}")
-    print(f"  patterns learned:   {len(table)}")
-    print(f"  min_samples:        {min_samples}")
-    print(f"  min_clean_rate:     {min_clean:.2f}")
-    if not table:
+    if force and not cal.passed:
+        print(_yellow(
+            "  ⚠ persisted despite calibration failure (--force). "
+            "Re-run learn after collecting more data."
+        ))
+    if not result.trust_table:
         print()
         print(_yellow(
             "  No patterns met the trust threshold. Possible reasons:\n"
             "    • burn-in window too short or sparse\n"
             "    • all REQUIRE_APPROVAL reasons fell in the never-trust\n"
             "      category (dangerous, sensitive paths, custom rules)\n"
-            "    • clean-followup rate below threshold — many approvals\n"
-            "      were followed by BLOCKs (the situation isn't routine)"
+            "    • posterior LCB below threshold — small samples or\n"
+            "      mixed signal in the window"
         ))
     return 0
 
 
 def cmd_autonomy_show(args: argparse.Namespace) -> int:
-    """``aegis autonomy show`` — render the current trust table."""
+    """``aegis autonomy show`` — render the current trust table.
+
+    v0.5.12: surfaces the posterior fields (α, β, LCB) and drift
+    score for each pattern when ``--verbose`` is set; default
+    output is unchanged."""
     from aegis.autonomy import (
         autonomy_enabled,
         load_trust_table,
@@ -7562,6 +7621,7 @@ def cmd_autonomy_show(args: argparse.Namespace) -> int:
         trust_table_metadata,
         trust_table_path,
     )
+    from aegis.autonomy.runtime import _epsilon_from_env
 
     path_override = getattr(args, "trust_table", None)
     path = Path(path_override) if path_override else trust_table_path()
@@ -7569,16 +7629,35 @@ def cmd_autonomy_show(args: argparse.Namespace) -> int:
     meta = trust_table_metadata(path=path)
 
     flag = "🟢 ENABLED" if autonomy_enabled() else "🟡 disabled"
+    eps = _epsilon_from_env()
     print(_green(f"Autonomy bypass — {flag}"))
     print(f"  trust table:        {path}")
+    print(f"  ε-greedy explore:   {eps:.3f}  (AEGIS_AUTONOMY_EPSILON)")
     if meta:
         print(f"  learned at:         {meta.get('learned_at', '?')}")
         print(f"  records scanned:    {meta.get('learned_from_records', '?')}")
         print(f"  min_samples:        {meta.get('min_samples', '?')}")
-        print(f"  min_clean_rate:     {meta.get('min_clean_rate', '?')}")
+        print(f"  min_trust LCB:      {meta.get('min_clean_rate', '?')}")
     else:
         print("  (trust table missing — run `aegis autonomy learn`)")
     print()
+    if getattr(args, "verbose", False):
+        # Detailed view: Bayesian posterior + drift per pattern.
+        if not table:
+            print("  (empty)")
+            return 0
+        print(
+            f"  {'tool':<12} {'signature':<22} {'n':>5} "
+            f"{'α':>6} {'β':>6} {'LCB':>5} {'drift':>6}"
+        )
+        print("  " + "-" * 70)
+        for p in sorted(table.values(), key=lambda x: -x.trust_score):
+            print(
+                f"  {p.tool_name:<12} {p.reason_signature:<22} "
+                f"{p.n_seen:>5} {p.alpha:>6.1f} {p.beta:>6.1f} "
+                f"{p.trust_score:>5.2f} {p.drift_score:>6.3f}"
+            )
+        return 0
     print(render_trust_table(table))
     return 0
 
@@ -8836,8 +8915,47 @@ def build_parser() -> argparse.ArgumentParser:
     a_learn.add_argument(
         "--min-clean-rate", dest="min_clean_rate", type=float, default=0.95,
         help=(
-            "minimum clean-followup rate to qualify a pattern "
+            "[deprecated v0.5.12, ignored] minimum clean-followup rate. "
+            "Replaced by --min-trust on the Beta posterior LCB."
+        ),
+    )
+    a_learn.add_argument(
+        "--min-trust", dest="min_trust", type=float, default=0.85,
+        help=(
+            "minimum LCB on Beta posterior to qualify a pattern (default "
+            "0.85). 'LCB ≥ 0.85 at 95%% credibility' means '95%% confident "
+            "the true success rate is ≥ 0.85'."
+        ),
+    )
+    a_learn.add_argument(
+        "--credibility", dest="credibility", type=float, default=0.95,
+        help=(
+            "Bayesian credibility for the LCB decision metric "
             "(default 0.95)"
+        ),
+    )
+    a_learn.add_argument(
+        "--half-life-days", dest="half_life_days", type=float, default=30.0,
+        help=(
+            "exponential decay half-life for observation weights "
+            "(default 30 days). 0 < value < ∞; pass a large number "
+            "to effectively disable decay."
+        ),
+    )
+    a_learn.add_argument(
+        "--ece-threshold", dest="ece_threshold", type=float, default=0.10,
+        help=(
+            "expected calibration error threshold (default 0.10). The "
+            "learner refuses to persist a trust table whose ECE on the "
+            "held-out 20%% split exceeds this value."
+        ),
+    )
+    a_learn.add_argument(
+        "--force", action="store_true",
+        help=(
+            "persist the trust table even if calibration fails. "
+            "Audit hazard: documented in step_traces and trust-table "
+            "metadata."
         ),
     )
     a_learn.add_argument(
@@ -8857,6 +8975,13 @@ def build_parser() -> argparse.ArgumentParser:
     a_show.add_argument(
         "--trust-table", dest="trust_table", type=str, default=None,
         help="trust table path override",
+    )
+    a_show.add_argument(
+        "--verbose", "-v", action="store_true",
+        help=(
+            "include Bayesian posterior + drift columns "
+            "(v0.5.12 detailed view)"
+        ),
     )
     a_show.set_defaults(fn=cmd_autonomy_show)
 

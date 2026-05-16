@@ -12,33 +12,29 @@ The hook side is opt-in via ``AEGIS_AUTONOMY_ENABLED=1``; when the
 flag is off, :func:`apply_autonomy_bypass` returns the verdict
 unchanged, preserving byte-identical legacy behaviour.
 
+v0.5.12 additions
+-----------------
+
+* **ε-greedy forced exploration.** Even when a pattern is fully
+  trusted, a deterministic fraction ``ε`` of matching calls still
+  go to the human (no bypass). This breaks the self-confirming
+  loop where active bypass suppresses the BLOCK / deny signal we
+  need to detect drift. ``ε`` is controlled by
+  ``AEGIS_AUTONOMY_EPSILON`` (default 0.05 = 5%). Reproducible:
+  the per-call decision is BLAKE2b of the verdict's ``atv_id``
+  mod 100, so replay produces identical bypass / explore choices.
+* **Drift refusal** — the Verdict shim consults
+  :func:`evaluate_autonomy_request` whose v0.5.12 implementation
+  rejects drifted patterns regardless of trust score. No extra
+  code here; the safeguard happens through the learner contract.
+
 Trust table on disk
 -------------------
 
 Persisted to ``~/.aegis/autonomy/trust_table.json`` (override via
-``AEGIS_AUTONOMY_TRUST_TABLE`` env). The JSON shape:
-
-.. code-block:: json
-
-    {
-      "learned_at": "2026-05-16T...",
-      "learned_from_records": 8500,
-      "min_samples": 5,
-      "min_clean_rate": 0.95,
-      "patterns": [
-        {
-          "tool_name": "Bash",
-          "reason_signature": "loop:Bash",
-          "n_seen": 142,
-          "n_followed_by_block": 3,
-          "clean_rate": 0.979,
-          "trust_score": 0.92,
-          "last_seen_ns": 1778...,
-          "sample_trace_ids": ["abc123", "def456", "ghi789"]
-        },
-        ...
-      ]
-    }
+``AEGIS_AUTONOMY_TRUST_TABLE`` env). v0.5.12 adds posterior +
+drift fields to each pattern entry; v0.5.11 readers will still
+parse the file (extra fields are ignored).
 
 Re-learning is explicit (``aegis autonomy learn``); the trust
 table never auto-evolves at runtime. This preserves the audit
@@ -48,6 +44,7 @@ this exact trust table snapshot".
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from dataclasses import asdict
@@ -67,6 +64,21 @@ from aegis.schema import Verdict
 # outlier walker keys on this prefix; keep the format stable.
 STEP_TRACE_KEY = "aegis.autonomy.step331.run"
 STEP_TRACE_PREFIX = "step331: auto-approved"
+
+# Stamp written when ε-greedy chose to NOT bypass even though the
+# pattern is trusted. The outlier walker is *not* interested in
+# these (they kept the human in the loop, so by definition can't
+# be auto-approval outliers), but ``aegis autonomy show`` reports
+# the rate so the operator can see exploration is actually
+# happening.
+STEP_TRACE_EXPLORE_KEY = "aegis.autonomy.step331.explore"
+STEP_TRACE_EXPLORE_PREFIX = "step331: forced exploration"
+
+# Default ε for forced exploration. 5% = ~1 in 20 trusted-pattern
+# matches still go to the human. Empirically this is small enough
+# to barely disturb the operator and large enough to drive a
+# steady stream of fresh CLEAN observations for drift detection.
+DEFAULT_EPSILON: float = 0.05
 
 
 def trust_table_path() -> Path:
@@ -114,7 +126,13 @@ def load_trust_table(
 ) -> dict[tuple[str, str], TrustedPattern]:
     """Read the trust table from disk. Returns an empty dict if
     the file doesn't exist or is malformed — both cases imply
-    "no bypass" which is the safe default."""
+    "no bypass" which is the safe default.
+
+    v0.5.12: the loader is forward+backward compatible. v0.5.11
+    entries (no posterior fields) load with default ``alpha=0``
+    so :meth:`TrustedPattern.posterior` derives one from integer
+    counts on first use. v0.5.13+ fields (not present here yet)
+    are silently ignored if encountered."""
     target = path if path is not None else trust_table_path()
     if not target.exists():
         return {}
@@ -139,6 +157,23 @@ def load_trust_table(
                 trust_score=float(raw["trust_score"]),
                 last_seen_ns=int(raw["last_seen_ns"]),
                 sample_trace_ids=tuple(raw.get("sample_trace_ids", []) or ()),
+                # v0.5.12 — Bayesian posterior + drift. Defaults
+                # of 0.0 / False / DEFAULT_CREDIBILITY ensure
+                # v0.5.11 entries still produce a usable
+                # TrustedPattern (LCB derived from integer counts).
+                alpha=float(raw.get("alpha", 0.0) or 0.0),
+                beta=float(raw.get("beta", 0.0) or 0.0),
+                posterior_mean=float(raw.get("posterior_mean", 0.0) or 0.0),
+                posterior_std=float(raw.get("posterior_std", 0.0) or 0.0),
+                n_effective=float(raw.get("n_effective", 0.0) or 0.0),
+                n_explicit_deny=int(raw.get("n_explicit_deny", 0) or 0),
+                drift_score=float(raw.get("drift_score", 0.0) or 0.0),
+                drifted=bool(raw.get("drifted", False)),
+                credibility=float(
+                    raw.get("credibility", 0.95) or 0.95
+                ),
+                prior_alpha=float(raw.get("prior_alpha", 1.0) or 1.0),
+                prior_beta=float(raw.get("prior_beta", 5.0) or 5.0),
             )
         except (KeyError, TypeError, ValueError):
             continue
@@ -166,6 +201,46 @@ def trust_table_metadata(
     }
 
 
+def _epsilon_from_env(default: float = DEFAULT_EPSILON) -> float:
+    """Read the exploration rate from the environment.
+
+    Returns a value in ``[0.0, 0.5]``. Caller never has to clamp;
+    out-of-range / unparseable values fall back to the default.
+    A 50% cap stops a misconfiguration from suppressing autonomy
+    altogether — at that point the operator should set
+    ``AEGIS_AUTONOMY_ENABLED=0`` instead."""
+    raw = os.environ.get("AEGIS_AUTONOMY_EPSILON", "").strip()
+    if not raw:
+        return default
+    try:
+        v = float(raw)
+    except ValueError:
+        return default
+    if v < 0.0 or v > 0.5:
+        return default
+    return v
+
+
+def _should_explore(*, atv_id: str, epsilon: float) -> bool:
+    """Deterministic ε-greedy decision: returns True iff this
+    specific verdict should be forced to ask a human despite
+    matching a trusted pattern.
+
+    Determinism via BLAKE2b(atv_id) mod 1000 means:
+
+    * Replaying the same audit trail reproduces the identical
+      bypass / explore choices.
+    * The choice is content-addressed by the verdict's atv_id
+      so no random source is needed at runtime.
+    * Resolution of 1/1000 lets ε be tuned in 0.1% steps."""
+    if epsilon <= 0.0 or not atv_id:
+        return False
+    digest = hashlib.blake2b(atv_id.encode("utf-8"), digest_size=8).digest()
+    bucket = int.from_bytes(digest, "big") % 1000
+    threshold = int(epsilon * 1000)
+    return bucket < threshold
+
+
 def apply_autonomy_bypass(
     verdict: Verdict,
     *,
@@ -173,6 +248,7 @@ def apply_autonomy_bypass(
     reason: str,
     trust_table: dict[tuple[str, str], TrustedPattern] | None = None,
     min_trust: float = MIN_TRUST_FOR_BYPASS,
+    epsilon: float | None = None,
 ) -> tuple[Verdict, AutonomyVerdict]:
     """Consult the trust table; downgrade REQUIRE_APPROVAL to
     ALLOW when a high-trust pattern matches.
@@ -183,6 +259,15 @@ def apply_autonomy_bypass(
     keyed :data:`STEP_TRACE_KEY`. The ``autonomy_verdict`` carries
     the AutonomyVerdict diagnostic for forensics / logging
     regardless of which path was taken.
+
+    v0.5.12: even when the trust table says ``auto_approve=True``,
+    a deterministic ε-fraction of calls are forced back to the
+    human (ε-greedy exploration). The forced-explore decision
+    leaves the verdict unchanged but stamps
+    :data:`STEP_TRACE_EXPLORE_KEY` so the operator can see how
+    often exploration is firing. ``epsilon=None`` reads from
+    ``AEGIS_AUTONOMY_EPSILON`` (default 0.05). Pass ``epsilon=0.0``
+    to disable exploration entirely (used by tests).
 
     Never raises. When ``AEGIS_AUTONOMY_ENABLED`` is unset, the
     function short-circuits at the top and returns ``(verdict,
@@ -216,12 +301,45 @@ def apply_autonomy_bypass(
     if not av.auto_approve:
         return verdict, av
 
+    # ε-greedy: even a trusted pattern is forced to ask the human
+    # once in a while so the off-policy distribution shift doesn't
+    # silence our drift / negative-reward signal.
+    eps = epsilon if epsilon is not None else _epsilon_from_env()
+    if _should_explore(atv_id=verdict.atv_id, epsilon=eps):
+        explore_stamp = (
+            f"{STEP_TRACE_EXPLORE_PREFIX} (ε={eps:.3f}) — "
+            f"trust score {av.confidence:.2f} above threshold but "
+            "forcing human review for drift / IPW coverage"
+        )
+        new_traces = dict(verdict.step_traces)
+        new_traces[STEP_TRACE_EXPLORE_KEY] = explore_stamp
+        explored_verdict = Verdict(
+            decision=verdict.decision,
+            reason=verdict.reason,
+            atv_id=verdict.atv_id,
+            signature=verdict.signature,
+            confidence=verdict.confidence,
+            step_traces=new_traces,
+            step_timings_us=verdict.step_timings_us,
+        )
+        return explored_verdict, AutonomyVerdict(
+            auto_approve=False,
+            matched_pattern=av.matched_pattern,
+            confidence=av.confidence,
+            reason=(
+                f"ε-greedy forced exploration (ε={eps:.3f}) — pattern "
+                f"would have been bypassed; kept human in loop for "
+                "drift coverage"
+            ),
+            outlier_signals=("forced_exploration",),
+        )
+
     # Build the new verdict — ALLOW with a stamped step_traces.
     assert av.matched_pattern is not None  # narrow for type checker
     stamp = (
         f"{STEP_TRACE_PREFIX} by trust table "
         f"tool={tool_name} signature={av.matched_pattern.reason_signature} "
-        f"trust={av.matched_pattern.trust_score:.2f} "
+        f"trust={av.confidence:.2f} "
         f"(was REQUIRE_APPROVAL: {verdict.reason!r})"
     )
     new_traces = dict(verdict.step_traces)
@@ -231,7 +349,7 @@ def apply_autonomy_bypass(
         reason=(
             f"auto-approved by autonomy bypass — pattern "
             f"{av.matched_pattern.reason_signature!r} trusted at "
-            f"{av.matched_pattern.trust_score:.2f}"
+            f"LCB {av.confidence:.2f}"
         ),
         atv_id=verdict.atv_id,
         signature=verdict.signature,
@@ -243,6 +361,9 @@ def apply_autonomy_bypass(
 
 
 __all__ = [
+    "DEFAULT_EPSILON",
+    "STEP_TRACE_EXPLORE_KEY",
+    "STEP_TRACE_EXPLORE_PREFIX",
     "STEP_TRACE_KEY",
     "STEP_TRACE_PREFIX",
     "apply_autonomy_bypass",
