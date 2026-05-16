@@ -4,6 +4,54 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.5] — 2026-05-16  ·  Two more `memory claude-md` miners
+
+Grows the miner count from 4 → 6. New surfaces cover *cost* and
+*advisor-pipeline* signals that the v0.5.2 miners didn't touch.
+
+### Added
+
+* **high-cost-tool miner** — groups ALLOW records by `tool_name`,
+  sums their `cost_usd`, and surfaces tools whose cumulative cost
+  in the window exceeds the threshold (default $0.01, tunable via
+  `--min-tool-cost-usd`). Proposes a CLAUDE.md "before calling
+  this tool, check if a recent result is reusable" note under
+  `## Cost Discipline`. Confidence scales with call count:
+  ≥10 calls = high, fewer = medium.
+
+* **advisor-recommendation miner** — rolls up the
+  `recommended_advisors` tuple across the window. Each advisor name
+  that appears `>= min_count` times produces a proposal. Section is
+  keyword-routed: `cost-*` → Cost Discipline, `security-*` →
+  Security Notes, `cache-*` → Cost Discipline, `performance-*` →
+  Workflow Discipline, anything else → Project Guardrails.
+
+* **`--min-tool-cost-usd USD`** CLI flag — sets the $-threshold for
+  the high-cost-tool miner. Default `0.01`.
+
+### Changed
+
+* `propose_edits()` signature — adds `min_tool_cost_usd` keyword
+  argument (default 0.01). Backward-compatible default; the older
+  4-miner signature still works.
+
+### Verified
+
+* Real-world smoke on local 7d window (2,508 records) — the
+  advisor-recommendation miner immediately surfaced
+  `security-reviewer` (289×), `loop-breaker` (255×), and
+  `permission-escalator` (17×) as actionable proposals. The
+  high-cost-tool miner correctly skipped on the local store (all
+  cost_usd=0 in dummy mode).
+
+### Tests
+
+* `tests/unit/test_claude_md_proposals.py` — 11 new cases covering
+  both miners: threshold gating (count, $), decision-type filter,
+  confidence scaling, multi-advisor records, keyword section
+  routing, empty-string defensiveness, custom threshold override.
+* Total: 23 → 34 module tests (3137 → 3148 full sweep).
+
 ## [0.5.4] — 2026-05-15  ·  `memory claude-md --apply N` — auto-splice proposals
 
 v0.5.2 generated proposals; v0.5.4 closes the loop by **applying
