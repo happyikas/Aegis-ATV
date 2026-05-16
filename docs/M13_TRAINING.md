@@ -3,6 +3,10 @@
 > Patent Burn-in Shadow phase 의 1차 구현. 합성 데이터 → v2 weights →
 > 실제 production 데이터 (Shadow log) 가 모이면 더 큰 자동 retrain 의
 > scaffold.
+>
+> v0.5+: 아래 모든 `aegis burnin <action>` 명령은 새 vocab
+> `aegis coach burnin <action>` 와 동일하게 동작합니다 (이전 이름은
+> alias 로 유지).
 
 ---
 

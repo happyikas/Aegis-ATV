@@ -29,9 +29,13 @@ Aegis is packaged around three named features built on the same firewall + audit
 
 | | What it does | Run |
 |---|---|---|
-| **🏋️ ATV Coach** | Learns your environment's normal/anomaly distribution (5-layer × 4-phase burn-in) and feeds it into the sLLM judge + RAG step340 | `aegis burnin retrain`, `aegis case-memory build` |
-| **📊 ATV Live** | Real-time agent monitoring across **cost / performance / security** | `aegis report`, `aegis cost summary`, `aegis fleet-monitor start` |
-| **🔧 ATV Doctor** | Diagnoses + advises + rolls back when the agent is in trouble (or about to be) | `aegis forensic last`, `aegis advise`, `aegis rollback <trace>` |
+| **🏋️ ATV Coach** | Learns your environment's normal/anomaly distribution (5-layer × 4-phase burn-in) and feeds it into the sLLM judge + RAG step340 | `aegis coach burnin retrain`, `aegis coach case-memory build` |
+| **📊 ATV Live** | Real-time agent monitoring across **cost / performance / security** | `aegis live`, `aegis report`, `aegis cost summary` |
+| **🔧 ATV Doctor** | Diagnoses + advises + rolls back when the agent is in trouble (or about to be) | `aegis doctor`, `aegis forensic last`, `aegis advise`, `aegis rollback <trace>` |
+| **🧠 ATV Memory** | Reads recent BLOCK / advise events from ContextMemory and proposes concrete CLAUDE.md edits | `aegis memory claude-md`, `aegis memory show` |
+| **🛡️ ATV Guard** | Hookify-style natural-language rules → regex auto-proposal + markdown storage | `aegis guard add`, `aegis guard test`, `aegis guard import` |
+
+> v0.5+ uses operator-vocabulary canonical names (`live` / `coach` / `guard` / `memory` / `doctor`). Older command names (`dashboard` / `burnin` / `rule` / `case-memory` / `advisor-calibration` / `fleet-monitor`) keep working as aliases — see `aegis --help` for the full index.
 
 User manuals (Korean is the canonical version): [`docs/USER_GUIDE.ko.md`](docs/USER_GUIDE.ko.md) (비전문가용 통합 가이드) · [`docs/manuals/`](docs/manuals/README.md) (기능별 깊은 reference)
 

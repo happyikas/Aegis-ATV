@@ -5,6 +5,8 @@
 **버전:** v2.5.2 — Multi-Domain Advisor Recommendations (Phase C)
 **한 줄:** "방화벽이 critical moment 에 sLLM 을 불러서 *cost / cache / security 도메인 advisor 를 동시에 추천*해 준다."
 
+> **v0.5+ vocab**: 본문의 `aegis advisor-calibration <action>` 은 새 vocab `aegis coach calibrate <action>` 와 동일하게 동작합니다 (이전 이름은 alias 로 유지).
+
 이 문서는 v2.2 must-install 매뉴얼([MANUAL_v2.2.md](MANUAL_v2.2.md))을 이미 읽었거나
 설치를 완료한 사용자를 위한 **증분 매뉴얼**입니다. v2.5 는 v2.2 / v2.3 / v2.4 surface
 를 그대로 둔 채, PreToolUse 훅이 ActionAdvice 한 블록을 추가로 산출하도록 한

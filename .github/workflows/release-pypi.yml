@@ -31,6 +31,16 @@ permissions:
   contents: read
   id-token: write   # required for trusted-publisher OIDC
 
+# Node 24 opt-in (deadline 2026-06-02). Runners default to Node 20
+# JavaScript-action runtime; this env flag opts every action in the
+# workflow into Node 24 so we don't get blocked when Node 20 is
+# removed (deprecation timeline:
+# https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/).
+# Once Node 24 becomes the runner default, this line is a no-op and
+# can be deleted.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   build:
     name: build wheel + sdist

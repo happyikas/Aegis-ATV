@@ -12,6 +12,11 @@ on:
       - "src/aegis/api/evaluate.py"
       - ".github/workflows/openclaw-plugin.yml"
 
+env:
+  # Node 24 opt-in (deadline 2026-06-02). See release-pypi.yml for
+  # the deprecation rationale link.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   build-and-test:
     name: tsc + vitest

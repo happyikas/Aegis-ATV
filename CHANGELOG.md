@@ -4,6 +4,49 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.3] — 2026-05-15  ·  Chore — Node 24 workflow opt-in + docs vocab refresh
+
+No code changes. Two infrastructure clean-ups so the v0.5 surface
+stays correct as the world around it moves.
+
+### Changed
+
+* **CI / release workflows** — every workflow gets the
+  `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"` env flag. GitHub
+  deprecated Node 20 for JavaScript actions effective 2026-06-02;
+  this opt-in keeps Aegis builds green past that deadline without
+  having to chase individual action-version bumps. Files touched:
+    * `.github/workflows/ci.yml`
+    * `.github/workflows/release-pypi.yml`
+    * `.github/workflows/release-docker.yml`
+    * `.github/workflows/quickstart-smoke.yml`
+    * `.github/workflows/openclaw-plugin.yml`
+  Once Node 24 becomes the runner default the flag is a no-op and
+  can be deleted.
+
+* **README + user-facing docs** — the named-features table and the
+  `docs/USER_GUIDE.ko.md` Quick Reference section now use the v0.5+
+  canonical vocab (`live` / `coach` / `guard` / `memory` / `doctor`).
+  Older command names continue to work as aliases and the deeper
+  technical guides (M13, MACMINI, STEP340, MANUAL_v2.5_advisor)
+  carry a one-line note pointing at the canonical form. Files
+  touched:
+    * `README.md` — three-features table → five-features table
+      including ATV Memory + ATV Guard; appended a one-line vocab
+      note
+    * `docs/USER_GUIDE.ko.md` — coach + live sections, troubleshoot
+      hint
+    * `docs/M13_TRAINING.md` — vocab note in the front-matter
+    * `docs/MANUAL_MACMINI.md` — H1 → "Aegis ATV" (was MVP); vocab note
+    * `docs/MANUAL_v2.5_advisor.md` — vocab note in the front-matter
+    * `docs/STEP340_RAG.md` — vocab note in the front-matter
+
+### Unchanged
+
+* All command behavior, parsers, miners, tests. v0.5.2 functionality
+  is identical — the version bump is for the documentation contract
+  alone so users running `aegis --version` see the latest doc set.
+
 ## [0.5.2] — 2026-05-15  ·  `memory claude-md` — real CLAUDE.md proposal generator
 
 Closes the last gap in the v0.5 "one-stop solution" vision: an

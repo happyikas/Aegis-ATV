@@ -1,8 +1,10 @@
-# Aegis MVP — Mac mini 운영 매뉴얼 (Plugin Solo Free)
+# Aegis ATV — Mac mini 운영 매뉴얼 (Plugin Solo Free)
 
 **대상**: Mac mini (M-시리즈) 단일 개발자 환경에서 Claude Code 보안 hook을 in-process로 가동하고, 며칠간 자기 트래픽으로 M13 attribution head를 본인 패턴에 calibrate하는 흐름.
 
 **전제 버전**: `main` HEAD ≥ `ce03e99` (PR #31 ATMU plugin 통합 + PR #32 HW telemetry 와이어링 fix 반영). 이 두 PR이 빠지면 일부 단계가 동작하지 않습니다.
+
+**Command vocab (v0.5+)**: 아래 본문은 `aegis burnin ...` 명령을 사용합니다. 동일한 동작이 새 vocab `aegis coach burnin ...` 으로도 호출 가능하며, `aegis --help` 의 `Core commands` 섹션이 canonical 입니다.
 
 **관련 문서**:
 - [`SETUP_MACMINI.md`](../SETUP_MACMINI.md) — Sidecar (Docker) 모드 부트스트랩
