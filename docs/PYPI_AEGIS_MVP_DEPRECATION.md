@@ -107,29 +107,63 @@ comes from the most recent non-yanked release's `pyproject.toml`.
 
 ## Step 3 (optional) — Final "redirect" version
 
-If you want pinned-version users to hit a clear error too:
+If you want pinned-version users to hit a clear error too, ship
+`aegis-mvp 0.4.1` as a one-file shim that raises `ImportError`.
 
-1. In the `aegis-atv` repo, create branch `chore/aegis-mvp-deprecation-shim`.
-2. Drop a single file `aegis_mvp_shim/__init__.py`:
-   ```python
-   raise RuntimeError(
-       "aegis-mvp is renamed to aegis-atv. "
-       "Install with `pip install aegis-atv` "
-       "(https://github.com/happyikas/Aegis-ATV)."
-   )
-   ```
-3. Build a wheel + sdist for `aegis-mvp 0.4.1` containing **only**
-   that file.
-4. Publish via the existing `aegis-mvp` Trusted Publisher (the one
-   that worked for 0.4.0 — already configured on PyPI).
+### Implemented as a separate package under this repo
 
-The previous "Add publisher" workflow we did for `aegis-atv` on
-2026-05-15 is the template; just substitute `aegis-mvp` as the
-project name. Note: **do not** yank 0.4.1 — that's the version
-operators who pin will hit, and we want them to see the redirect.
+The shim lives at **`aegis-mvp-shim/`** in the Aegis-ATV repo so the
+canonical package (`aegis-atv`) and the deprecation shim stay
+version-controlled together. Files:
 
-This step is intentionally optional. The yank in step 1 stops 99 %
-of new traffic; the redirect shim handles the long tail.
+* `aegis-mvp-shim/aegis_mvp/__init__.py` — raises `ImportError` with
+  the redirect message
+* `aegis-mvp-shim/pyproject.toml` — name=aegis-mvp, version=0.4.1,
+  zero dependencies, `Development Status :: 7 - Inactive` classifier
+* `aegis-mvp-shim/README.md` — PyPI long-description with the
+  rename notice + migration steps
+* `.github/workflows/release-aegis-mvp-shim.yml` — tag-triggered
+  publish, fires only on `aegis-mvp-v*` tags (distinct from the
+  `v*` tags that drive `release-pypi.yml` for aegis-atv)
+
+### One-time PyPI setup (before pushing the first `aegis-mvp-v*` tag)
+
+The `aegis-mvp` project's Trusted Publishers need an entry that
+points at the **new** workflow filename (not the original
+`release-pypi.yml` that published aegis-mvp up to 0.4.0).
+
+1. <https://pypi.org/manage/project/aegis-mvp/settings/publishing/>
+2. Add a new publisher:
+
+   | field | value |
+   |---|---|
+   | Owner | `happyikas` |
+   | Repository | `Aegis-ATV` |
+   | Workflow filename | `release-aegis-mvp-shim.yml` |
+   | Environment name | `pypi-aegis-mvp` |
+
+### Publishing
+
+After the Trusted Publisher is configured:
+
+```bash
+git tag aegis-mvp-v0.4.1
+git push origin aegis-mvp-v0.4.1
+```
+
+The workflow builds `aegis-mvp-shim/`, publishes to PyPI via
+trusted-publisher OIDC, and surfaces the result on the
+`aegis-mvp` project page.
+
+### Important
+
+* **Do not yank** `aegis-mvp 0.4.1` after publish. That's the
+  version pinned operators hit, and the whole point is for them to
+  see the redirect message.
+* Re-publishing the shim (e.g. fixing a typo in the README) requires
+  a version bump to `0.4.2` — PyPI rejects re-uploads of the same
+  version, and the shim workflow has `skip-existing: false` to
+  hard-fail rather than silently skip.
 
 ## Step 4 — Do NOT delete the project
 
@@ -150,7 +184,9 @@ by the same account.
 - [n/a] PyPI short description update — **not possible from web
   UI** (see step 2 above); skipped as not worth a redirect-shim
   release.
-- [ ] *(optional)* `aegis-mvp 0.4.1` redirect shim published (step 3)
+- [x] Redirect shim implemented at `aegis-mvp-shim/` + workflow
+  `release-aegis-mvp-shim.yml` (step 3 — ready to publish once the
+  Trusted Publisher is configured on the `aegis-mvp` PyPI project)
 - [x] Project NOT deleted, verified 2026-05-16 (step 4)
 
 `pip install aegis-mvp` now fails with the redirect text:
