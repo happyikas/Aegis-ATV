@@ -4,6 +4,66 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.23] — 2026-05-17  ·  ATV centroid bypass (Mahalanobis gate)
+
+Autonomy idea #2: `trust_score` is per-(tool, signature) — it
+ignores the *runtime fingerprint* of a call. A call nominally on a
+trusted pattern but whose cost / tokens / latency are wildly
+outside the cluster of clean historical calls is suspicious. v0.5.23
+adds a Mahalanobis-distance gate to catch this.
+
+### How it works
+
+* During `aegis autonomy learn`, per-pattern accumulator collects
+  3-D feature vectors (`log_cost`, `log_tokens_in`, `log_latency`)
+  from CLEAN records only.
+* `compute_centroid_and_cov` derives mean + diagonal covariance.
+* Persisted in `TrustedPattern.atv_centroid` / `atv_cov_diag` /
+  `centroid_n_samples` (additive — empty for v0.5.22 entries).
+* At runtime, `evaluate_autonomy_request` takes optional
+  `runtime_features` and computes Mahalanobis-diagonal distance.
+* Distance > 3σ ⇒ refuse bypass with
+  `outlier_signals=("centroid_outlier",)`.
+* Gate fires only when `centroid_n_samples ≥ 20` — sparse
+  patterns fall through to standard trust-score bypass.
+
+### Why 3-D log-features rather than full 2080-D ATV
+
+* 2080-D vectors aren't persisted in ContextMemory; lifting them
+  would require a schema migration this PR avoids.
+* Cost / tokens / latency capture most of "this call is unusually
+  expensive / slow / large", which dominates real outliers.
+* Diagonal covariance keeps storage O(d) — 6 floats per pattern.
+* A v0.6 PR can lift the full ATV via opt-in storage; the
+  v0.5.23 surface stays the same.
+
+### Modules
+
+* **`src/aegis/autonomy/centroid.py`** — `feature_vector`,
+  `feature_vector_from_signals`, `compute_centroid_and_cov`,
+  `mahalanobis_distance_diag`, `is_outside_cluster`.
+  Pure Python, defensive (`inf` on malformed input, σ floor at
+  1e-6 for zero-variance dimensions).
+* **`src/aegis/autonomy/learner.py`** — `_PatternBucket` collects
+  `clean_features`; `learn_with_diagnostics` calls
+  `compute_centroid_and_cov` after the pattern pass;
+  `evaluate_autonomy_request` runs the Mahalanobis gate AFTER
+  trust score / drift but BEFORE returning the bypass verdict.
+* **`src/aegis/autonomy/runtime.py`** — `apply_autonomy_bypass`
+  gains `runtime_features` kwarg; threads through to
+  `evaluate_autonomy_request`. Load/save round-trip the centroid
+  fields.
+* **`tools/aegis_local_hook.py`** — builds the runtime
+  fingerprint from `inp.cost_estimate.estimated_cost_usd` +
+  `estimated_input_tokens` + `latency_ms_so_far`.
+
+### Tests
+
+22 new tests in `tests/unit/test_centroid_bypass.py`: feature
+extraction (3), centroid computation (4), Mahalanobis distance (5),
+outside-cluster predicate (3), learner integration (1), runtime
+gate (5), threshold constant (1). Full suite **3509 passed**.
+
 ## [0.5.22] — 2026-05-17  ·  Reversibility scoring (autonomy safety floor)
 
 Autonomy idea #1 from the original roadmap: ``clean_rate`` is
