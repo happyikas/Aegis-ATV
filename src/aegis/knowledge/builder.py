@@ -66,6 +66,34 @@ TOP_K_PATTERNS_PER_TOOL: Final[int] = 5
 TOP_K_AGENTS_PER_PATTERN: Final[int] = 3
 """Number of top agents to surface in a pattern's entry."""
 
+# v0.5.20 — event-level entry tuning
+SESSION_GAP_SECONDS: Final[int] = 30 * 60
+"""Inactivity gap that splits the timeline into separate SESSION
+entries. 30 minutes is the conventional "lunch break" boundary —
+shorter splits over-fragment the wiki; longer joins make sessions
+too long to summarise meaningfully."""
+
+SESSION_MIN_CALLS: Final[int] = 5
+"""Sessions shorter than this are skipped unless they contain a
+BLOCK (those are kept regardless, since one-call BLOCK sessions
+are themselves interesting)."""
+
+INCIDENT_BEFORE: Final[int] = 3
+"""Calls preceding a BLOCK to include as setup context."""
+
+INCIDENT_AFTER: Final[int] = 2
+"""Calls following a BLOCK to include as recovery context."""
+
+WORKFLOW_MIN_OCCURRENCES: Final[int] = 3
+"""Tool-sequence (bigram) frequency at which we promote it to a
+WORKFLOW entry. Fewer than 3 occurrences is too noisy to call a
+"workflow"; the broader pattern miners (AGENT / PATTERN) cover
+those."""
+
+WORKFLOW_SEQUENCE_LEN: Final[int] = 2
+"""Bigram length. Trigrams produce more-specific workflows but
+explode combinatorially on small datasets; we start with bigrams."""
+
 
 def _confidence_from_n(n: int) -> float:
     """Linear-saturating confidence schedule."""
@@ -183,6 +211,31 @@ def build_knowledge(
         key=lambda k: -pattern_buckets[k].n_fires,
     ):
         entries.append(_render_pattern_entry(pattern_buckets[key]))
+
+    # v0.5.20 — event-level entries (SESSION / INCIDENT / WORKFLOW)
+    # are derived per-aid from the same by_aid index already built
+    # for the bypass-followup heuristic. Each is appended in a
+    # deterministic order so the wiki is git-diff stable.
+    for aid in sorted(by_aid.keys()):
+        timeline = by_aid[aid]
+
+        # SESSION — gap-segmented bursts.
+        for session in _segment_sessions(timeline):
+            entry = _render_session_entry(aid, session)
+            if entry is not None:
+                entries.append(entry)
+
+        # INCIDENT — one per BLOCK on this timeline.
+        for r in timeline:
+            if r.decision != "BLOCK":
+                continue
+            entry = _render_incident_entry(aid, r, timeline)
+            if entry is not None:
+                entries.append(entry)
+
+        # WORKFLOW — recurring tool n-grams.
+        entries.extend(_mine_workflows(aid, timeline))
+
     return entries
 
 
@@ -642,10 +695,321 @@ def _render_pattern_entry(b: _PatternBucket) -> KnowledgeEntry:
     )
 
 
+# ──────────────────────────────────────────────────────────────────
+# v0.5.20 — SESSION entries (gap-segmented contiguous activity)
+# ──────────────────────────────────────────────────────────────────
+
+
+def _segment_sessions(
+    aid_timeline: list[ContextMemoryRecord],
+    *,
+    gap_seconds: int = SESSION_GAP_SECONDS,
+) -> list[list[ContextMemoryRecord]]:
+    """Split a per-aid timeline into sessions wherever the gap
+    between consecutive calls exceeds ``gap_seconds``."""
+    if not aid_timeline:
+        return []
+    gap_ns = gap_seconds * 1_000_000_000
+    sessions: list[list[ContextMemoryRecord]] = []
+    current: list[ContextMemoryRecord] = [aid_timeline[0]]
+    for prev, nxt in zip(aid_timeline, aid_timeline[1:], strict=False):
+        if nxt.ts_ns - prev.ts_ns > gap_ns:
+            sessions.append(current)
+            current = [nxt]
+        else:
+            current.append(nxt)
+    sessions.append(current)
+    return sessions
+
+
+def _render_session_entry(
+    aid: str,
+    session: list[ContextMemoryRecord],
+) -> KnowledgeEntry | None:
+    """One wiki article per coherent burst of calls. Skipped when
+    the session is short AND uneventful."""
+    n_total = len(session)
+    n_block = sum(1 for r in session if r.decision == "BLOCK")
+    if n_total < SESSION_MIN_CALLS and n_block == 0:
+        return None
+
+    n_allow = sum(1 for r in session if r.decision == "ALLOW")
+    n_approval = sum(1 for r in session if r.decision == "REQUIRE_APPROVAL")
+    tool_counts: Counter[str] = Counter(r.tool_name for r in session if r.tool_name)
+    ts_first = session[0].ts_ns
+    ts_last = session[-1].ts_ns
+    duration_s = max(0, (ts_last - ts_first) // 1_000_000_000)
+    total_cost = sum(float(r.cost_usd or 0.0) for r in session)
+    top_tools = tool_counts.most_common(3)
+
+    # Use ts_first_ns as the stable slug — same session always
+    # produces the same entry_id across re-builds.
+    slug = f"{aid}/{ts_first}"
+
+    summary = (
+        f"Session for agent {aid} spanning "
+        f"{_fmt_ns(ts_first)}-{_fmt_ns(ts_last)}: "
+        f"{n_total} call(s) over {duration_s // 60}m, "
+        f"{n_block} BLOCK, {n_approval} REQUIRE_APPROVAL, "
+        f"cost ${total_cost:.4f}."
+    )
+    infobox = InfoBox(fields={
+        "aid": aid,
+        "ts_first": _fmt_ns(ts_first),
+        "ts_last": _fmt_ns(ts_last),
+        "duration_min": int(duration_s // 60),
+        "n_calls": n_total,
+        "n_allow": n_allow,
+        "n_require_approval": n_approval,
+        "n_block": n_block,
+        "total_cost_usd": round(total_cost, 4),
+        "top_tool": top_tools[0][0] if top_tools else "(none)",
+    })
+
+    sections: list[Section] = []
+    if top_tools:
+        sections.append(Section(
+            heading="Top tools",
+            body="\n".join(
+                f"- `{t}`: {n} calls" for t, n in top_tools
+            ),
+        ))
+    if n_block > 0:
+        block_records = [r for r in session if r.decision == "BLOCK"][:3]
+        sections.append(Section(
+            heading="BLOCK events",
+            body="\n".join(
+                f"- `{r.tool_name}` at {_fmt_ns(r.ts_ns)}: "
+                f"{(r.reason or '')[:80]!r}"
+                for r in block_records
+            ),
+        ))
+
+    related: list[str] = [make_entry_id(EntryKind.AGENT, aid)]
+    related.extend(
+        make_entry_id(EntryKind.TOOL, t) for t, _ in top_tools
+    )
+
+    tags: list[str] = []
+    if n_block > 0:
+        tags.append("had-block")
+    if total_cost > 0.10:
+        tags.append("high-cost-session")
+    if duration_s > 3600:
+        tags.append("long-session")
+
+    return KnowledgeEntry(
+        entry_id=make_entry_id(EntryKind.SESSION, slug),
+        kind=EntryKind.SESSION,
+        title=f"Session {_fmt_ns(ts_first)} ({aid})",
+        summary=summary,
+        infobox=infobox,
+        sections=tuple(sections),
+        related=tuple(related),
+        tags=tuple(tags),
+        ts_first_ns=ts_first,
+        ts_last_ns=ts_last,
+        n_observations=n_total,
+        confidence=_confidence_from_n(n_total),
+    )
+
+
+# ──────────────────────────────────────────────────────────────────
+# v0.5.20 — INCIDENT entries (BLOCK-anchored)
+# ──────────────────────────────────────────────────────────────────
+
+
+def _render_incident_entry(
+    aid: str,
+    block_record: ContextMemoryRecord,
+    aid_timeline: list[ContextMemoryRecord],
+) -> KnowledgeEntry | None:
+    """One wiki article per BLOCK + its surrounding context. The
+    setup window (preceding calls) is what enables the agent
+    that hit the BLOCK to learn the precursor pattern; the
+    recovery window (succeeding calls) shows how the agent
+    self-corrected (if at all)."""
+    if block_record.decision != "BLOCK":
+        return None
+    try:
+        idx = aid_timeline.index(block_record)
+    except ValueError:
+        return None
+
+    setup = aid_timeline[max(0, idx - INCIDENT_BEFORE) : idx]
+    recovery = aid_timeline[idx + 1 : idx + 1 + INCIDENT_AFTER]
+    recovered = (
+        len(recovery) > 0
+        and all(r.decision != "BLOCK" for r in recovery)
+    )
+
+    slug = f"{aid}/{block_record.trace_id}"
+    reason_short = (block_record.reason or "(no reason)")[:80]
+    summary = (
+        f"BLOCK on `{block_record.tool_name}` at "
+        f"{_fmt_ns(block_record.ts_ns)}: {reason_short!r}. "
+        f"Preceded by {len(setup)} setup call(s); "
+        f"{'recovered' if recovered else 'no recovery observed'} "
+        f"in the next {len(recovery)} call(s)."
+    )
+
+    infobox = InfoBox(fields={
+        "aid": aid,
+        "trace_id": block_record.trace_id,
+        "tool": block_record.tool_name,
+        "reason": reason_short,
+        "ts": _fmt_ns(block_record.ts_ns),
+        "n_setup_calls": len(setup),
+        "n_recovery_calls": len(recovery),
+        "recovered": recovered,
+    })
+
+    sections: list[Section] = []
+    if setup:
+        sections.append(Section(
+            heading="Setup (preceding calls)",
+            body="\n".join(
+                f"{i + 1}. `{r.tool_name}` "
+                f"[{r.decision}] {(r.reason or '')[:60]!r}"
+                for i, r in enumerate(setup)
+            ),
+        ))
+    sections.append(Section(
+        heading="BLOCK",
+        body=(
+            f"- tool: `{block_record.tool_name}`\n"
+            f"- reason: {block_record.reason or '(none)'}\n"
+            f"- ts: {_fmt_ns(block_record.ts_ns)}"
+        ),
+    ))
+    if recovery:
+        sections.append(Section(
+            heading="Recovery (subsequent calls)",
+            body="\n".join(
+                f"{i + 1}. `{r.tool_name}` "
+                f"[{r.decision}] {(r.reason or '')[:60]!r}"
+                for i, r in enumerate(recovery)
+            ),
+        ))
+
+    related: list[str] = [
+        make_entry_id(EntryKind.AGENT, aid),
+        make_entry_id(EntryKind.TOOL, block_record.tool_name),
+    ]
+    sig = reason_signature(block_record.reason or "")
+    related.append(
+        make_entry_id(
+            EntryKind.PATTERN, f"{block_record.tool_name}:{sig}",
+        )
+    )
+
+    tags: list[str] = ["block"]
+    if recovered:
+        tags.append("recovered")
+    else:
+        tags.append("unresolved")
+    if sig.startswith("rule:") or sig in ("dangerous_pattern", "sensitive_path"):
+        tags.append("safety-trigger")
+
+    return KnowledgeEntry(
+        entry_id=make_entry_id(EntryKind.INCIDENT, slug),
+        kind=EntryKind.INCIDENT,
+        title=f"Incident on {block_record.tool_name} ({block_record.trace_id[:8]})",
+        summary=summary,
+        infobox=infobox,
+        sections=tuple(sections),
+        related=tuple(related),
+        tags=tuple(tags),
+        ts_first_ns=setup[0].ts_ns if setup else block_record.ts_ns,
+        ts_last_ns=(
+            recovery[-1].ts_ns if recovery else block_record.ts_ns
+        ),
+        n_observations=1 + len(setup) + len(recovery),
+        confidence=0.9,  # incidents are concrete singletons — high confidence
+    )
+
+
+# ──────────────────────────────────────────────────────────────────
+# v0.5.20 — WORKFLOW entries (recurring tool sequences)
+# ──────────────────────────────────────────────────────────────────
+
+
+def _mine_workflows(
+    aid: str,
+    aid_timeline: list[ContextMemoryRecord],
+    *,
+    seq_len: int = WORKFLOW_SEQUENCE_LEN,
+    min_occurrences: int = WORKFLOW_MIN_OCCURRENCES,
+) -> list[KnowledgeEntry]:
+    """Return one WORKFLOW entry per recurring tool n-gram.
+
+    A "workflow" is a sequence of ``seq_len`` consecutive
+    tool_names that recurs at least ``min_occurrences`` times in
+    the agent's timeline. Sequences that include unnamed /
+    sidechain tools are skipped (would dominate the histogram
+    with low-information patterns)."""
+    tool_seq = [r.tool_name for r in aid_timeline if r.tool_name]
+    if len(tool_seq) < seq_len:
+        return []
+
+    counts: Counter[tuple[str, ...]] = Counter()
+    sample_ts: dict[tuple[str, ...], int] = {}
+    for i in range(len(tool_seq) - seq_len + 1):
+        seq = tuple(tool_seq[i : i + seq_len])
+        counts[seq] += 1
+        sample_ts.setdefault(seq, aid_timeline[i].ts_ns)
+
+    out: list[KnowledgeEntry] = []
+    for seq, n_occ in counts.items():
+        if n_occ < min_occurrences:
+            continue
+        slug = f"{aid}/{'-'.join(seq)}"
+        seq_display = " → ".join(f"`{t}`" for t in seq)
+        summary = (
+            f"Workflow {seq_display} recurs {n_occ} times for "
+            f"agent {aid}."
+        )
+        infobox = InfoBox(fields={
+            "aid": aid,
+            "sequence": " -> ".join(seq),
+            "sequence_length": seq_len,
+            "n_occurrences": n_occ,
+            "first_seen": _fmt_ns(sample_ts[seq]),
+        })
+        related: list[str] = [make_entry_id(EntryKind.AGENT, aid)]
+        related.extend(make_entry_id(EntryKind.TOOL, t) for t in seq)
+
+        tags: list[str] = ["recurring-workflow"]
+        if n_occ >= 10:
+            tags.append("dominant-workflow")
+
+        out.append(KnowledgeEntry(
+            entry_id=make_entry_id(EntryKind.WORKFLOW, slug),
+            kind=EntryKind.WORKFLOW,
+            title=f"Workflow {' → '.join(seq)} ({aid})",
+            summary=summary,
+            infobox=infobox,
+            sections=(),
+            related=tuple(related),
+            tags=tuple(tags),
+            ts_first_ns=sample_ts[seq],
+            ts_last_ns=aid_timeline[-1].ts_ns,
+            n_observations=n_occ,
+            confidence=_confidence_from_n(n_occ * 10),  # n=5 hits → conf 1.0
+        ))
+    return out
+
+
 __all__ = [
     "CONFIDENCE_FULL_AT",
+    "INCIDENT_AFTER",
+    "INCIDENT_BEFORE",
+    "SESSION_GAP_SECONDS",
+    "SESSION_MIN_CALLS",
     "TOP_K_AGENTS_PER_PATTERN",
     "TOP_K_PATTERNS_PER_TOOL",
     "TOP_K_TOOLS_PER_AGENT",
+    "WORKFLOW_MIN_OCCURRENCES",
+    "WORKFLOW_SEQUENCE_LEN",
     "build_knowledge",
 ]

@@ -4,6 +4,48 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.20] — 2026-05-17  ·  SESSION / INCIDENT / WORKFLOW entry kinds
+
+v0.5.15 shipped three **entity-level** entry kinds (AGENT / TOOL /
+PATTERN). v0.5.20 adds three **event-level** kinds — coherent slices
+of the agent's activity rather than aggregates:
+
+* **SESSION** — gap-segmented contiguous activity (30-min split).
+  Skipped when short AND uneventful; always kept when ≥1 BLOCK.
+* **INCIDENT** — one BLOCK + 3-call setup + 2-call recovery window.
+  Tagged `recovered` / `unresolved`; cross-refs the agent, tool,
+  and matching pattern signature.
+* **WORKFLOW** — recurring tool bigrams ≥3 occurrences per agent.
+  Confidence scales with occurrence count (5× saturates).
+
+### New schema
+
+`EntryKind` enum gains three values: `SESSION`, `INCIDENT`,
+`WORKFLOW` (StrEnum stays human-readable on disk).
+
+### Builder
+
+`build_knowledge()` now emits the three new kinds AFTER the
+existing entity-level entries, in a deterministic per-aid order.
+Configuration constants (`SESSION_GAP_SECONDS=1800`,
+`SESSION_MIN_CALLS=5`, `INCIDENT_BEFORE=3`, `INCIDENT_AFTER=2`,
+`WORKFLOW_MIN_OCCURRENCES=3`, `WORKFLOW_SEQUENCE_LEN=2`) are
+top-level constants so tests + future extensions can override.
+
+### Tests
+
+15 new tests in `tests/unit/test_knowledge_event_kinds.py`:
+session segmentation (3), session entry rendering (3), incident
+entry rendering (4), workflow mining (4), full `build_knowledge`
+integration verifying all six kinds emit from one synthetic
+record set.
+
+### Validation
+
+- `uv run ruff check .` → All checks passed
+- `uv run mypy src` → Success (229 source files)
+- `uv run pytest -q` → **3443 passed**, 13 skipped (15 new)
+
 ## [0.5.19] — 2026-05-17  ·  Docs sync (CLAUDE.md + README catch-up)
 
 Catches CLAUDE.md and README up across v0.5.11 – v0.5.18. The

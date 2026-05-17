@@ -56,14 +56,31 @@ class EntryKind(StrEnum):
     on-disk shape is human-readable and schema-version evolution
     can extend the enum without renumbering.
 
-    Three kinds in v0.5.15. Future kinds reserved:
-      SESSION   — one coherent stretch of work (multi-call)
-      INCIDENT  — one BLOCK or notable outlier
-      WORKFLOW  — a recurring multi-step procedure"""
+    v0.5.15 shipped AGENT / TOOL / PATTERN — entity-level wiki
+    pages built from per-entity aggregation.
+
+    v0.5.20 adds three event-level kinds that are not aggregates
+    but coherent slices of the agent's activity:
+
+      SESSION   — one coherent stretch of work (a contiguous
+                  burst of calls from the same aid; the wiki
+                  summarises duration, top tools, cost, BLOCK
+                  events, decision distribution).
+      INCIDENT  — one BLOCK and its surrounding context (the
+                  preceding setup calls + the recovery if any).
+                  Surfaces patterns that lead to BLOCKs without
+                  requiring a manual postmortem.
+      WORKFLOW  — a recurring multi-step tool sequence (e.g.
+                  ``Read → Edit → Bash(pytest)`` repeating
+                  across sessions). Detected by mining
+                  call-bigrams + trigrams from the timeline."""
 
     AGENT = "agent"
     TOOL = "tool"
     PATTERN = "pattern"
+    SESSION = "session"
+    INCIDENT = "incident"
+    WORKFLOW = "workflow"
 
 
 # ──────────────────────────────────────────────────────────────────
