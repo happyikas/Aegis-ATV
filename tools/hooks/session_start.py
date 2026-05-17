@@ -1,24 +1,28 @@
 #!/usr/bin/env python3
-"""Claude Code SessionStart hook — first-session welcome message.
+"""Claude Code SessionStart hook — welcome + per-session status banner.
 
-Fires every time Claude Code starts a new session. On the very first
-firing after install (detected by absence of ``~/.aegis/.welcomed``
-marker), print a short friendly welcome to stderr that:
+Fires every time Claude Code starts a new session. Two modes:
 
-* Confirms Aegis is active
-* Suggests one concrete try-me prompt the user can test
-* Surfaces the new `/aegis-help` slash command (PR3) for discovery
-* Notes the killer feature (signed audit chain) in one line
+1. **First session** (no ``~/.aegis/.welcomed`` marker): full welcome
+   message that suggests one try-me prompt + surfaces the /aegis-help
+   slash command.
+2. **Returning user** (v0.7.0): one-line status banner — total audit
+   records, BLOCKs in last 24h, autonomy state. Provides "Claude Code
+   agent view" parity by surfacing Aegis state at every session start.
 
-After the first firing the marker is touched and subsequent
-SessionStart events are silent — we don't want to nag returning
-users.
+### Verbosity control
 
-Failure mode
-------------
+* ``AEGIS_WELCOME_DISABLE=1`` — silence everything (first-session
+  welcome and per-session banner).
+* ``AEGIS_SESSION_BANNER=off|brief|full`` (default: ``brief``)
+  * ``off``: silent for returning users (legacy v0.5 behaviour).
+  * ``brief``: one-line status (new v0.7.0 default).
+  * ``full``: force the full welcome even for returning users.
 
-NEVER blocks the session (always exit 0). Errors → stderr, swallowed.
-Welcome message always opt-out via ``AEGIS_WELCOME_DISABLE=1``.
+### Failure mode
+
+NEVER blocks the session (always exit 0). All I/O is best-effort and
+budgeted to keep cold-path latency well under 100 ms.
 """
 
 from __future__ import annotations
@@ -26,12 +30,22 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import IO, Any
 
 WELCOMED_MARKER = Path.home() / ".aegis" / ".welcomed"
 DISABLE = os.environ.get("AEGIS_WELCOME_DISABLE", "0") == "1"
 VERBOSE = os.environ.get("AEGIS_HOOK_VERBOSE", "0") == "1"
+BANNER_MODE = os.environ.get("AEGIS_SESSION_BANNER", "brief").lower()
+
+# Per-session status banner read budgets — keep small to stay fast.
+# 512 KB tail = ~3,500 records at typical ~150 B/rec — comfortably
+# covers 24 h for most active sessions while staying well under a
+# 100 ms cold-path budget on local SSD.
+_AUDIT_TAIL_BYTES = 512 * 1024
+_TRUST_TABLE = Path.home() / ".aegis" / "autonomy" / "trust_table.json"
+_AUDIT_PATH = Path.home() / ".aegis" / "audit.jsonl"
 
 
 def _emit(msg: str) -> None:
@@ -53,7 +67,7 @@ def _mark_welcomed() -> None:
 
 
 def _welcome_lines() -> list[str]:
-    """The actual welcome text. One screen, no scrolling required."""
+    """First-session welcome — one screen, no scrolling required."""
     return [
         "",
         "🛡️  Aegis is active. Every Claude Code tool call is now firewall-",
@@ -74,6 +88,107 @@ def _welcome_lines() -> list[str]:
     ]
 
 
+# ──────────────────────────────────────────────────────────────────
+# v0.7.0 — per-session status banner
+# ──────────────────────────────────────────────────────────────────
+
+
+def _read_audit_tail() -> list[dict]:
+    """Read at most the last ``_AUDIT_TAIL_BYTES`` of audit.jsonl as
+    parsed records. Defensive — returns [] on any I/O / decode error."""
+    try:
+        size = _AUDIT_PATH.stat().st_size
+    except OSError:
+        return []
+    offset = max(0, size - _AUDIT_TAIL_BYTES)
+    try:
+        with _AUDIT_PATH.open("rb") as f:
+            f.seek(offset)
+            blob = f.read()
+    except OSError:
+        return []
+    # Drop the partial first line if we started mid-record.
+    if offset > 0:
+        idx = blob.find(b"\n")
+        if idx >= 0:
+            blob = blob[idx + 1 :]
+    records: list[dict] = []
+    for line in blob.splitlines():
+        if not line.strip():
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return records
+
+
+def _total_audit_lines() -> int:
+    """Fast line count of audit.jsonl. Best-effort."""
+    try:
+        with _AUDIT_PATH.open("rb") as f:
+            return sum(1 for _ in f)
+    except OSError:
+        return 0
+
+
+def _autonomy_state() -> tuple[bool, int]:
+    """Returns (learned, n_patterns). The SessionStart hook process
+    doesn't inherit AEGIS_AUTONOMY_ENABLED from the PreToolUse hook
+    command, so we report the practical signal: "has the operator
+    run ``aegis autonomy learn`` and produced a non-empty trust
+    table?". That is the gate that controls whether autonomy can
+    fire on the hot path — env-flag-off + non-empty table is rare
+    and fixable by setting one env var."""
+    n_patterns = 0
+    if _TRUST_TABLE.exists():
+        try:
+            d = json.loads(_TRUST_TABLE.read_text())
+            patterns = d.get("patterns") if isinstance(d, dict) else None
+            if isinstance(patterns, list):
+                n_patterns = len(patterns)
+        except (OSError, json.JSONDecodeError):
+            pass
+    return n_patterns > 0, n_patterns
+
+
+def _brief_banner_line() -> str | None:
+    """Compose the one-line status banner. Returns None on total
+    failure so the hook can stay silent rather than emit garbage."""
+    total = _total_audit_lines()
+    if total <= 0:
+        return None
+    tail = _read_audit_tail()
+    # Last 24h BLOCK count from the tail. (24h often fits in 64 KB at
+    # ~150 B/record; if not, this is a conservative under-count.)
+    now_ns = time.time_ns()
+    horizon_ns = now_ns - 24 * 3600 * 1_000_000_000
+    n_block_24h = 0
+    for r in tail:
+        ts = r.get("ts_ns")
+        if (
+            isinstance(ts, int)
+            and ts >= horizon_ns
+            and str(r.get("decision", "")).upper() == "BLOCK"
+        ):
+            n_block_24h += 1
+
+    learned, n_pat = _autonomy_state()
+    aut_str = (
+        f"autonomy: {n_pat} pattern(s) learned" if learned
+        else "autonomy: not trained"
+    )
+    return (
+        f"🛡️  Aegis · {total:,} audit records · "
+        f"{n_block_24h} BLOCKs in 24h · {aut_str}"
+    )
+
+
+# ──────────────────────────────────────────────────────────────────
+# Main
+# ──────────────────────────────────────────────────────────────────
+
+
 def handle_session_start(
     stdin: IO[str] | None = None, stdout: IO[str] | None = None,
 ) -> int:
@@ -81,7 +196,6 @@ def handle_session_start(
     out_stream = stdout or sys.stdout
 
     raw = in_stream.read()
-    # Always emit a JSON ack so Claude Code can compose hook outputs.
     response: dict[str, Any] = {"_aegis": {"welcome": "skipped"}}
 
     if DISABLE:
@@ -94,23 +208,31 @@ def handle_session_start(
             event: dict[str, Any] = json.loads(raw)
             evt = event.get("hook_event_name") or ""
             if evt and evt != "SessionStart":
-                # Wrong hook payload — silent skip.
                 print(json.dumps(response), file=out_stream)
                 return 0
         except json.JSONDecodeError:
             pass
 
-    if not _is_first_session():
-        # Returning user — silent.
-        response["_aegis"]["welcome"] = "returning"
-        print(json.dumps(response), file=out_stream)
-        return 0
+    is_first = _is_first_session()
 
-    # First session ever (or marker was deleted) — print welcome.
-    for line in _welcome_lines():
-        _emit(line)
-    _mark_welcomed()
-    response["_aegis"]["welcome"] = "shown"
+    if is_first or BANNER_MODE == "full":
+        # Full welcome.
+        for line in _welcome_lines():
+            _emit(line)
+        _mark_welcomed()
+        response["_aegis"]["welcome"] = "shown"
+    elif BANNER_MODE == "off":
+        # Legacy quiet mode for returning users.
+        response["_aegis"]["welcome"] = "returning-silent"
+    else:
+        # Default "brief" — one-line per-session banner (v0.7.0).
+        banner = _brief_banner_line()
+        if banner:
+            _emit(banner)
+            response["_aegis"]["welcome"] = "brief"
+        else:
+            response["_aegis"]["welcome"] = "returning-silent"
+
     print(json.dumps(response), file=out_stream)
     return 0
 

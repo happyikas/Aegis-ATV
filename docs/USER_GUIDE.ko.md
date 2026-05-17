@@ -1,6 +1,6 @@
 # Aegis ATV — 사용 설명서
 
-> 문서 버전: **v0.6.0** (2026-05-16) · Aegis ATV · 한국어 (정본)
+> 문서 버전: **v0.7.0** (2026-05-17) · Aegis ATV · 한국어 (정본)
 >
 > **이 문서가 누구를 위한 것인가요?** 코드를 잘 모르는 분도 5–10분 안에 "Aegis 가 무엇이고, 어떻게 쓰는지" 이해할 수 있게 작성한 통합 가이드입니다. 기능별 깊은 매뉴얼은 [`docs/manuals/`](manuals/README.md) 에 있습니다.
 
@@ -278,6 +278,74 @@ aegis autonomy outliers --since 7d
 `aegis doctor --since 7d` 출력에 🤖 Autonomy 섹션이 자동 포함됩니다 (bypass count, ε-greedy explore count, outlier 표). 사용자가 활성화하지 않았다면 한 줄 "no data" 만.
 
 → 자세히: [`CHANGELOG.md`](../CHANGELOG.md) §0.5.11 – §0.5.27
+
+### 🔗 Claude Code Agent View 시너지 (v0.7.0)
+
+Aegis 는 Claude Code 의 hook 시스템 위에 올라타지만, v0.6 까지는 단방향이었습니다 (Aegis → tool call 차단). v0.7.0 부터는 **양방향** — Claude Code 가 노출하는 transcript / subagent metadata / 6-hook lifecycle 를 Aegis 가 읽어 자기 데이터와 cross-reference 합니다.
+
+#### `aegis subagent-graph` — Task 호출별 verdict mix
+
+Claude Code 의 ``~/.claude/projects/<encoded-cwd>/<session>.jsonl`` transcript 에는 모든 `Task` tool 호출 (Explore / Plan / general-purpose / …) 의 metadata 가 있고, Aegis audit chain 에는 그 시간대의 verdict 가 있습니다. 둘을 합치면 "어느 subagent 가 가장 자주 BLOCK 을 유발하나" 같은 질문에 답이 됩니다.
+
+```bash
+$ aegis subagent-graph
+Subagent graph — session 58ed2cfc (33431 transcript · 11326 audit records)
+  ├─ Task → Explore  "Map current product surface"  (1.6m)
+  │  verdicts: ALLOW 0 · APPROVAL 35 · BLOCK 0
+  │  tools:    Bash×44, Read×23, Agent×2
+  ├─ Task → Explore  "Map sLLM advice + burn-in"  (1.5m)
+  │  verdicts: ALLOW 0 · APPROVAL 33 · BLOCK 0
+  └─ Task → Explore  "Map ATV+audit write points"  (1.1m)
+     verdicts: ALLOW 0 · APPROVAL 28 · BLOCK 0
+```
+
+옵션:
+* `--transcript PATH` — 다른 세션 transcript 지정 (기본: cwd 의 최신)
+* `--audit PATH` — audit chain 경로 override
+* `--json` — 기계 가독 형식
+
+`AEGIS_CLAUDE_PROJECTS_DIR` 로 Claude Code 의 projects 디렉토리 경로 override 가능 (비표준 설치).
+
+#### SessionStart 상태 banner — 매 세션 1줄 요약
+
+v0.7.0 부터 새 Claude Code 세션을 시작할 때마다 다음과 같은 한 줄이 stderr 로 출력됩니다:
+
+```
+🛡️  Aegis · 11,924 audit records · 7 BLOCKs in 24h · autonomy: 2 pattern(s) learned
+```
+
+이전에는 첫 설치 직후만 환영 메시지가 떴고 그 후엔 silent 였습니다. v0.7.0 의 매 세션 banner 는 "Aegis 가 살아있고, 24h 위협 분포가 어떻고, 자동화가 어디까지 학습됐나" 를 0.1 초 안에 알려줍니다.
+
+* `AEGIS_SESSION_BANNER=brief` (기본) — 한 줄 banner.
+* `AEGIS_SESSION_BANNER=off` — legacy silent 모드.
+* `AEGIS_SESSION_BANNER=full` — 첫 세션 환영을 강제 재출력.
+* `AEGIS_WELCOME_DISABLE=1` — 전부 silent (banner + 환영).
+
+#### 6 개 hook lifecycle — 전 표면 활용
+
+Claude Code 가 노출하는 6 개 hook event 와 Aegis 의 역할:
+
+| Hook | Aegis 역할 |
+|---|---|
+| **PreToolUse** | firewall pipeline (16-step) + autonomy bypass + ATMU 2PC phase 1 |
+| **PostToolUse** | ATMU 2PC commit + audit chain append |
+| **Stop** | transcript 의 토큰 비용 백필 |
+| **PreCompact** (v0.7.0 활용) | 컨텍스트 압축 직전 ATV 상태 snapshot (forensic 경계) |
+| **UserPromptSubmit** (v0.7.0 활용) | 사용자 prompt retry 감지 (privacy-safe Jaccard / BGE cosine) |
+| **SessionStart** (v0.7.0 enrich) | 위의 1 줄 banner |
+
+이전엔 PreToolUse / PostToolUse / Stop 만 등록됐고 (3 개), v0.4.1 의 deprecation cleanup 으로 일부 hook 이 의도치 않게 사라지는 회귀가 있었습니다. v0.7.0 시점에 6 개 전체가 정상 등록 — 본인 환경 확인은:
+
+```bash
+uv run aegis install --target claude-code --mode local --force
+# 또는
+python3 -c "import json, pathlib; d = json.loads((pathlib.Path.home() / '.claude/settings.json').read_text()); print(sorted(d.get('hooks', {})))"
+# → ['PostToolUse', 'PreCompact', 'PreToolUse', 'SessionStart', 'Stop', 'UserPromptSubmit']
+```
+
+> ⚠️ `--force` 는 hook 명령을 새로 작성하므로 사용자가 수동 추가한 env var (예: `AEGIS_AUTONOMY_ENABLED=1`) 가 사라집니다. 재설치 후 본인 custom env 를 다시 prepend 해야 합니다.
+
+→ 자세히: [`CHANGELOG.md`](../CHANGELOG.md) §0.7.0
 
 ---
 

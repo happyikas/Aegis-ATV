@@ -4,4 +4,4 @@ Action firewall + cryptographic audit chain + ContextMemory analytics
 for AI agents. PyPI: ``aegis-atv``. CLI: ``aegis``.
 """
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
