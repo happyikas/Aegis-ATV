@@ -174,6 +174,18 @@ def load_trust_table(
                 ),
                 prior_alpha=float(raw.get("prior_alpha", 1.0) or 1.0),
                 prior_beta=float(raw.get("prior_beta", 5.0) or 5.0),
+                # v0.5.23 — runtime-fingerprint centroid + cov_diag.
+                # v0.5.22 and earlier entries have these as empty
+                # tuples (no Mahalanobis gating).
+                atv_centroid=tuple(
+                    float(x) for x in (raw.get("atv_centroid") or [])
+                ),
+                atv_cov_diag=tuple(
+                    float(x) for x in (raw.get("atv_cov_diag") or [])
+                ),
+                centroid_n_samples=int(
+                    raw.get("centroid_n_samples", 0) or 0,
+                ),
             )
         except (KeyError, TypeError, ValueError):
             continue
@@ -250,6 +262,7 @@ def apply_autonomy_bypass(
     min_trust: float = MIN_TRUST_FOR_BYPASS,
     epsilon: float | None = None,
     tool_args_json: str = "",
+    runtime_features: tuple[float, ...] | None = None,
 ) -> tuple[Verdict, AutonomyVerdict]:
     """Consult the trust table; downgrade REQUIRE_APPROVAL to
     ALLOW when a high-trust pattern matches.
@@ -322,6 +335,7 @@ def apply_autonomy_bypass(
         reason=reason,
         trust_table=table,
         min_trust=min_trust,
+        runtime_features=runtime_features,
     )
     if not av.auto_approve:
         return verdict, av

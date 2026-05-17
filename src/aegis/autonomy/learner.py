@@ -201,6 +201,13 @@ class TrustedPattern:
     prior_alpha: float = DEFAULT_PRIOR_ALPHA
     prior_beta: float = DEFAULT_PRIOR_BETA
 
+    # v0.5.23 — runtime-fingerprint centroid + diagonal covariance.
+    # 3-D vector of (log_cost, log_tokens_in, log_latency). Empty
+    # tuples for v0.5.22-and-earlier patterns (no Mahalanobis gating).
+    atv_centroid: tuple[float, ...] = ()
+    atv_cov_diag: tuple[float, ...] = ()
+    centroid_n_samples: int = 0
+
     @property
     def key(self) -> tuple[str, str]:
         """Stable lookup key for the trust table."""
@@ -340,6 +347,11 @@ class _PatternBucket:
     # here would suppress the very thing we're trying to detect.
     baseline_counts: RewardCounts = field(default_factory=RewardCounts)
     recent_counts: RewardCounts = field(default_factory=RewardCounts)
+    # v0.5.23 — runtime fingerprints from CLEAN records only. The
+    # centroid + cov_diag are computed at the end of the bucket
+    # pass; storing the per-record vectors here lets the learner
+    # apply decay-weighting (TODO future) before the aggregation.
+    clean_features: list[tuple[float, ...]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -544,6 +556,14 @@ def learn_with_diagnostics(
         else:
             b.recent_counts = b.recent_counts.add(event, weight=1.0)
 
+        # v0.5.23 — collect runtime fingerprints for clean records
+        # only. The centroid represents "how does a healthy
+        # invocation of this pattern look?" — BLOCK followups and
+        # denials would skew it toward the bad cluster.
+        if event is RewardEvent.CLEAN:
+            from aegis.autonomy.centroid import feature_vector
+            b.clean_features.append(feature_vector(r))
+
     # Compute per-tool baselines for empirical-Bayes hierarchical
     # prior. Aggregate across all patterns of each tool, excluding
     # the never-trust ones.
@@ -673,6 +693,10 @@ def learn_with_diagnostics(
             / b.n_seen
             if b.n_seen > 0 else 0.0
         )
+        # v0.5.23 — runtime-fingerprint centroid from clean records.
+        from aegis.autonomy.centroid import compute_centroid_and_cov
+        centroid, cov_diag = compute_centroid_and_cov(b.clean_features)
+
         out[key] = TrustedPattern(
             tool_name=b.tool,
             reason_signature=b.signature,
@@ -693,6 +717,9 @@ def learn_with_diagnostics(
             credibility=credibility,
             prior_alpha=prior_alpha,
             prior_beta=prior_beta,
+            atv_centroid=centroid,
+            atv_cov_diag=cov_diag,
+            centroid_n_samples=len(b.clean_features),
         )
 
     # Calibration check — uses train-only posteriors + val
@@ -835,6 +862,8 @@ def evaluate_autonomy_request(
     reason: str,
     trust_table: dict[tuple[str, str], TrustedPattern],
     min_trust: float = MIN_TRUST_FOR_BYPASS,
+    runtime_features: tuple[float, ...] | None = None,
+    centroid_min_samples: int = 20,
 ) -> AutonomyVerdict:
     """Given a live REQUIRE_APPROVAL signal, decide whether to
     auto-bypass it based on the learned trust table.
@@ -916,6 +945,46 @@ def evaluate_autonomy_request(
             ),
             outlier_signals=("low_trust_score",),
         )
+
+    # v0.5.23 — ATV centroid Mahalanobis gate. Fires only when:
+    #   (a) the caller supplied a runtime feature vector,
+    #   (b) the pattern has a populated centroid (centroid_n_samples
+    #       ≥ centroid_min_samples — enough samples for a stable
+    #       cluster), and
+    #   (c) the runtime fingerprint sits outside the cluster.
+    # Otherwise the centroid is silently skipped (legacy v0.5.22
+    # patterns + first-time patterns with too-few clean samples
+    # both fall through to bypass).
+    if (
+        runtime_features
+        and pattern.atv_centroid
+        and pattern.atv_cov_diag
+        and pattern.centroid_n_samples >= centroid_min_samples
+    ):
+        from aegis.autonomy.centroid import (
+            DEFAULT_MAHALANOBIS_THRESHOLD,
+            mahalanobis_distance_diag,
+        )
+        dist = mahalanobis_distance_diag(
+            runtime_features,
+            pattern.atv_centroid,
+            pattern.atv_cov_diag,
+        )
+        if dist > DEFAULT_MAHALANOBIS_THRESHOLD:
+            return AutonomyVerdict(
+                auto_approve=False,
+                matched_pattern=pattern,
+                confidence=trust,
+                reason=(
+                    f"runtime fingerprint outside cluster "
+                    f"(Mahalanobis distance {dist:.2f} > "
+                    f"{DEFAULT_MAHALANOBIS_THRESHOLD:.1f}σ) — "
+                    "this call's cost/latency/tokens differ from "
+                    "the cluster of clean historical calls; "
+                    "keeping human in loop"
+                ),
+                outlier_signals=("centroid_outlier",),
+            )
 
     return AutonomyVerdict(
         auto_approve=True,

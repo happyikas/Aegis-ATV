@@ -814,11 +814,36 @@ def handle_pretool(stdin: Any, stdout: Any) -> int:
         from aegis.autonomy import apply_autonomy_bypass
 
         bypass_tool = event.get("tool_name", "") or inp.tool_name
+        # v0.5.23 — assemble the 3-D runtime fingerprint (log
+        # cost, log tokens_in, log latency) so the centroid gate
+        # in evaluate_autonomy_request can fire on
+        # cost-divergent or token-spike calls.
+        from aegis.autonomy.centroid import feature_vector_from_signals
+        ce = getattr(inp, "cost_estimate", None)
+        try:
+            rf_cost = float(getattr(ce, "estimated_cost_usd", 0.0) or 0.0)
+            rf_tokens = int(getattr(ce, "estimated_input_tokens", 0) or 0)
+        except (TypeError, ValueError):
+            rf_cost, rf_tokens = 0.0, 0
+        # No `elapsed_ms` yet — that's computed *after* this block.
+        # Use the per-call latency observed in cost_estimate (or 0
+        # when unavailable). The centroid gate cares about the
+        # agent's typical-call cost/tokens/latency fingerprint, not
+        # the firewall's own per-call latency.
+        rf_latency = float(
+            getattr(ce, "latency_ms_so_far", 0.0) or 0.0
+        )
+        runtime_features = feature_vector_from_signals(
+            cost_usd=rf_cost,
+            tokens_in=rf_tokens,
+            latency_ms=rf_latency,
+        )
         verdict, _autonomy_av = apply_autonomy_bypass(
             verdict,
             tool_name=bypass_tool,
             reason=verdict.reason or "",
             tool_args_json=getattr(inp, "tool_args_json", "") or "",
+            runtime_features=runtime_features,
         )
     except Exception as e:  # noqa: BLE001 — autonomy must never block
         if VERBOSE:
