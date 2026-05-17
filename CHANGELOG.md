@@ -4,6 +4,83 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] — 2026-05-16  ·  Embedding-based semantic search over the wiki
+
+v0.5.21 shipped TF-IDF as the pragmatic v1 ranker — pure-Python,
+no ML deps, deterministic. Lexical overlap is enough for most
+"I remember the keyword" queries. But it misses paraphrases:
+`"expensive Bash invocations"` won't surface
+`"cost-divergence on Bash"` because the tokens don't overlap.
+
+v0.6.0 ships an **embedding ranker** that uses the existing
+`aegis.atv.embeddings` provider chain — same `get_provider()`
+the ATV synthesiser already calls. No new dependency, no new
+config knob: `AEGIS_EMBEDDING_PROVIDER` controls both.
+
+### Two engines, one CLI
+
+```
+aegis knowledge search "cost divergence on bash"               # default: tfidf
+aegis knowledge search "expensive bash" --engine embedding     # semantic
+```
+
+Both engines return the same `SearchHit` shape so callers can
+swap transparently. Default stays `tfidf` so existing operators
+see no change.
+
+### Design choices
+
+* **Single shared provider.** No new model dependency. With
+  `AEGIS_EMBEDDING_PROVIDER=bge-local` + `uv sync --extra
+  local-llm`, the ranker is real semantic search. With
+  `dummy` (the test default), it's deterministic SHA3-expanded
+  768-D vectors — useful as a baseline and for CI without
+  `llama-cpp`.
+* **Parallel, not replacement.** TF-IDF stays as default.
+  Operators opt into the embedding ranker per-call.
+* **mtime-keyed cache.** Same cache idiom as TF-IDF — rebuild
+  only when the wiki's `index.json` mtime moves.
+* **Defensive fallback.** Provider failure or zero-vector
+  output drops the entry rather than poisoning the ranking
+  with NaN cosines. Empty query / missing wiki / query embed
+  failure → empty list, never raises.
+* **Document = same blob as TF-IDF.** Title (×3 boost) +
+  summary + infobox + section bodies + tags + related URIs.
+  Keeps the two engines comparable on equivalent content.
+
+### Modules
+
+* **`src/aegis/knowledge/search_embedding.py`** —
+  `build_embedding_index(entries)` and
+  `search_entries_embedding(query, *, root, k, min_score, dim)`.
+  L2-normalised vectors so cosine = dot product. 768-D default
+  (BGE-base); operators on bge-large can override via `dim`.
+* **`src/aegis/knowledge/__init__.py`** — exports
+  `EmbeddingIndex`, `build_embedding_index`,
+  `clear_embedding_cache`, `search_entries_embedding`.
+* **CLI**: `aegis knowledge search <query> --engine
+  {tfidf,embedding}` (default `tfidf`).
+
+### Tests
+
+12 new tests in `tests/unit/test_knowledge_search_embedding.py`:
+index construction (4), cosine ranking (6), cache (1), CLI
+engine parity (1). Full suite **3570 passed**.
+
+### Real smoke
+
+```
+$ AEGIS_EMBEDDING_PROVIDER=dummy aegis knowledge search \
+  "loop detector pattern on bash" --engine embedding -k 3
+pattern/Bash:loop:Bash  (score=1.000)
+tool/Bash               (score=0.412)
+tool/Edit               (score=0.187)
+```
+
+Same query through `--engine tfidf` returns a different ranking
+based on lexical overlap. Both engines are deterministic, both
+are mtime-cached, both are hot-path safe.
+
 ## [0.5.27] — 2026-05-17  ·  `aegis autonomy explain <trace_id>` (gate forensics)
 
 With seven safety floors shipped across v0.5.11–0.5.25, the

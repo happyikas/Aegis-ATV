@@ -115,6 +115,12 @@ from aegis.knowledge.search import (
     clear_search_cache,
     search_entries,
 )
+from aegis.knowledge.search_embedding import (
+    EmbeddingIndex,
+    build_embedding_index,
+    clear_embedding_cache,
+    search_entries_embedding,
+)
 from aegis.knowledge.store import (
     IndexEntry,
     entry_path,
@@ -154,9 +160,12 @@ __all__ = [
     "load_index",
     "make_entry_id",
     "measure_context",
+    "EmbeddingIndex",
     "SearchHit",
     "TfIdfIndex",
+    "build_embedding_index",
     "build_tfidf_index",
+    "clear_embedding_cache",
     "clear_search_cache",
     "render_advisor_context",
     "render_entry_markdown",
@@ -164,5 +173,6 @@ __all__ = [
     "save_index",
     "search_by_kind_or_tag",
     "search_entries",
+    "search_entries_embedding",
     "split_entry_id",
 ]

@@ -8057,16 +8057,26 @@ def cmd_reversibility_check(args: argparse.Namespace) -> int:
 
 
 def cmd_knowledge_search(args: argparse.Namespace) -> int:
-    """``aegis knowledge search <query>`` — free-text search over the
-    wiki using TF-IDF + cosine similarity (v0.5.21).
+    """``aegis knowledge search <query> [--engine tfidf|embedding]``
+    — free-text search over the wiki (v0.5.21 + v0.6.0).
 
-    Useful when you don't know the exact ``entry_id`` but have a
-    phrase: ``aegis knowledge search "cost-divergence on Bash"``
-    returns the entries whose text best matches.
+    Two engines:
 
-    Deterministic + dependency-free — same wiki + same query
-    produces the same ranking. No LLM call."""
-    from aegis.knowledge import knowledge_dir, search_entries
+    * ``tfidf`` (default) — pure-Python TF-IDF + cosine similarity.
+      No ML deps. Deterministic.
+    * ``embedding`` (v0.6.0) — uses the shared embedding provider
+      chain (``AEGIS_EMBEDDING_PROVIDER``: ``bge-local`` for real
+      semantic search, ``dummy`` for deterministic fallback).
+      Catches "cost-divergence on Bash" → "expensive Bash
+      invocations" even without lexical overlap.
+
+    No LLM completion call regardless of engine. Both engines
+    are mtime-cached."""
+    from aegis.knowledge import (
+        knowledge_dir,
+        search_entries,
+        search_entries_embedding,
+    )
 
     query = " ".join(getattr(args, "query", []) or []).strip()
     if not query:
@@ -8076,7 +8086,13 @@ def cmd_knowledge_search(args: argparse.Namespace) -> int:
     root = Path(dir_override) if dir_override else knowledge_dir()
     k = int(getattr(args, "k", 10))
     min_score = float(getattr(args, "min_score", 0.0))
-    hits = search_entries(query, root=root, k=k, min_score=min_score)
+    engine = getattr(args, "engine", "tfidf")
+    if engine == "embedding":
+        hits = search_entries_embedding(
+            query, root=root, k=k, min_score=min_score,
+        )
+    else:
+        hits = search_entries(query, root=root, k=k, min_score=min_score)
 
     if getattr(args, "emit_json", False):
         from dataclasses import asdict
@@ -9774,6 +9790,14 @@ def build_parser() -> argparse.ArgumentParser:
     k_search.add_argument(
         "--json", dest="emit_json", action="store_true",
         help="emit JSON instead of plain-text output",
+    )
+    k_search.add_argument(
+        "--engine", type=str, choices=["tfidf", "embedding"], default="tfidf",
+        help=(
+            "ranking engine: tfidf (default, pure-Python) or "
+            "embedding (uses AEGIS_EMBEDDING_PROVIDER — bge-local "
+            "for semantic search, dummy for deterministic fallback)"
+        ),
     )
     k_search.add_argument(
         "--dir", type=str, default=None,
