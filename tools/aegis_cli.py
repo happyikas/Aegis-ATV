@@ -7928,6 +7928,39 @@ def cmd_knowledge_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_autonomy_explain(args: argparse.Namespace) -> int:
+    """``aegis autonomy explain <trace_id>`` — walk the 6
+    safety floors for a historical trace_id and show which
+    gates fired / passed (v0.5.27)."""
+    from aegis.autonomy.explain import explain_trace, render_explain
+
+    trace_id = getattr(args, "trace_id", "").strip()
+    if not trace_id:
+        print(_red("error: trace_id is required"), file=sys.stderr)
+        return 1
+    cm_override = getattr(args, "context_memory", None)
+    cm_path = Path(cm_override) if cm_override else None
+    since_spec = getattr(args, "since", None) or "30d"
+    try:
+        since_secs = _parse_window_secs(since_spec)
+    except ValueError as e:
+        print(_red(f"error: --since parse failed: {e}"), file=sys.stderr)
+        return 1
+    report = explain_trace(
+        trace_id, cm_path=cm_path, since_seconds=since_secs,
+    )
+    if getattr(args, "emit_json", False):
+        from dataclasses import asdict
+        payload = asdict(report)
+        # Drop the heavy record field; CLI consumers can read it
+        # via `aegis report --trace` if needed.
+        payload.pop("record", None)
+        print(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
+        return 0
+    print(render_explain(report))
+    return 0
+
+
 def cmd_autonomy_session_start(args: argparse.Namespace) -> int:
     """``aegis autonomy session start <label>`` — tag the work
     session with a risk label (v0.5.25)."""
@@ -9524,6 +9557,32 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     a_deny.set_defaults(fn=cmd_autonomy_deny)
+
+    # ── aegis autonomy explain (v0.5.27) ─────────────────────────
+    a_explain = auto_sub.add_parser(
+        "explain",
+        help=(
+            "Walk the 6 safety floors for one historical trace_id; "
+            "show which gates fired / passed against current state."
+        ),
+    )
+    a_explain.add_argument(
+        "trace_id",
+        help="trace_id from the audit log / `aegis report`",
+    )
+    a_explain.add_argument(
+        "--since", type=str, default="30d",
+        help="ContextMemory scan window (default 30d)",
+    )
+    a_explain.add_argument(
+        "--json", dest="emit_json", action="store_true",
+        help="emit JSON instead of plain-text output",
+    )
+    a_explain.add_argument(
+        "--context-memory", dest="context_memory", type=str, default=None,
+        help="ContextMemory path override",
+    )
+    a_explain.set_defaults(fn=cmd_autonomy_explain)
 
     # ── aegis autonomy session (v0.5.25 — session-prior) ─────────
     a_session = auto_sub.add_parser(
