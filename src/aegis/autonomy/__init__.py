@@ -58,6 +58,19 @@ Safety contract
   baseline are dropped from the table.
 """
 
+from aegis.autonomy.andon import (
+    DEFAULT_ANDON_THRESHOLD,
+    AndonState,
+    andon_state_path,
+    andon_threshold_from_env,
+    record_andon,
+    record_bypass,
+    reset_counter,
+    should_fire_andon,
+)
+from aegis.autonomy.andon import (
+    load_state as load_andon_state,
+)
 from aegis.autonomy.bayesian import (
     DEFAULT_CREDIBILITY,
     DEFAULT_PRIOR_ALPHA,
@@ -131,6 +144,8 @@ from aegis.autonomy.reward import (
 )
 from aegis.autonomy.runtime import (
     DEFAULT_EPSILON,
+    STEP_TRACE_ANDON_KEY,
+    STEP_TRACE_ANDON_PREFIX,
     STEP_TRACE_EXPLORE_KEY,
     STEP_TRACE_EXPLORE_PREFIX,
     STEP_TRACE_KEY,
@@ -144,10 +159,12 @@ from aegis.autonomy.runtime import (
 
 __all__ = [
     "AUTONOMY_BYPASS_PREFIX",
+    "AndonState",
     "AutonomyVerdict",
     "BetaPosterior",
     "BucketStat",
     "CalibrationReport",
+    "DEFAULT_ANDON_THRESHOLD",
     "DEFAULT_CREDIBILITY",
     "DEFAULT_DRIFT_THRESHOLD",
     "DEFAULT_EPSILON",
@@ -166,6 +183,8 @@ __all__ = [
     "RewardCounts",
     "RewardEvent",
     "RewardSignal",
+    "STEP_TRACE_ANDON_KEY",
+    "STEP_TRACE_ANDON_PREFIX",
     "STEP_TRACE_EXPLORE_KEY",
     "STEP_TRACE_EXPLORE_PREFIX",
     "STEP_TRACE_KEY",
@@ -177,6 +196,8 @@ __all__ = [
     "WEIGHT_CLEAN",
     "WEIGHT_EXPLICIT_DENY",
     "adjusted_min_samples",
+    "andon_state_path",
+    "andon_threshold_from_env",
     "append_denial",
     "apply_autonomy_bypass",
     "autonomy_enabled",
@@ -194,15 +215,20 @@ __all__ = [
     "kl_divergence_beta",
     "learn_trusted_patterns",
     "learn_with_diagnostics",
+    "load_andon_state",
     "load_denial_trace_ids",
     "load_denials",
     "load_trust_table",
     "make_posterior",
     "reason_signature",
+    "record_andon",
+    "record_bypass",
     "render_outliers",
     "render_trust_table",
+    "reset_counter",
     "save_trust_table",
     "should_drop",
+    "should_fire_andon",
     "trace_split",
     "trust_breakdown",
     "trust_table_metadata",

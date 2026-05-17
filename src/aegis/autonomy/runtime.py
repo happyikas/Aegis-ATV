@@ -81,6 +81,11 @@ STEP_TRACE_EXPLORE_PREFIX = "step331: forced exploration"
 DEFAULT_EPSILON: float = 0.05
 
 
+# v0.5.24 — andon tripwire step trace stamps.
+STEP_TRACE_ANDON_KEY = "aegis.autonomy.step331.andon"
+STEP_TRACE_ANDON_PREFIX = "step331: andon tripwire fired"
+
+
 def trust_table_path() -> Path:
     """Return the canonical on-disk path for the trust table."""
     raw = os.environ.get("AEGIS_AUTONOMY_TRUST_TABLE", "").strip()
@@ -340,6 +345,48 @@ def apply_autonomy_bypass(
     if not av.auto_approve:
         return verdict, av
 
+    # v0.5.24 — andon tripwire. After N consecutive bypasses,
+    # force the next one to the human. Keeps the operator
+    # in conscious awareness of what's being auto-approved.
+    # Independent of ε-greedy: even at ε=0 the andon still fires.
+    try:
+        from aegis.autonomy.andon import (
+            record_andon,
+            should_fire_andon,
+        )
+        andon_fire, andon_state = should_fire_andon()
+        if andon_fire:
+            record_andon(andon_state)
+            stamp = (
+                f"{STEP_TRACE_ANDON_PREFIX} after "
+                f"{andon_state.consecutive_bypasses} consecutive "
+                "auto-approvals — human-in-loop re-engagement"
+            )
+            new_traces = dict(verdict.step_traces)
+            new_traces[STEP_TRACE_ANDON_KEY] = stamp
+            andon_verdict = Verdict(
+                decision=verdict.decision,
+                reason=verdict.reason,
+                atv_id=verdict.atv_id,
+                signature=verdict.signature,
+                confidence=verdict.confidence,
+                step_traces=new_traces,
+                step_timings_us=verdict.step_timings_us,
+            )
+            return andon_verdict, AutonomyVerdict(
+                auto_approve=False,
+                matched_pattern=av.matched_pattern,
+                confidence=av.confidence,
+                reason=(
+                    f"andon tripwire fired after "
+                    f"{andon_state.consecutive_bypasses} consecutive "
+                    "bypasses — keeping human in loop"
+                ),
+                outlier_signals=("andon_tripwire",),
+            )
+    except Exception:  # noqa: BLE001 — hot-path safe
+        andon_state = None
+
     # ε-greedy: even a trusted pattern is forced to ask the human
     # once in a while so the off-policy distribution shift doesn't
     # silence our drift / negative-reward signal.
@@ -396,6 +443,14 @@ def apply_autonomy_bypass(
         step_traces=new_traces,
         step_timings_us=verdict.step_timings_us,
     )
+    # v0.5.24 — increment the andon counter now that the bypass
+    # actually engages. Defensive: any error skips the increment.
+    try:
+        from aegis.autonomy.andon import load_state as _load_andon
+        from aegis.autonomy.andon import record_bypass as _record_bypass
+        _record_bypass(_load_andon())
+    except Exception:  # noqa: BLE001
+        pass
     return new_verdict, av
 
 
