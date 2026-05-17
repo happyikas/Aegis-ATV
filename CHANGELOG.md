@@ -4,6 +4,48 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.24] — 2026-05-17  ·  Andon tripwire (consecutive-bypass cap)
+
+Autonomy idea #4: even if every individual bypass is correct, a
+long run of silent auto-approvals erodes the operator's awareness
+of what's being approved on their behalf. Borrowed from Toyota's
+andon-cord pattern: periodically force a halt so the human
+re-engages.
+
+### How it works
+
+* Persistent counter at `~/.aegis/autonomy/andon_state.json`
+  tracks consecutive successful bypasses across hook invocations
+  (the hook is a fresh process per call, so in-process state
+  would reset every call).
+* After **N** successive auto-approvals (default 20, env
+  `AEGIS_AUTONOMY_ANDON_THRESHOLD`), the next bypass is forced
+  to the human. Counter resets after the tripwire fires.
+* Stamps `aegis.autonomy.step331.andon` into `step_traces` +
+  `outlier_signals=("andon_tripwire",)`.
+* Independent of ε-greedy: even with ε=0, the andon still fires.
+* `AEGIS_AUTONOMY_ANDON_THRESHOLD=0` disables the tripwire.
+
+### Decision API + persistence
+
+* **`src/aegis/autonomy/andon.py`** — `should_fire_andon()`,
+  `record_bypass()`, `record_andon()`, `reset_counter()`. Three-
+  way contract so the runtime only increments when the bypass
+  actually engages (declined bypasses leave the counter alone).
+* Defensive: load returns zero state on missing/malformed file,
+  write swallows OSError. Hot-path safe, never raises.
+* **`src/aegis/autonomy/runtime.py`** — `apply_autonomy_bypass`
+  consults the andon counter AFTER the trust evaluation and
+  drift gate but BEFORE returning the bypass. Increment happens
+  in the same function on the success path.
+
+### Tests
+
+18 new tests in `tests/unit/test_andon_tripwire.py`: state
+persistence (4), env threshold (5), decision API (3), record
+semantics (2), runtime integration (4). Full suite **3527
+passed**.
+
 ## [0.5.23] — 2026-05-17  ·  ATV centroid bypass (Mahalanobis gate)
 
 Autonomy idea #2: `trust_score` is per-(tool, signature) — it
