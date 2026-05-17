@@ -161,6 +161,16 @@ def test_wiring_bypass_engages_when_pattern_trusted(
     _write_trust_table(table_path)
     monkeypatch.setenv("AEGIS_AUTONOMY_ENABLED", "1")
     monkeypatch.setenv("AEGIS_AUTONOMY_TRUST_TABLE", str(table_path))
+    # v0.5.24+ — isolate andon counter to a tmp file so previous
+    # test state can't trip the tripwire mid-run.
+    monkeypatch.setenv(
+        "AEGIS_AUTONOMY_ANDON_STATE", str(tmp_path / "andon.json"),
+    )
+    monkeypatch.setenv("AEGIS_AUTONOMY_ANDON_THRESHOLD", "0")
+    # v0.5.25+ — isolate session-prior to a tmp file too.
+    monkeypatch.setenv(
+        "AEGIS_AUTONOMY_SESSION_PRIOR", str(tmp_path / "session.json"),
+    )
     # Force ε=0 so this test isn't flaky on the explore path.
     monkeypatch.setenv("AEGIS_AUTONOMY_EPSILON", "0.0")
 
@@ -198,6 +208,16 @@ def test_wiring_never_trust_filter_holds(
     )
     monkeypatch.setenv("AEGIS_AUTONOMY_ENABLED", "1")
     monkeypatch.setenv("AEGIS_AUTONOMY_TRUST_TABLE", str(table_path))
+    # v0.5.24+ — isolate andon counter to a tmp file so previous
+    # test state can't trip the tripwire mid-run.
+    monkeypatch.setenv(
+        "AEGIS_AUTONOMY_ANDON_STATE", str(tmp_path / "andon.json"),
+    )
+    monkeypatch.setenv("AEGIS_AUTONOMY_ANDON_THRESHOLD", "0")
+    # v0.5.25+ — isolate session-prior to a tmp file too.
+    monkeypatch.setenv(
+        "AEGIS_AUTONOMY_SESSION_PRIOR", str(tmp_path / "session.json"),
+    )
     monkeypatch.setenv("AEGIS_AUTONOMY_EPSILON", "0.0")
 
     client = TestClient(aegis_app)  # type: ignore[arg-type]
@@ -237,6 +257,16 @@ def test_wiring_epsilon_one_keeps_human_in_loop(
     _write_trust_table(table_path)
     monkeypatch.setenv("AEGIS_AUTONOMY_ENABLED", "1")
     monkeypatch.setenv("AEGIS_AUTONOMY_TRUST_TABLE", str(table_path))
+    # v0.5.24+ — isolate andon counter to a tmp file so previous
+    # test state can't trip the tripwire mid-run.
+    monkeypatch.setenv(
+        "AEGIS_AUTONOMY_ANDON_STATE", str(tmp_path / "andon.json"),
+    )
+    monkeypatch.setenv("AEGIS_AUTONOMY_ANDON_THRESHOLD", "0")
+    # v0.5.25+ — isolate session-prior to a tmp file too.
+    monkeypatch.setenv(
+        "AEGIS_AUTONOMY_SESSION_PRIOR", str(tmp_path / "session.json"),
+    )
     # ε=0.5 is the hard cap from the env reader. Use it as the
     # "always explore" proxy — over many BLAKE2b draws ~50% will
     # explore, which is enough to keep this test non-flaky given
@@ -298,6 +328,16 @@ def test_wiring_drifted_pattern_refused(
     _write_trust_table(table_path, drifted=True)
     monkeypatch.setenv("AEGIS_AUTONOMY_ENABLED", "1")
     monkeypatch.setenv("AEGIS_AUTONOMY_TRUST_TABLE", str(table_path))
+    # v0.5.24+ — isolate andon counter to a tmp file so previous
+    # test state can't trip the tripwire mid-run.
+    monkeypatch.setenv(
+        "AEGIS_AUTONOMY_ANDON_STATE", str(tmp_path / "andon.json"),
+    )
+    monkeypatch.setenv("AEGIS_AUTONOMY_ANDON_THRESHOLD", "0")
+    # v0.5.25+ — isolate session-prior to a tmp file too.
+    monkeypatch.setenv(
+        "AEGIS_AUTONOMY_SESSION_PRIOR", str(tmp_path / "session.json"),
+    )
     monkeypatch.setenv("AEGIS_AUTONOMY_EPSILON", "0.0")
 
     client = TestClient(aegis_app)  # type: ignore[arg-type]

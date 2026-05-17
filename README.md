@@ -34,8 +34,8 @@ Aegis is packaged around three named features built on the same firewall + audit
 | **🔧 ATV Doctor** | Diagnoses + advises + rolls back when the agent is in trouble (or about to be) | `aegis doctor`, `aegis forensic last`, `aegis advise`, `aegis rollback <trace>` |
 | **🧠 ATV Memory** | Reads recent BLOCK / advise events from ContextMemory and proposes concrete CLAUDE.md edits | `aegis memory claude-md`, `aegis memory show` |
 | **🛡️ ATV Guard** | Hookify-style natural-language rules → regex auto-proposal + markdown storage | `aegis guard add`, `aegis guard test`, `aegis guard import` |
-| **🤖 ATV Autonomy** | Learns the operator's allow/deny patterns and auto-bypasses routine `REQUIRE_APPROVAL` while keeping every bypass stamped in the audit chain | `aegis autonomy learn`, `aegis autonomy show`, `aegis autonomy outliers`, `aegis autonomy deny <trace>` |
-| **📚 ATV Wiki** | Derived semantic knowledge over ContextMemory — per-agent / per-tool / per-pattern wiki articles the sLLM advisor consumes for workflow advice | `aegis knowledge build`, `aegis knowledge show`, `aegis knowledge measure` |
+| **🤖 ATV Autonomy** | Learns the operator's allow/deny patterns and auto-bypasses routine `REQUIRE_APPROVAL` with **six independent safety floors** (never-trust filter · reversibility classifier · drift detection · ATV centroid distance · andon tripwire · session-prior risk labels) | `aegis autonomy {learn,show,outliers,deny,session}`, `aegis reversibility check` |
+| **📚 ATV Wiki** | Derived semantic knowledge over ContextMemory — six entry kinds (agent · tool · pattern · session · incident · workflow) the sLLM advisor consumes for workflow advice. TF-IDF content search. | `aegis knowledge {build,list,show,search,measure,advisor-context}` |
 
 > v0.5+ uses operator-vocabulary canonical names (`live` / `coach` / `guard` / `memory` / `doctor` / `autonomy` / `knowledge`). Older command names (`dashboard` / `burnin` / `rule` / `case-memory` / `advisor-calibration` / `fleet-monitor`) keep working as aliases — see `aegis --help` for the full index.
 
