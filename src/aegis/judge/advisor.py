@@ -234,7 +234,12 @@ ADVISOR_PROMPT_HASH = hashlib.sha3_256(
 
 class Advisor(Protocol):
     """Common interface. Kwargs mirror :func:`compose_advice_heuristic`
-    plus the extra context layers that an sLLM can leverage."""
+    plus the extra context layers that an sLLM can leverage.
+
+    v0.5.17 adds ``knowledge_context`` — an optional markdown block
+    from :func:`aegis.knowledge.knowledge_context_for_advisor` that
+    the production advisor splices into the sLLM prompt to ground
+    its reasoning in the agent's long-term wiki profile."""
 
     def advise(
         self,
@@ -253,6 +258,7 @@ class Advisor(Protocol):
         security_signals: dict[str, Any] | None = None,
         step_traces: dict[str, Any] | None = None,
         current_model: str | None = None,
+        knowledge_context: str | None = None,
     ) -> ActionAdvice: ...
 
 
@@ -284,7 +290,12 @@ class DummyAdvisor:
         security_signals: dict[str, Any] | None = None,
         step_traces: dict[str, Any] | None = None,
         current_model: str | None = None,
+        knowledge_context: str | None = None,  # noqa: ARG002 — heuristic ignores
     ) -> ActionAdvice:
+        # ``knowledge_context`` is intentionally unused: the heuristic
+        # composer is deterministic and signal-driven, so wiki context
+        # adds no signal. Accepting the kwarg keeps the Advisor
+        # protocol uniform across implementations.
         return compose_advice_heuristic(
             temporal_ctx=temporal_ctx,
             anomalies=anomalies,
@@ -420,6 +431,7 @@ def _build_user_message(
     cache_signals: dict[str, Any] | None = None,
     security_signals: dict[str, Any] | None = None,
     current_model: str | None = None,
+    knowledge_context: str | None = None,
 ) -> str:
     """Assemble the multi-layer narrative for the sLLM user message.
     Best-effort: a failure in any single layer's renderer skips that
@@ -430,8 +442,23 @@ def _build_user_message(
       - COST BREAKDOWN PER TURN (per-turn cum_tokens + cache_hit + annotation)
       - AVAILABLE ACTIONS (verb catalog)
       - CONSTRAINTS (current model, window, budget numbers)
+
+    v0.5.17 adds a top-of-message ``KNOWLEDGE CONTEXT`` block when
+    ``knowledge_context`` is supplied — typically the agent's wiki
+    article (plus top tools + patterns) from
+    :func:`aegis.knowledge.knowledge_context_for_advisor`. Placed
+    at the top so the sLLM reads the agent's long-term profile
+    before the per-turn signals; this is the single biggest lever
+    for "is this agent acting unusually" vs "business as usual".
     """
     sections: list[str] = []
+
+    if knowledge_context:
+        sections.append(
+            "=== KNOWLEDGE CONTEXT (agent background) ===\n"
+            f"{knowledge_context.rstrip()}\n"
+            "=== END KNOWLEDGE CONTEXT ==="
+        )
 
     if temporal_ctx is not None:
         try:
@@ -674,6 +701,7 @@ class HaikuAdvisor:
         security_signals: dict[str, Any] | None = None,
         step_traces: dict[str, Any] | None = None,
         current_model: str | None = None,
+        knowledge_context: str | None = None,
     ) -> ActionAdvice:
         user_msg = _build_user_message(
             temporal_ctx=temporal_ctx,
@@ -689,6 +717,7 @@ class HaikuAdvisor:
             cache_signals=cache_signals,
             security_signals=security_signals,
             current_model=current_model or self.model,
+            knowledge_context=knowledge_context,
         )
 
         try:
@@ -790,6 +819,8 @@ def compose_advice_sllm(
     step_traces: dict[str, Any] | None = None,
     current_model: str | None = None,
     advisor: Advisor | None = None,
+    aid: str | None = None,
+    use_knowledge: bool | None = None,
 ) -> ActionAdvice:
     """Build an :class:`ActionAdvice` via the configured advisor backend.
 
@@ -801,8 +832,38 @@ def compose_advice_sllm(
     ``step_traces`` so the heuristic loop-breaker can fire on a fresh
     session that has the firewall's step336 trace but no burn-in
     redundancy baseline yet. Pass ``advisor=`` to inject a specific
-    advisor instance (useful for tests)."""
+    advisor instance (useful for tests).
+
+    v0.5.17: ``aid`` + ``use_knowledge`` opt into the ContextMemory
+    knowledge layer built by ``aegis knowledge build``. Selection:
+
+      1. Explicit ``use_knowledge=True`` kwarg wins.
+      2. Otherwise, ``AEGIS_ADVISOR_USE_KNOWLEDGE=1`` env opts in.
+      3. Default off.
+
+    When opted in AND ``aid`` is provided, the wiki block for that
+    agent (its top tools + patterns) is fetched via
+    :func:`aegis.knowledge.knowledge_context_for_advisor` and passed
+    to the advisor. The fetch is mtime-cached and silently falls
+    back to no-context on missing wiki, so this is safe to enable
+    globally — the advisor simply ignores the kwarg when no
+    knowledge is available."""
     chosen: Advisor = advisor if advisor is not None else get_advisor()
+
+    knowledge_context: str | None = None
+    if use_knowledge is None:
+        try:
+            from aegis.knowledge.advisor import advisor_knowledge_enabled
+            use_knowledge = advisor_knowledge_enabled()
+        except ImportError:
+            use_knowledge = False
+    if use_knowledge and aid:
+        try:
+            from aegis.knowledge.advisor import knowledge_context_for_advisor
+            knowledge_context = knowledge_context_for_advisor(aid)
+        except ImportError:
+            knowledge_context = None
+
     return chosen.advise(
         temporal_ctx=temporal_ctx,
         anomalies=anomalies,
@@ -818,6 +879,7 @@ def compose_advice_sllm(
         security_signals=security_signals,
         step_traces=step_traces,
         current_model=current_model,
+        knowledge_context=knowledge_context,
     )
 
 

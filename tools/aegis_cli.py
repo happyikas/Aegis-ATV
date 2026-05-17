@@ -7455,10 +7455,24 @@ def cmd_assess(args: argparse.Namespace) -> int:
     since_ns = now_ns - since_secs * 1_000_000_000
     records = read_window(since_ns=since_ns, path=cm_path)
 
+    # v0.5.17: optional --aid scopes the assessment to one agent
+    # and plumbs that aid through to the sLLM so the wiki context
+    # (if AEGIS_ADVISOR_USE_KNOWLEDGE=1) lands in the prompt.
+    aid_filter = getattr(args, "aid", None) or None
+    if aid_filter:
+        records = [r for r in records if r.aid == aid_filter]
+        if not records:
+            print(_yellow(
+                f"[assess] no records found for aid={aid_filter!r} "
+                f"in window {since_spec}"
+            ))
+            return 1
+
     advice = assess_triple_axis(
         records,
         window_seconds=since_secs,
         prefer_sllm=bool(getattr(args, "prefer_sllm", False)) or None,
+        aid=aid_filter,
     )
 
     if getattr(args, "emit_json", False):
@@ -9140,6 +9154,14 @@ def build_parser() -> argparse.ArgumentParser:
     assess_p.add_argument(
         "--context-memory", dest="context_memory", type=str, default=None,
         help="ContextMemory path override (default: ~/.aegis/context_memory.jsonl)",
+    )
+    assess_p.add_argument(
+        "--aid", type=str, default=None,
+        help=(
+            "scope the assessment to one agent id; also plumbs the "
+            "aid into the sLLM so the wiki block (when "
+            "AEGIS_ADVISOR_USE_KNOWLEDGE=1) lands in the prompt"
+        ),
     )
     assess_p.set_defaults(fn=cmd_assess)
 
