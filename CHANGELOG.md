@@ -4,6 +4,52 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.22] — 2026-05-17  ·  Reversibility scoring (autonomy safety floor)
+
+Autonomy idea #1 from the original roadmap: ``clean_rate`` is
+statistical; the real question for safety is *can this action
+be undone?* v0.5.22 introduces a principled reversibility
+classifier that gates the autonomy bypass before any trust-table
+consultation.
+
+### Four levels
+
+* `trivial`       — read-only / no side effects
+* `reversible`    — recoverable trivially (rm a created file)
+* `costly`        — recoverable but with effort (git restore for Edit)
+* `irreversible` — destructive: rm-rf, force-push, kubectl
+                    delete, destructive SQL, package publish, email
+                    send. **NEVER auto-bypassed regardless of trust.**
+
+### Policy
+
+`policies/reversibility.json` ships with 23 rules. First-matching
+rule wins via regex on tool name + tool_args_json. Honours
+`AEGIS_REVERSIBILITY_POLICY` for overrides.
+
+### Modules
+
+* **`src/aegis/policies/reversibility.py`** —
+  `classify_reversibility(tool, args) → ReversibilityClassification`,
+  `is_irreversible()` convenience, `reversibility_policy_path()`.
+  Pure-Python regex matching, cached at module load, defensive
+  (corrupted policy → degrade to default, never raise).
+* **`src/aegis/autonomy/runtime.py`** — `apply_autonomy_bypass`
+  gains `tool_args_json` kwarg + a hard gate: irreversible
+  actions return `auto_approve=False` with
+  `outlier_signals=("irreversible_action",)` **before** the
+  trust table is consulted. Independent safety floor.
+* **`tools/aegis_local_hook.py` + `src/aegis/api/evaluate.py`** —
+  both wiring sites pass `tool_args_json=inp.tool_args_json`.
+* **CLI**: `aegis reversibility check <tool> <args> [--json]`.
+
+### Tests
+
+27 new tests in `tests/unit/test_reversibility.py`: policy
+resolution (2), classification correctness across all four levels
+(16), defensive loading (2), autonomy bypass gate (2),
+documentation invariants (5). Full suite **3487 passed**.
+
 ## [0.5.21] — 2026-05-17  ·  TF-IDF semantic search over wiki entries
 
 v0.5.15 retrieval was structural (`get_entries_for_agent` follows

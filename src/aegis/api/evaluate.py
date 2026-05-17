@@ -211,6 +211,7 @@ def _evaluate_impl(
         verdict,
         tool_name=inp.tool_name,
         reason=verdict.reason or "",
+        tool_args_json=getattr(inp, "tool_args_json", "") or "",
     )
 
     # M10: ATMU first transition — prepared (firewall passed) or aborted (block).

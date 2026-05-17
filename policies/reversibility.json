@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "default_level": "reversible",
+  "comment": "Reversibility classifier — first matching rule wins. Levels: trivial (always safe to skip approval), reversible (recoverable with effort), costly (recoverable but expensive), irreversible (destructive: rm, force-push, kubectl delete, send-email). The autonomy bypass NEVER auto-approves irreversible actions regardless of trust score.",
+  "rules": [
+    {
+      "tool_pattern": "^(Read|Grep|Glob|LS)$",
+      "args_pattern": null,
+      "level": "trivial",
+      "why": "Read-only filesystem operations"
+    },
+    {
+      "tool_pattern": "^WebSearch$",
+      "args_pattern": null,
+      "level": "trivial",
+      "why": "Read-only network query"
+    },
+    {
+      "tool_pattern": "^WebFetch$",
+      "args_pattern": null,
+      "level": "trivial",
+      "why": "Read-only network fetch (no side-effects observed locally)"
+    },
+    {
+      "tool_pattern": "^(Bash|Shell)$",
+      "args_pattern": "\\brm\\b.*-rf?\\b",
+      "level": "irreversible",
+      "why": "rm -rf — recursive forced delete"
+    },
+    {
+      "tool_pattern": "^(Bash|Shell)$",
+      "args_pattern": "\\brm\\s+(?!-?-?dry-run)",
+      "level": "irreversible",
+      "why": "rm without --dry-run"
+    },
+    {
+      "tool_pattern": "^(Bash|Shell)$",
+      "args_pattern": "git\\s+push\\s+(--force|-f\\b)",
+      "level": "irreversible",
+      "why": "git force-push"
+    },
+    {
+      "tool_pattern": "^(Bash|Shell)$",
+      "args_pattern": "git\\s+(reset\\s+--hard|clean\\s+-f|checkout\\s+--)",
+      "level": "irreversible",
+      "why": "Destructive git operation that overwrites uncommitted changes"
+    },
+    {
+      "tool_pattern": "^(Bash|Shell)$",
+      "args_pattern": "git\\s+branch\\s+-D\\b",
+      "level": "irreversible",
+      "why": "Force-delete branch"
+    },
+    {
+      "tool_pattern": "^(Bash|Shell)$",
+      "args_pattern": "\\b(DROP|TRUNCATE|DELETE)\\b.*\\b(TABLE|FROM|SCHEMA|DATABASE)\\b",
+      "level": "irreversible",
+      "why": "Destructive SQL"
+    },
+    {
+      "tool_pattern": "^(Bash|Shell)$",
+      "args_pattern": "kubectl\\s+(delete|apply\\s+-f.*--force)",
+      "level": "irreversible",
+      "why": "Destructive Kubernetes operation"
+    },
+    {
+      "tool_pattern": "^(Bash|Shell)$",
+      "args_pattern": "terraform\\s+(destroy|apply\\s+-auto-approve)",
+      "level": "irreversible",
+      "why": "Destructive Terraform operation"
+    },
+    {
+      "tool_pattern": "^(Bash|Shell)$",
+      "args_pattern": "aws\\s+s3\\s+rm\\b|aws\\s+.*\\sdelete-bucket\\b",
+      "level": "irreversible",
+      "why": "Destructive AWS S3 operation"
+    },
+    {
+      "tool_pattern": "^(Bash|Shell)$",
+      "args_pattern": "docker\\s+(rmi|system\\s+prune)",
+      "level": "irreversible",
+      "why": "Destructive Docker operation"
+    },
+    {
+      "tool_pattern": "^(Bash|Shell)$",
+      "args_pattern": "\\bnpm\\s+publish\\b|\\btwine\\s+upload\\b|\\bpyproject\\b.*--release",
+      "level": "irreversible",
+      "why": "Public package publish (cannot unpublish trivially)"
+    },
+    {
+      "tool_pattern": "^(Bash|Shell)$",
+      "args_pattern": "gh\\s+(pr\\s+merge|release\\s+create)",
+      "level": "irreversible",
+      "why": "GitHub merge / release creation (observed by external actors)"
+    },
+    {
+      "tool_pattern": "^(Bash|Shell)$",
+      "args_pattern": "(curl|wget|http).*--method\\s+(POST|PUT|DELETE)",
+      "level": "irreversible",
+      "why": "External HTTP write operation"
+    },
+    {
+      "tool_pattern": "^(Bash|Shell)$",
+      "args_pattern": "(mail|sendmail|aws\\s+ses\\s+send-email)\\b",
+      "level": "irreversible",
+      "why": "Email send"
+    },
+    {
+      "tool_pattern": "^Bash$",
+      "args_pattern": "^(ls|pwd|whoami|date|cat|head|tail|grep|find|wc|file|stat)\\b",
+      "level": "trivial",
+      "why": "Common read-only command"
+    },
+    {
+      "tool_pattern": "^Bash$",
+      "args_pattern": "^git\\s+(status|log|diff|show|branch\\s*$|remote\\s+-v)",
+      "level": "trivial",
+      "why": "Read-only git inspection"
+    },
+    {
+      "tool_pattern": "^Bash$",
+      "args_pattern": "\\b(pytest|cargo\\s+test|npm\\s+test|go\\s+test|mvn\\s+test)\\b",
+      "level": "reversible",
+      "why": "Test execution — no persistent side-effects (typically)"
+    },
+    {
+      "tool_pattern": "^Bash$",
+      "args_pattern": "\\bmkdir\\b|\\btouch\\b",
+      "level": "reversible",
+      "why": "Create empty file or directory (trivially reversible by rm)"
+    },
+    {
+      "tool_pattern": "^(Edit|MultiEdit)$",
+      "args_pattern": null,
+      "level": "costly",
+      "why": "File modification — recoverable via git but loses unstaged work"
+    },
+    {
+      "tool_pattern": "^Write$",
+      "args_pattern": null,
+      "level": "costly",
+      "why": "File write — overwrites existing content"
+    },
+    {
+      "tool_pattern": "^NotebookEdit$",
+      "args_pattern": null,
+      "level": "costly",
+      "why": "Notebook cell modification"
+    },
+    {
+      "tool_pattern": "^TodoWrite$",
+      "args_pattern": null,
+      "level": "trivial",
+      "why": "Todo list update — in-process only"
+    }
+  ]
+}

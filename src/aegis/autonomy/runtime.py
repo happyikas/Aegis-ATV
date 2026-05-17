@@ -249,6 +249,7 @@ def apply_autonomy_bypass(
     trust_table: dict[tuple[str, str], TrustedPattern] | None = None,
     min_trust: float = MIN_TRUST_FOR_BYPASS,
     epsilon: float | None = None,
+    tool_args_json: str = "",
 ) -> tuple[Verdict, AutonomyVerdict]:
     """Consult the trust table; downgrade REQUIRE_APPROVAL to
     ALLOW when a high-trust pattern matches.
@@ -290,6 +291,30 @@ def apply_autonomy_bypass(
             confidence=0.0,
             reason="verdict is not REQUIRE_APPROVAL",
         )
+
+    # v0.5.22 — reversibility hard gate. Irreversible actions
+    # (rm -rf, force-push, kubectl delete, package publish, …)
+    # NEVER auto-bypass regardless of trust score, drift, or
+    # ε-greedy. This is the operator's principled safety floor
+    # — independent of the statistical trust learner.
+    try:
+        from aegis.policies.reversibility import (
+            classify_reversibility,
+        )
+        revcls = classify_reversibility(tool_name, tool_args_json)
+        if revcls.level == "irreversible":
+            return verdict, AutonomyVerdict(
+                auto_approve=False,
+                matched_pattern=None,
+                confidence=0.0,
+                reason=(
+                    "reversibility=irreversible — never auto-bypassed "
+                    f"(matched: {revcls.why!r})"
+                ),
+                outlier_signals=("irreversible_action",),
+            )
+    except Exception:  # noqa: BLE001 — never raise from hot path
+        pass
 
     table = trust_table if trust_table is not None else load_trust_table()
     av = evaluate_autonomy_request(
