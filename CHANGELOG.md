@@ -4,6 +4,78 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.27] — 2026-05-17  ·  `aegis autonomy explain <trace_id>` (gate forensics)
+
+With seven safety floors shipped across v0.5.11–0.5.25, the
+operator's natural next question is: *"why did this specific
+call get bypassed / blocked?"* Walking the runtime logic
+manually requires reading across five modules. v0.5.27 composes
+a single forensic report.
+
+### Two views per report
+
+1. **Original audit** — autonomy stamps extracted from the
+   record's `step_traces` (what actually happened at the time).
+2. **Current simulation** — gate-by-gate replay against current
+   state (trust table / centroid / andon counter / session-prior
+   may have changed since the original call).
+
+The simulation is **read-only** — no counters incremented, no
+state mutated. Operator can re-run repeatedly.
+
+### Gates walked (in execution order)
+
+1. master-switch (`AEGIS_AUTONOMY_ENABLED`)
+2. verdict-eligible (REQUIRE_APPROVAL?)
+3. reversibility (irreversible → never bypass)
+4. session-prior (INFO — current `min_trust` after label scaling)
+5. never-trust-filter (reason matches dangerous substring)
+6. pattern-lookup (trust table has matching pattern)
+7. drift-flag
+8. trust-score vs effective min_trust
+9. centroid Mahalanobis distance
+10. andon-tripwire
+11. ε-greedy exploration
+
+First FAIL is sticky — subsequent gates skipped. Outcome is one
+of: `would-bypass` / `would-refuse` / `not-eligible` / `master-off`.
+
+### Modules
+
+* **`src/aegis/autonomy/explain.py`** — `explain_trace(trace_id)`
+  returns `ExplainReport` with original stamps + per-gate
+  `GateResult` list + final outcome. `render_explain(report)`
+  formats it as plain text.
+* **CLI**: `aegis autonomy explain <trace_id> [--since 30d]
+  [--json] [--context-memory PATH]`.
+
+### Tests
+
+13 new tests in `tests/unit/test_autonomy_explain.py`: lookup
+(3), gate walker short-circuit semantics (5), render (3),
+session-prior + andon integration (2). Full suite **3558
+passed**.
+
+### Real smoke
+
+```
+$ aegis autonomy explain 780b0bbf9ba38f3fe965c68ccfac78f1
+Trace explain — 780b0bbf9ba38f3fe965c68ccfac78f1
+────────────────────────────────────────────────────────
+  tool:         fetch
+  decision:     REQUIRE_APPROVAL
+  reason:       rule:prompt_injection
+  ...
+Gate-by-gate walkthrough (replayed against current state):
+   1. 🟢 master-switch       [PASS]  AEGIS_AUTONOMY_ENABLED=1
+   2. 🟢 verdict-eligible    [PASS]  decision=REQUIRE_APPROVAL — eligible
+   3. 🟢 reversibility       [PASS]  level=reversible
+   4. ℹ️  session-prior      [INFO]  no session-prior set; min_trust=0.85
+   5. 🟢 never-trust-filter  [PASS]  reason doesn't match never-trust list
+   6. 🔴 pattern-lookup      [FAIL]  no trust entry for ('fetch', 'rule:prompt_injection')
+  → 🔴 bypass WOULD be refused — verdict REQUIRE_APPROVAL
+```
+
 ## [0.5.26] — 2026-05-17  ·  Docs sync (CLAUDE.md + README catch-up)
 
 CLAUDE.md was stuck at v0.5.18; v0.5.20-0.5.25 shipped 6 PRs
