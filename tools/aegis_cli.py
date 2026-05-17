@@ -7928,6 +7928,59 @@ def cmd_knowledge_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_knowledge_measure(args: argparse.Namespace) -> int:
+    """``aegis knowledge measure <aid>`` — print the wiki context
+    metrics for one agent (v0.5.18).
+
+    Diagnostic to answer "is the wiki layer actually doing
+    something for this agent?": shows entry count, infobox
+    facts, cross-refs, tags, and the prompt-budget cost
+    (chars / estimated tokens) the advisor pays per call.
+
+    Use this before flipping ``AEGIS_ADVISOR_USE_KNOWLEDGE=1``
+    globally — if the median agent has <10 infobox fields and
+    <2 cross-refs, the wiki isn't yet rich enough to ground
+    advisor reasoning. Rebuild the wiki on a wider burn-in
+    window in that case."""
+    from aegis.knowledge import knowledge_dir, measure_context
+
+    aid = getattr(args, "aid", "").strip()
+    if not aid:
+        print(_red("error: aid is required"), file=sys.stderr)
+        return 1
+    dir_override = getattr(args, "dir", None)
+    root = Path(dir_override) if dir_override else knowledge_dir()
+    metrics = measure_context(aid, root=root)
+    if metrics is None:
+        print(_yellow(
+            f"[knowledge measure] no entry for agent/{aid}\n"
+            "  Try `aegis knowledge build` first."
+        ))
+        return 1
+
+    if getattr(args, "emit_json", False):
+        from dataclasses import asdict
+        payload = asdict(metrics)
+        payload["estimated_tokens"] = metrics.estimated_tokens
+        payload["has_agent_entry"] = metrics.has_agent_entry
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+
+    print(_green(f"Wiki context metrics for agent/{aid}"))
+    print()
+    print(f"  entries fetched:    {metrics.n_entries}")
+    print(f"    agent entries:    {metrics.n_agent_entries}")
+    print(f"    tool cross-refs:  {metrics.n_tool_entries}")
+    print(f"    pattern xrefs:    {metrics.n_pattern_entries}")
+    print(f"  infobox facts:      {metrics.n_infobox_fields}")
+    print(f"  cross-references:   {metrics.n_cross_refs}")
+    print(f"  semantic tags:      {metrics.n_tags}")
+    print(f"  raw observations:   {metrics.n_observations:,}")
+    print(f"  rendered chars:     {metrics.markdown_chars:,}")
+    print(f"  ~tokens (chars/4):  {metrics.estimated_tokens:,}")
+    return 0
+
+
 def cmd_knowledge_advisor_context(args: argparse.Namespace) -> int:
     """``aegis knowledge advisor-context <aid>`` — emit the full
     prompt context for an sLLM advisor scoped to one agent.
@@ -9428,6 +9481,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="knowledge directory override",
     )
     k_ctx.set_defaults(fn=cmd_knowledge_advisor_context)
+
+    k_measure = kn_sub.add_parser(
+        "measure",
+        help=(
+            "Print the wiki context metrics for one agent — entry "
+            "count, infobox facts, cross-refs, tags, prompt-budget cost."
+        ),
+    )
+    k_measure.add_argument(
+        "aid",
+        help="agent id to measure",
+    )
+    k_measure.add_argument(
+        "--json", dest="emit_json", action="store_true",
+        help="emit JSON instead of plain-text output",
+    )
+    k_measure.add_argument(
+        "--dir", type=str, default=None,
+        help="knowledge directory override",
+    )
+    k_measure.set_defaults(fn=cmd_knowledge_measure)
 
     # ── aegis doctor ─────────────────────────────────────────────
     dr = sub.add_parser(
