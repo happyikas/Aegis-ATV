@@ -7928,6 +7928,56 @@ def cmd_knowledge_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_knowledge_search(args: argparse.Namespace) -> int:
+    """``aegis knowledge search <query>`` — free-text search over the
+    wiki using TF-IDF + cosine similarity (v0.5.21).
+
+    Useful when you don't know the exact ``entry_id`` but have a
+    phrase: ``aegis knowledge search "cost-divergence on Bash"``
+    returns the entries whose text best matches.
+
+    Deterministic + dependency-free — same wiki + same query
+    produces the same ranking. No LLM call."""
+    from aegis.knowledge import knowledge_dir, search_entries
+
+    query = " ".join(getattr(args, "query", []) or []).strip()
+    if not query:
+        print(_red("error: query is required"), file=sys.stderr)
+        return 1
+    dir_override = getattr(args, "dir", None)
+    root = Path(dir_override) if dir_override else knowledge_dir()
+    k = int(getattr(args, "k", 10))
+    min_score = float(getattr(args, "min_score", 0.0))
+    hits = search_entries(query, root=root, k=k, min_score=min_score)
+
+    if getattr(args, "emit_json", False):
+        from dataclasses import asdict
+        print(json.dumps(
+            {"query": query, "hits": [asdict(h) for h in hits]},
+            indent=2, ensure_ascii=False,
+        ))
+        return 0
+
+    if not hits:
+        print(_yellow(f"  (no entries match {query!r})"))
+        return 0
+
+    print(_green(f"Top {len(hits)} matches for {query!r}"))
+    print()
+    print(
+        f"  {'score':>6}  {'kind':<8} {'entry_id':<40} summary"
+    )
+    print("  " + "-" * 80)
+    for h in hits:
+        summary = h.summary
+        if len(summary) > 50:
+            summary = summary[:47] + "..."
+        print(
+            f"  {h.score:>6.3f}  {h.kind:<8} {h.entry_id:<40} {summary}"
+        )
+    return 0
+
+
 def cmd_knowledge_measure(args: argparse.Namespace) -> int:
     """``aegis knowledge measure <aid>`` — print the wiki context
     metrics for one agent (v0.5.18).
@@ -9502,6 +9552,35 @@ def build_parser() -> argparse.ArgumentParser:
         help="knowledge directory override",
     )
     k_measure.set_defaults(fn=cmd_knowledge_measure)
+
+    k_search = kn_sub.add_parser(
+        "search",
+        help=(
+            "Free-text search over the wiki using TF-IDF + cosine "
+            "similarity. Deterministic — no LLM call."
+        ),
+    )
+    k_search.add_argument(
+        "query", nargs="+",
+        help="search query (multiple words allowed; quoted not required)",
+    )
+    k_search.add_argument(
+        "-k", "--top-k", dest="k", type=int, default=10,
+        help="number of hits to return (default 10)",
+    )
+    k_search.add_argument(
+        "--min-score", dest="min_score", type=float, default=0.0,
+        help="cosine score floor (default 0.0; bump to 0.05 for stricter)",
+    )
+    k_search.add_argument(
+        "--json", dest="emit_json", action="store_true",
+        help="emit JSON instead of plain-text output",
+    )
+    k_search.add_argument(
+        "--dir", type=str, default=None,
+        help="knowledge directory override",
+    )
+    k_search.set_defaults(fn=cmd_knowledge_search)
 
     # ── aegis doctor ─────────────────────────────────────────────
     dr = sub.add_parser(

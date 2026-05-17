@@ -108,6 +108,13 @@ from aegis.knowledge.schema import (
     make_entry_id,
     split_entry_id,
 )
+from aegis.knowledge.search import (
+    SearchHit,
+    TfIdfIndex,
+    build_tfidf_index,
+    clear_search_cache,
+    search_entries,
+)
 from aegis.knowledge.store import (
     IndexEntry,
     entry_path,
@@ -147,10 +154,15 @@ __all__ = [
     "load_index",
     "make_entry_id",
     "measure_context",
+    "SearchHit",
+    "TfIdfIndex",
+    "build_tfidf_index",
+    "clear_search_cache",
     "render_advisor_context",
     "render_entry_markdown",
     "save_entry",
     "save_index",
     "search_by_kind_or_tag",
+    "search_entries",
     "split_entry_id",
 ]
