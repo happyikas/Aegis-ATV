@@ -334,12 +334,24 @@ def apply_autonomy_bypass(
     except Exception:  # noqa: BLE001 — never raise from hot path
         pass
 
+    # v0.5.25 — session-prior calibration. The operator can tag
+    # the current work session with a risk label (`exploring` →
+    # 0.70, `refactor` → 0.85, `prod-deploy` → 0.95). When a
+    # session-prior is active, the label-scoped threshold
+    # overrides the caller's `min_trust`. Default state (no
+    # session set, or expired) leaves `min_trust` unchanged.
+    try:
+        from aegis.autonomy.session_prior import session_min_trust
+        effective_min_trust, session_prior = session_min_trust(min_trust)
+    except Exception:  # noqa: BLE001 — hot-path safe
+        effective_min_trust, session_prior = min_trust, None
+
     table = trust_table if trust_table is not None else load_trust_table()
     av = evaluate_autonomy_request(
         tool_name=tool_name,
         reason=reason,
         trust_table=table,
-        min_trust=min_trust,
+        min_trust=effective_min_trust,
         runtime_features=runtime_features,
     )
     if not av.auto_approve:
@@ -430,6 +442,13 @@ def apply_autonomy_bypass(
     )
     new_traces = dict(verdict.step_traces)
     new_traces[STEP_TRACE_KEY] = stamp
+    # v0.5.25 — stamp the session-prior label when one is active,
+    # so the audit chain shows which threshold actually applied.
+    if session_prior is not None and not session_prior.is_default():
+        new_traces["aegis.autonomy.step331.session_prior"] = (
+            f"session_prior={session_prior.label} "
+            f"min_trust={effective_min_trust:.2f}"
+        )
     new_verdict = Verdict(
         decision="ALLOW",
         reason=(
