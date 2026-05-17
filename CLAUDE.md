@@ -46,6 +46,99 @@
 - `AEGIS_JUDGE_PROVIDER=dummy` → 결정적 룰 기반 verdict
 이 두 설정을 기본값으로 두고, 실제 키가 .env에 들어오면 openai/haiku로 전환.
 
+## v0.5.11 – 0.5.14 — Autonomy (human-in-the-loop minimizer)
+
+Routine `REQUIRE_APPROVAL` events get auto-bypassed when they match
+a learned trust pattern. Every bypass is permanently stamped in the
+audit chain (`aegis.autonomy.step331.run` in `step_traces`) so the
+operator never loses traceability.
+
+**Trust table**: `~/.aegis/autonomy/trust_table.json` (override via
+`AEGIS_AUTONOMY_TRUST_TABLE`). Built by `aegis autonomy learn` —
+explicit, batch, replayable. Same discipline as `aegis coach burnin`.
+
+**Bayesian backbone (v0.5.12)** — closes seven ML-training side-
+effects: Beta(α, β) posterior with LCB decision rule (overfit),
+ε-greedy forced exploration (self-confirming loop), empirical-Bayes
+hierarchical prior (spurious correlation), exponential decay
+(staleness), Jensen-Shannon drift detection, ternary reward shaping
+(CLEAN/+1 · BLOCK/+3β · EXPLICIT_DENY/+10β), 80/20 train/val split
+with ECE-gated calibration (miscalibration), Bonferroni-adjusted
+min_samples (multiple comparisons).
+
+**Wired (v0.5.13)**: `src/aegis/api/evaluate.py` after `run_firewall`;
+`tools/aegis_local_hook.py` after M12 cost-divergence, before
+`_atmu_finalize_intent`. Strictly additive — short-circuits when
+`AEGIS_AUTONOMY_ENABLED` is unset.
+
+**CLI**:
+```
+aegis autonomy learn [--since 30d] [--min-trust 0.85] [--credibility 0.95]
+                     [--half-life-days 30] [--ece-threshold 0.10] [--force]
+aegis autonomy show [-v]
+aegis autonomy outliers [--since 7d] [--block-lookahead 10]
+aegis autonomy deny <trace_id> [--note "reason"]
+```
+
+**Env flags**:
+- `AEGIS_AUTONOMY_ENABLED=1` — master switch (default off, byte-identical legacy)
+- `AEGIS_AUTONOMY_EPSILON=0.05` — forced exploration rate (clamped to [0.0, 0.5])
+- `AEGIS_AUTONOMY_TRUST_TABLE`, `AEGIS_AUTONOMY_DENIALS`, `AEGIS_AUTONOMY_HALF_LIFE_DAYS` — path / behaviour overrides
+
+**v0.5.14 doctor integration**: `aegis doctor --since 7d` includes
+🤖 Autonomy section — bypass count, ε-greedy explore count, outlier
+table when auto-approvals followed by BLOCK exist. Single-line "no
+data" when the operator hasn't opted in.
+
+## v0.5.15 – 0.5.18 — ContextMemory knowledge layer (LLM-wiki)
+
+Raw ContextMemory (audit chain) stays. **On top of it** is a derived
+wiki-shaped layer the sLLM advisor consumes for workflow advice. Each
+entity (agent / tool / pattern) becomes a self-contained article
+with infobox + sections + cross-references + tags + confidence.
+
+**Wiki dir**: `~/.aegis/knowledge/` (override via `AEGIS_KNOWLEDGE_DIR`).
+One JSON per entry + `index.json` catalog. Built by
+`aegis knowledge build`.
+
+**Schema** (`KnowledgeEntry`): `entry_id` (canonical URN like
+`agent/foo`, `tool/Bash`, `pattern/loop:Bash`), `summary` (1-2
+sentences, always shown first), `infobox` (key-value table — LLMs
+parse this most reliably), `sections` (ordered markdown), `related`
+(cross-refs), `tags` (semantic filter), `n_observations`,
+`confidence`.
+
+**sLLM advisor consumption (v0.5.16 – v0.5.17)**: when
+`AEGIS_ADVISOR_USE_KNOWLEDGE=1` and the dispatcher has `aid`, the
+wiki block is auto-fetched via `knowledge_context_for_advisor(aid)`
+(mtime-keyed cache; never raises) and spliced into the prompt:
+
+- `aegis.judge.advisor.compose_advice_sllm` (production: HaikuAdvisor)
+- `aegis.judge.action_advice_sllm.compose_advice`
+- `aegis.judge.triple_axis_advisor.assess_via_sllm`
+
+`tools/aegis_local_hook.py` passes `aid=inp.header.aid` to the
+dispatcher — the hot-path activation line.
+
+**CLI**:
+```
+aegis knowledge build [--since 30d] [--out <dir>]
+aegis knowledge list [--kind agent|tool|pattern] [--tag X] [--limit N]
+aegis knowledge show <entry_id> [--out <file>]
+aegis knowledge advisor-context <aid> [--max-related N]
+aegis knowledge measure <aid> [--json]      # diagnostic — v0.5.18
+```
+
+**Env flags**:
+- `AEGIS_KNOWLEDGE_DIR` — wiki directory override
+- `AEGIS_ADVISOR_USE_KNOWLEDGE=1` — opt-in for sLLM advisors
+
+**Demo**: `uv run python demo/wiki_grounded_advisor.py` — fully
+deterministic, no LLM call, no network. Synthesises 5 agent profiles,
+builds the wiki, prints the prompt-size delta (with vs without wiki).
+Each wiki-backed agent gets ~600–1,000 extra tokens of structured
+background context.
+
 ## v2.2 — must-install surface (since 2026-04-27)
 
 v2.1 + v2.2 added five "must-install" features on top of v2.0:
