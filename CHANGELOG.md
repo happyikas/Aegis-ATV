@@ -4,6 +4,24 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.26] — 2026-05-17  ·  Docs sync (CLAUDE.md + README catch-up)
+
+CLAUDE.md was stuck at v0.5.18; v0.5.20-0.5.25 shipped 6 PRs
+adding ~4,300 LoC, 5 new env flags, 7 new CLI subcommands. This
+PR catches the operator-facing docs up.
+
+CLAUDE.md gains a `v0.5.20 – 0.5.25` section before the v0.5.15
+block, with one paragraph per PR + an aggregate env-flag table
+covering all 11 autonomy/knowledge flags shipped since v0.5.11.
+
+README feature table updated: ATV Autonomy now lists the **six
+independent safety floors** (never-trust · reversibility ·
+drift · ATV centroid · andon · session-prior), ATV Wiki lists
+the six entry kinds + TF-IDF search.
+
+Pure documentation. No code or behaviour changes. Full suite
+3545 passed (no regression).
+
 ## [0.5.25] — 2026-05-17  ·  Session-prior calibration (risk-label scoping)
 
 Autonomy idea #5: one-size-fits-all `min_trust` is wrong. While

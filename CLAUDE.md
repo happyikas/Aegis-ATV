@@ -90,6 +90,83 @@ aegis autonomy deny <trace_id> [--note "reason"]
 table when auto-approvals followed by BLOCK exist. Single-line "no
 data" when the operator hasn't opted in.
 
+## v0.5.20 – 0.5.25 — Autonomy & knowledge maturation
+
+### v0.5.20 — wiki event-level kinds
+Added three event-level entry kinds beyond the v0.5.15 entity-
+level set:
+
+* **SESSION** — gap-segmented activity bursts (30-min split).
+* **INCIDENT** — one BLOCK + 3-call setup + 2-call recovery.
+* **WORKFLOW** — recurring tool bigrams ≥3 occurrences per agent.
+
+Tunables: `SESSION_GAP_SECONDS`, `SESSION_MIN_CALLS`,
+`INCIDENT_BEFORE`, `INCIDENT_AFTER`, `WORKFLOW_MIN_OCCURRENCES`.
+
+### v0.5.21 — TF-IDF semantic search
+`aegis knowledge search <query> [-k 10] [--min-score 0.05] [--json]`
+runs TF-IDF + cosine ranking over the wiki. Pure-Python, no ML
+deps, deterministic, mtime-cached. Tokeniser preserves `:` and
+`-` so `loop:Bash` / `rule-fired` stay one token.
+
+### v0.5.22 — reversibility classifier
+`policies/reversibility.json` (23 rules) tags every (tool, args)
+pair as `trivial / reversible / costly / irreversible`. Hard
+gate in `apply_autonomy_bypass`: **irreversible actions are
+never auto-bypassed** regardless of trust score, drift, or
+ε-greedy. Independent safety floor — separate from the
+statistical trust learner.
+
+* CLI: `aegis reversibility check <tool> <args> [--json]`
+* Env: `AEGIS_REVERSIBILITY_POLICY` (override bundled file)
+* `AEGIS_POLICY_DIR=/path/to/policies` also honoured
+
+### v0.5.23 — ATV centroid bypass (Mahalanobis gate)
+Per-pattern centroid + diagonal covariance in 3-D log-feature
+space `(log cost, log tokens_in, log latency)`. Collected from
+CLEAN records at learn time. Runtime: Mahalanobis-diagonal
+distance > 3σ ⇒ refuse bypass. Skipped when
+`centroid_n_samples < 20` (sparse patterns fall through to
+standard trust-score path).
+
+### v0.5.24 — andon tripwire
+Persistent counter at `~/.aegis/autonomy/andon_state.json`
+tracks consecutive auto-bypasses across the per-call hook
+process. After N (default 20) consecutive bypasses, the next
+one is forced to the human. Counter resets when tripwire fires.
+Independent of ε-greedy.
+
+* Env: `AEGIS_AUTONOMY_ANDON_THRESHOLD` (0 disables)
+* Env: `AEGIS_AUTONOMY_ANDON_STATE` (path override)
+
+### v0.5.25 — session-prior calibration
+Operator tags the work session with a risk label that scales
+`min_trust`:
+
+* `exploring`   — 0.70 (loose; POC, casual coding)
+* `refactor`    — 0.85 (default)
+* `prod-deploy` — 0.95 (strict; release work)
+
+State at `~/.aegis/autonomy/session_prior.json` with 8h TTL
+auto-expiry. CLI: `aegis autonomy session {start,status,end}`.
+Active label is stamped into `step_traces` on bypass for audit.
+
+### Aggregate env-flag inventory (v0.5.11–0.5.25)
+
+| Flag | Purpose | Default |
+|---|---|---|
+| `AEGIS_AUTONOMY_ENABLED` | master autonomy switch | `0` |
+| `AEGIS_AUTONOMY_EPSILON` | ε-greedy forced exploration | `0.05` |
+| `AEGIS_AUTONOMY_TRUST_TABLE` | trust table path override | — |
+| `AEGIS_AUTONOMY_DENIALS` | explicit-deny log path | — |
+| `AEGIS_AUTONOMY_HALF_LIFE_DAYS` | decay τ (Bayesian backbone) | `30` |
+| `AEGIS_AUTONOMY_ANDON_THRESHOLD` | andon trip count | `20` |
+| `AEGIS_AUTONOMY_ANDON_STATE` | andon counter path | — |
+| `AEGIS_AUTONOMY_SESSION_PRIOR` | session-prior state path | — |
+| `AEGIS_KNOWLEDGE_DIR` | wiki directory override | — |
+| `AEGIS_ADVISOR_USE_KNOWLEDGE` | sLLM advisor wiki injection | `0` |
+| `AEGIS_REVERSIBILITY_POLICY` | reversibility rules override | — |
+
 ## v0.5.15 – 0.5.18 — ContextMemory knowledge layer (LLM-wiki)
 
 Raw ContextMemory (audit chain) stays. **On top of it** is a derived
