@@ -4,6 +4,54 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.25] — 2026-05-17  ·  Session-prior calibration (risk-label scoping)
+
+Autonomy idea #5: one-size-fits-all `min_trust` is wrong. While
+*exploring*, false-positive REQUIRE_APPROVAL prompts are friction;
+during a *prod-deploy*, false-negative bypasses are catastrophic.
+v0.5.25 lets the operator tag the current work session with a
+risk label that scales the autonomy threshold.
+
+### Three labels
+
+* `exploring`   — loose: `min_trust = 0.70` (more bypasses fire)
+* `refactor`    — default: `min_trust = 0.85` (same as no label)
+* `prod-deploy` — strict: `min_trust = 0.95` (nothing routine fires)
+
+### Persistence
+
+* State at `~/.aegis/autonomy/session_prior.json` (override via
+  `AEGIS_AUTONOMY_SESSION_PRIOR`).
+* Default 8-hour TTL — auto-expires so the operator doesn't have
+  to remember to call `aegis autonomy session end` at sign-off.
+* `ttl_hours=0` disables expiry.
+
+### Modules
+
+* **`src/aegis/autonomy/session_prior.py`** — `start_session`,
+  `end_session`, `load_session_prior`, `session_min_trust`.
+  Defensive load (missing/malformed/expired → default state).
+  Never raises.
+* **`src/aegis/autonomy/runtime.py`** — `apply_autonomy_bypass`
+  consults `session_min_trust` and uses the label-scoped
+  threshold for the trust check; stamps the label into
+  `step_traces["aegis.autonomy.step331.session_prior"]` on
+  bypass so the audit chain shows which threshold applied.
+
+### CLI
+
+```
+aegis autonomy session start <label> [--note "..."] [--ttl-hours N]
+aegis autonomy session status
+aegis autonomy session end
+```
+
+### Tests
+
+18 new tests in `tests/unit/test_session_prior.py`: state
+persistence (8), threshold mapping (4), defaults (2), runtime
+integration (4). Full suite **3545 passed**.
+
 ## [0.5.24] — 2026-05-17  ·  Andon tripwire (consecutive-bypass cap)
 
 Autonomy idea #4: even if every individual bypass is correct, a

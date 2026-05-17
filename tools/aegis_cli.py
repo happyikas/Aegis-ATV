@@ -7928,6 +7928,55 @@ def cmd_knowledge_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_autonomy_session_start(args: argparse.Namespace) -> int:
+    """``aegis autonomy session start <label>`` — tag the work
+    session with a risk label (v0.5.25)."""
+    from aegis.autonomy import RISK_LABELS, start_session
+    label = getattr(args, "label", "").strip()
+    if label not in RISK_LABELS:
+        print(_red(
+            f"error: label must be one of {RISK_LABELS}; got {label!r}",
+        ), file=sys.stderr)
+        return 1
+    note = getattr(args, "note", "") or ""
+    ttl = float(getattr(args, "ttl_hours", 8))
+    state = start_session(label, note=note, ttl_hours=ttl)
+    print(_green(f"✓ session-prior set: label={state.label}"))
+    print(f"  TTL: {ttl} hour(s)")
+    if note:
+        print(f"  note: {note}")
+    return 0
+
+
+def cmd_autonomy_session_status(args: argparse.Namespace) -> int:
+    """``aegis autonomy session status`` — show the current label
+    + the resulting min_trust threshold."""
+    from aegis.autonomy import (
+        MIN_TRUST_FOR_BYPASS,
+        load_session_prior,
+        session_min_trust,
+    )
+    state = load_session_prior()
+    threshold, _ = session_min_trust(MIN_TRUST_FOR_BYPASS)
+    if state.is_default():
+        print(_yellow("  (no session-prior set — using default threshold)"))
+        print(f"  min_trust: {threshold:.2f}")
+        return 0
+    print(_green(f"Active session-prior: {state.label}"))
+    print(f"  min_trust: {threshold:.2f}")
+    if state.note:
+        print(f"  note: {state.note}")
+    return 0
+
+
+def cmd_autonomy_session_end(args: argparse.Namespace) -> int:
+    """``aegis autonomy session end`` — clear the active session-prior."""
+    from aegis.autonomy import end_session
+    end_session()
+    print(_green("✓ session-prior cleared"))
+    return 0
+
+
 def cmd_reversibility_check(args: argparse.Namespace) -> int:
     """``aegis reversibility check <tool> <args>`` — print the
     classifier output for one (tool, args) pair (v0.5.22)."""
@@ -9475,6 +9524,51 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     a_deny.set_defaults(fn=cmd_autonomy_deny)
+
+    # ── aegis autonomy session (v0.5.25 — session-prior) ─────────
+    a_session = auto_sub.add_parser(
+        "session",
+        help=(
+            "Tag the work session with a risk label "
+            "(exploring / refactor / prod-deploy) to scale the "
+            "autonomy bypass min_trust threshold."
+        ),
+    )
+    a_session_sub = a_session.add_subparsers(
+        dest="session_action", required=True,
+    )
+    a_session_start = a_session_sub.add_parser(
+        "start",
+        help="Start a session with a risk label.",
+    )
+    a_session_start.add_argument(
+        "label",
+        choices=["exploring", "refactor", "prod-deploy"],
+        help=(
+            "exploring → loose (min_trust=0.70), "
+            "refactor → default (0.85), "
+            "prod-deploy → strict (0.95)"
+        ),
+    )
+    a_session_start.add_argument(
+        "--note", type=str, default="",
+        help="optional free-text note for the audit chain",
+    )
+    a_session_start.add_argument(
+        "--ttl-hours", dest="ttl_hours", type=float, default=8.0,
+        help="auto-expire after this many hours (default 8; 0 = no expiry)",
+    )
+    a_session_start.set_defaults(fn=cmd_autonomy_session_start)
+    a_session_status = a_session_sub.add_parser(
+        "status",
+        help="Show the current session-prior label + min_trust threshold.",
+    )
+    a_session_status.set_defaults(fn=cmd_autonomy_session_status)
+    a_session_end = a_session_sub.add_parser(
+        "end",
+        help="Clear the active session-prior.",
+    )
+    a_session_end.set_defaults(fn=cmd_autonomy_session_end)
 
     # ── aegis knowledge (v0.5.15) — LLM-wiki layer over ContextMemory
     kn_p = sub.add_parser(
