@@ -818,6 +818,7 @@ def handle_pretool(stdin: Any, stdout: Any) -> int:
             verdict,
             tool_name=bypass_tool,
             reason=verdict.reason or "",
+            tool_args_json=getattr(inp, "tool_args_json", "") or "",
         )
     except Exception as e:  # noqa: BLE001 — autonomy must never block
         if VERBOSE:

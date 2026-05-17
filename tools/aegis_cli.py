@@ -7928,6 +7928,52 @@ def cmd_knowledge_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_reversibility_check(args: argparse.Namespace) -> int:
+    """``aegis reversibility check <tool> <args>`` — print the
+    classifier output for one (tool, args) pair (v0.5.22)."""
+    from aegis.policies.reversibility import (
+        REVERSIBILITY_LEVELS,
+        classify_reversibility,
+    )
+
+    tool = getattr(args, "tool", "").strip()
+    if not tool:
+        print(_red("error: tool is required"), file=sys.stderr)
+        return 1
+    arg_str = " ".join(getattr(args, "tool_args", []) or [])
+    cls = classify_reversibility(tool, arg_str)
+    if getattr(args, "emit_json", False):
+        print(json.dumps({
+            "tool": tool,
+            "args": arg_str,
+            "level": cls.level,
+            "why": cls.why,
+            "matched": cls.matched,
+            "levels": list(REVERSIBILITY_LEVELS),
+        }, indent=2, ensure_ascii=False))
+        return 0
+    glyph = {
+        "trivial": "🟢",
+        "reversible": "🟢",
+        "costly": "🟡",
+        "irreversible": "🔴",
+    }.get(cls.level, "⚪")
+    print(_green("Reversibility check"))
+    print(f"  tool: {tool}")
+    if arg_str:
+        print(f"  args: {arg_str}")
+    print(f"  level: {glyph} **{cls.level}**")
+    if cls.why:
+        print(f"  why:   {cls.why}")
+    if cls.level == "irreversible":
+        print()
+        print(_red(
+            "  This action is NEVER auto-bypassed by autonomy "
+            "regardless of trust score."
+        ))
+    return 0
+
+
 def cmd_knowledge_search(args: argparse.Namespace) -> int:
     """``aegis knowledge search <query>`` — free-text search over the
     wiki using TF-IDF + cosine similarity (v0.5.21).
@@ -9581,6 +9627,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="knowledge directory override",
     )
     k_search.set_defaults(fn=cmd_knowledge_search)
+
+    # ── aegis reversibility (v0.5.22) ────────────────────────────
+    rev_p = sub.add_parser(
+        "reversibility",
+        help=(
+            "Classify a (tool, args) pair into one of "
+            "trivial / reversible / costly / irreversible. "
+            "Irreversible actions never auto-bypass."
+        ),
+    )
+    rev_sub = rev_p.add_subparsers(
+        dest="reversibility_action", required=True,
+    )
+    rev_check = rev_sub.add_parser(
+        "check",
+        help="Classify one action and print the level + why.",
+    )
+    rev_check.add_argument(
+        "tool",
+        help="tool name (e.g. Bash, Edit, kubectl)",
+    )
+    rev_check.add_argument(
+        "tool_args", nargs="*",
+        help="tool argument string to classify (joined with spaces)",
+    )
+    rev_check.add_argument(
+        "--json", dest="emit_json", action="store_true",
+        help="emit JSON instead of plain-text output",
+    )
+    rev_check.set_defaults(fn=cmd_reversibility_check)
 
     # ── aegis doctor ─────────────────────────────────────────────
     dr = sub.add_parser(
