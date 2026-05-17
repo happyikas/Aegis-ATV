@@ -4,6 +4,53 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.19] — 2026-05-17  ·  Docs sync (CLAUDE.md + README catch-up)
+
+Catches CLAUDE.md and README up across v0.5.11 – v0.5.18. The
+docs had been stuck at v0.5.10's "must-install surface" section,
+missing the entire Autonomy + Knowledge surface (8 PRs, ~5,000
+LoC, 5 new env flags, 9 new CLI subcommands).
+
+### CLAUDE.md additions
+
+Two new sections inserted before the existing v2.2 surface:
+
+* **v0.5.11 – 0.5.14 — Autonomy (human-in-the-loop minimizer)**:
+  trust-table location, Bayesian backbone summary (LCB,
+  ε-greedy, hierarchical prior, decay, drift, ternary reward,
+  calibration, Bonferroni), production wiring sites
+  (`evaluate.py` + `aegis_local_hook.py`), CLI cheatsheet, env
+  flags (`AEGIS_AUTONOMY_ENABLED`, `AEGIS_AUTONOMY_EPSILON`,
+  `AEGIS_AUTONOMY_TRUST_TABLE`, `AEGIS_AUTONOMY_DENIALS`,
+  `AEGIS_AUTONOMY_HALF_LIFE_DAYS`), doctor integration.
+* **v0.5.15 – 0.5.18 — ContextMemory knowledge layer (LLM-wiki)**:
+  derived-layer rationale, schema (entry_id URN, infobox,
+  sections, related, tags), sLLM advisor consumption sites
+  (production HaikuAdvisor + ActionAdvice + TripleAxisAdvisor),
+  CLI cheatsheet, env flags (`AEGIS_KNOWLEDGE_DIR`,
+  `AEGIS_ADVISOR_USE_KNOWLEDGE`), demo pointer.
+
+### README additions
+
+* **Feature table** gets two new rows:
+  - `🤖 ATV Autonomy` — `aegis autonomy {learn, show, outliers, deny}`
+  - `📚 ATV Wiki` — `aegis knowledge {build, show, measure}`
+* **Closed-loop section** at the bottom of the feature block:
+  a flow diagram showing `raw events → wiki → cached helper →
+  Haiku prompt → wiki-grounded advice`, with the operator-facing
+  enable-step and the pre-flight `aegis knowledge measure <aid>`
+  check.
+
+### What was deliberately NOT touched
+
+* Individual user manuals under `docs/manuals/` (each is its own
+  document; a per-manual update is a separate PR if needed).
+* `docs/USER_GUIDE.ko.md` (the integrated user guide). The
+  CLAUDE.md + README sync is what 95% of new readers see first;
+  the deep guides can lag without blocking adoption.
+
+No code or behaviour changes. Pure documentation.
+
 ## [0.5.18] — 2026-05-17  ·  Wiki-grounded advisor measurement + e2e demo
 
 v0.5.15–0.5.17 shipped the full wiki pipeline (raw → wiki → cached

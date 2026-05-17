@@ -34,8 +34,24 @@ Aegis is packaged around three named features built on the same firewall + audit
 | **🔧 ATV Doctor** | Diagnoses + advises + rolls back when the agent is in trouble (or about to be) | `aegis doctor`, `aegis forensic last`, `aegis advise`, `aegis rollback <trace>` |
 | **🧠 ATV Memory** | Reads recent BLOCK / advise events from ContextMemory and proposes concrete CLAUDE.md edits | `aegis memory claude-md`, `aegis memory show` |
 | **🛡️ ATV Guard** | Hookify-style natural-language rules → regex auto-proposal + markdown storage | `aegis guard add`, `aegis guard test`, `aegis guard import` |
+| **🤖 ATV Autonomy** | Learns the operator's allow/deny patterns and auto-bypasses routine `REQUIRE_APPROVAL` while keeping every bypass stamped in the audit chain | `aegis autonomy learn`, `aegis autonomy show`, `aegis autonomy outliers`, `aegis autonomy deny <trace>` |
+| **📚 ATV Wiki** | Derived semantic knowledge over ContextMemory — per-agent / per-tool / per-pattern wiki articles the sLLM advisor consumes for workflow advice | `aegis knowledge build`, `aegis knowledge show`, `aegis knowledge measure` |
 
-> v0.5+ uses operator-vocabulary canonical names (`live` / `coach` / `guard` / `memory` / `doctor`). Older command names (`dashboard` / `burnin` / `rule` / `case-memory` / `advisor-calibration` / `fleet-monitor`) keep working as aliases — see `aegis --help` for the full index.
+> v0.5+ uses operator-vocabulary canonical names (`live` / `coach` / `guard` / `memory` / `doctor` / `autonomy` / `knowledge`). Older command names (`dashboard` / `burnin` / `rule` / `case-memory` / `advisor-calibration` / `fleet-monitor`) keep working as aliases — see `aegis --help` for the full index.
+
+### Closed loop: raw events → wiki → wiki-grounded advisor (v0.5.18)
+
+```
+Raw ContextMemory (audit chain, append-only)
+  ↓ aegis knowledge build
+Knowledge wiki (~/.aegis/knowledge/*.json — one article per entity)
+  ↓ knowledge_context_for_advisor(aid)  [mtime-cached, hot-path safe]
+Markdown block embedded in the sLLM advisor prompt
+  ↓ Haiku / sLLM advisor
+Wiki-grounded ActionAdvice + TripleAxisAdvice on the firewall hot path
+```
+
+Enable via `export AEGIS_ADVISOR_USE_KNOWLEDGE=1`. Default off — strictly additive. Run `aegis knowledge measure <aid>` first to confirm the wiki is rich enough (infobox facts ≥ ~20, cross-refs ≥ 2) before flipping the flag globally. End-to-end demo: `uv run python demo/wiki_grounded_advisor.py`.
 
 User manuals (Korean is the canonical version): [`docs/USER_GUIDE.ko.md`](docs/USER_GUIDE.ko.md) (비전문가용 통합 가이드) · [`docs/manuals/`](docs/manuals/README.md) (기능별 깊은 reference)
 
