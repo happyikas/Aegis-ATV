@@ -4,6 +4,112 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] — 2026-05-17  ·  Claude Code Agent View synergy
+
+Aegis ATV is implemented as a Claude Code plugin. v0.7.0 makes the
+integration two-way: instead of just hooking into Claude Code's
+PreToolUse and treating the rest as opaque, Aegis now **reads from
+and synergises with** Claude Code's native agent surface — its
+per-session transcripts, its 6-hook lifecycle, and its parent/child
+Task spawn metadata.
+
+### `aegis subagent-graph` — new CLI command
+
+Cross-references the Claude Code transcript at
+``~/.claude/projects/<encoded-cwd>/<session>.jsonl`` with the Aegis
+audit chain. For every `Task` tool invocation, it shows:
+
+* `subagent_type` (Explore / Plan / general-purpose / …)
+* spawn description (the short user-facing label)
+* duration (spawn → tool_result)
+* Aegis verdict mix observed in that window (ALLOW / APPROVAL / BLOCK)
+* tool histogram (Bash×N · Read×M · …)
+
+```
+$ aegis subagent-graph
+Subagent graph — session 58ed2cfc (33431 transcript · 11326 audit records)
+  transcript: 58ed2cfc-1d4a-4a00-82f8-7f173f8aeba8.jsonl
+
+  ├─ Task → Explore  "Map current product surface"  (1.6m)
+  │  verdicts: ALLOW 0 · APPROVAL 35 · BLOCK 0
+  │  tools:    Bash×44, Read×23, Agent×2
+  ├─ Task → Explore  "Map sLLM advice + burn-in"  (1.5m)
+  │  verdicts: ALLOW 0 · APPROVAL 33 · BLOCK 0
+  │  tools:    Read×36, Bash×28, Agent×2
+  └─ Task → Explore  "Map ATV+audit write points"  (1.1m)
+     verdicts: ALLOW 0 · APPROVAL 28 · BLOCK 0
+     tools:    Bash×32, Read×21, Agent×2
+```
+
+This is the synergy point Claude Code's own agent view doesn't
+surface: subagent metadata is in the transcript, verdict mix is in
+the audit chain, and only the intersection tells you whether a
+specific subagent flavour disproportionately triggers
+`REQUIRE_APPROVAL` or `BLOCK`. The output is read-only, mtime-safe,
+and falls back gracefully when audit data is missing or the
+transcript pre-dates a chain rotation.
+
+* Module: `src/aegis/integrations/claude_code_subagent.py`
+* CLI: `aegis subagent-graph [--transcript PATH] [--audit PATH] [--json]`
+* Tests: 13 unit tests in `tests/unit/test_subagent_graph.py`
+* Override: `AEGIS_CLAUDE_PROJECTS_DIR` for non-standard Claude Code
+  install paths.
+
+### SessionStart hook — every-session status banner
+
+Previously the SessionStart hook was first-session-only (welcome
+text once, silent forever after). v0.7.0 adds a one-line status
+banner that fires on **every** session for returning users:
+
+```
+🛡️  Aegis · 11,924 audit records · 7 BLOCKs in 24h · autonomy: 2 pattern(s) learned
+```
+
+Controlled via `AEGIS_SESSION_BANNER`:
+
+* `brief` (default) — one-line banner above, fires every session.
+* `off` — legacy silent-for-returning behaviour.
+* `full` — force re-show the first-session welcome.
+
+Reads a 512-KB tail of `~/.aegis/audit.jsonl` and the
+`autonomy/trust_table.json` — bounded, fast, defensive (returns
+silent on any I/O error). `AEGIS_WELCOME_DISABLE=1` still silences
+both modes.
+
+### Stage 0 — restored 6-hook coverage
+
+`aegis install --target claude-code --mode local` already knew how
+to register all 6 Claude Code hook events (PreToolUse, PostToolUse,
+Stop, PreCompact, UserPromptSubmit, SessionStart), but the v0.4.1
+`aegis-mvp` PyPI shim was historically the one registering 3 of
+those slots. After the mvp cleanup landed in this session, those 3
+slots were left unregistered. v0.7.0 doesn't change the install
+code itself — but operators who upgraded from pre-mvp-cleanup
+should re-run:
+
+```
+uv run aegis install --target claude-code --mode local --force
+```
+
+to ensure all 6 hooks are wired and pick up the new SessionStart
+behaviour. The `--force` rewrites hook commands, so user-added env
+vars (e.g. `AEGIS_AUTONOMY_ENABLED=1`) need to be re-applied — a
+follow-up improvement could thread "user env preservation" into the
+installer.
+
+### Why this matters
+
+This is the first release where Aegis isn't a black box bolted onto
+Claude Code's hot path. It **reads from** Claude Code's transcripts
+and **enriches** the user-visible session state with Aegis-only
+signals. The synergy story:
+
+| Surface | Claude Code provides | Aegis adds |
+|---|---|---|
+| Subagent metadata | parent/child + description | verdict mix per subagent |
+| SessionStart hook | event firing | per-session firewall status banner |
+| Transcript JSONL | message log | cryptographic audit chain alongside it |
+
 ## [0.6.0] — 2026-05-16  ·  Embedding-based semantic search over the wiki
 
 v0.5.21 shipped TF-IDF as the pragmatic v1 ranker — pure-Python,

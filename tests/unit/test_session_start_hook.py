@@ -50,24 +50,60 @@ def test_first_session_prints_welcome_and_creates_marker(
     assert "audit-key init" in captured.err
 
 
-def test_second_session_is_silent(
+def test_second_session_silent_when_banner_off(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Marker already exists → silent on stderr, JSON ack 'returning'."""
+    """Marker already exists + AEGIS_SESSION_BANNER=off → silent
+    (legacy v0.5 behaviour). v0.7.0 brief banner suppressed by env."""
     marker = tmp_path / ".aegis" / ".welcomed"
     marker.parent.mkdir(parents=True)
     marker.touch()
     monkeypatch.setattr(session_start, "WELCOMED_MARKER", marker)
     monkeypatch.setattr(session_start, "DISABLE", False)
+    monkeypatch.setattr(session_start, "BANNER_MODE", "off")
 
     response, _ = _run(json.dumps(
         {"hook_event_name": "SessionStart", "session_id": "second"}
     ))
     captured = capsys.readouterr()
 
-    assert response["_aegis"]["welcome"] == "returning"
-    assert captured.err == ""  # silent for returning users
+    assert response["_aegis"]["welcome"] == "returning-silent"
+    assert captured.err == ""  # silent for returning users w/ banner off
+
+
+def test_second_session_brief_banner_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Marker exists + default BANNER_MODE='brief' → one-line status
+    banner on stderr. v0.7.0 new default."""
+    marker = tmp_path / ".aegis" / ".welcomed"
+    marker.parent.mkdir(parents=True)
+    marker.touch()
+    # Point audit + trust table at sandboxed empty paths so the
+    # banner has deterministic content.
+    audit = tmp_path / ".aegis" / "audit.jsonl"
+    audit.write_text(json.dumps({
+        "aid": "x", "ts_ns": 1, "decision": "ALLOW", "tool": "Bash",
+    }) + "\n")
+    trust = tmp_path / ".aegis" / "autonomy" / "trust_table.json"
+    trust.parent.mkdir(parents=True, exist_ok=True)
+    trust.write_text("{}")
+    monkeypatch.setattr(session_start, "WELCOMED_MARKER", marker)
+    monkeypatch.setattr(session_start, "DISABLE", False)
+    monkeypatch.setattr(session_start, "BANNER_MODE", "brief")
+    monkeypatch.setattr(session_start, "_AUDIT_PATH", audit)
+    monkeypatch.setattr(session_start, "_TRUST_TABLE", trust)
+
+    response, _ = _run(json.dumps(
+        {"hook_event_name": "SessionStart", "session_id": "second"}
+    ))
+    captured = capsys.readouterr()
+
+    assert response["_aegis"]["welcome"] == "brief"
+    assert "Aegis" in captured.err
+    assert "1 audit records" in captured.err
 
 
 def test_disable_env_var_short_circuits(

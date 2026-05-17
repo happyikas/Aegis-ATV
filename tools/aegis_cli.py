@@ -8056,6 +8056,78 @@ def cmd_reversibility_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_subagent_graph(args: argparse.Namespace) -> int:
+    """``aegis subagent-graph`` (v0.7.0) — Claude Code transcript
+    × Aegis audit chain → subagent flow with verdict mix.
+
+    For every Task tool invocation in the current project's most
+    recent Claude Code session, show: subagent_type, description,
+    duration, and the verdict mix (ALLOW / APPROVAL / BLOCK) that
+    Aegis observed during that subagent's lifetime. Read-only.
+
+    Benchmarks Claude Code's agent view by enriching its native
+    parent/child metadata with Aegis-only signals."""
+    from aegis.integrations.claude_code_subagent import (
+        build_subagent_graph,
+        find_transcript_for_cwd,
+        render_tree,
+    )
+
+    transcript_override = getattr(args, "transcript", None)
+    if transcript_override:
+        transcript_path = Path(transcript_override).expanduser()
+        if not transcript_path.exists():
+            print(_red(
+                f"error: transcript not found: {transcript_path}"
+            ), file=sys.stderr)
+            return 1
+    else:
+        candidates = find_transcript_for_cwd(Path.cwd())
+        if not candidates:
+            print(_yellow(
+                "no Claude Code transcript found for the current directory. "
+                "Use --transcript <path> to point at one explicitly."
+            ))
+            return 0
+        # Most recently modified transcript = the live session.
+        transcript_path = max(candidates, key=lambda p: p.stat().st_mtime)
+
+    audit_override = getattr(args, "audit", None)
+    if audit_override:
+        audit_path = Path(audit_override).expanduser()
+    else:
+        audit_path = Path.home() / ".aegis" / "audit.jsonl"
+
+    graph = build_subagent_graph(transcript_path, audit_path=audit_path)
+
+    if getattr(args, "emit_json", False):
+        from dataclasses import asdict
+        payload = {
+            "session_id": graph.session_id,
+            "transcript_path": str(graph.transcript_path),
+            "n_transcript_records": graph.n_transcript_records,
+            "n_audit_records_in_session": graph.n_audit_records_in_session,
+            "spawns": [
+                {
+                    "tool_use_id": e.spawn.tool_use_id,
+                    "subagent_type": e.spawn.subagent_type,
+                    "description": e.spawn.description,
+                    "parent_uuid": e.spawn.parent_uuid,
+                    "spawn_ts_ns": e.spawn.spawn_ts_ns,
+                    "result_ts_ns": e.spawn.result_ts_ns,
+                    "duration_ms": e.duration_ms,
+                    "verdicts": asdict(e.verdicts),
+                }
+                for e in graph.spawns
+            ],
+        }
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+
+    print(render_tree(graph))
+    return 0
+
+
 def cmd_knowledge_search(args: argparse.Namespace) -> int:
     """``aegis knowledge search <query> [--engine tfidf|embedding]``
     — free-text search over the wiki (v0.5.21 + v0.6.0).
@@ -9804,6 +9876,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="knowledge directory override",
     )
     k_search.set_defaults(fn=cmd_knowledge_search)
+
+    # ── aegis subagent-graph (v0.7.0) ────────────────────────────
+    sg_p = sub.add_parser(
+        "subagent-graph",
+        help=(
+            "Cross-reference Claude Code transcripts with the Aegis audit "
+            "chain to show each Task spawn's subagent_type + duration + "
+            "verdict mix. Read-only; benchmarks Claude Code's agent view."
+        ),
+    )
+    sg_p.add_argument(
+        "--transcript", type=str, default=None,
+        help=(
+            "explicit transcript .jsonl path. Default: latest "
+            "transcript for the current working directory under "
+            "~/.claude/projects/."
+        ),
+    )
+    sg_p.add_argument(
+        "--audit", type=str, default=None,
+        help="audit chain path (default: ~/.aegis/audit.jsonl)",
+    )
+    sg_p.add_argument(
+        "--json", dest="emit_json", action="store_true",
+        help="emit JSON instead of the plain-text tree",
+    )
+    sg_p.set_defaults(fn=cmd_subagent_graph)
 
     # ── aegis reversibility (v0.5.22) ────────────────────────────
     rev_p = sub.add_parser(
