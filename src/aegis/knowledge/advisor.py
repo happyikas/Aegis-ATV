@@ -24,10 +24,12 @@ Opt-in is via the env flag ``AEGIS_ADVISOR_USE_KNOWLEDGE=1``
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 from aegis.knowledge.render import render_advisor_context
 from aegis.knowledge.retrieve import get_entries_for_agent
+from aegis.knowledge.schema import EntryKind, KnowledgeEntry
 from aegis.knowledge.store import index_path, knowledge_dir
 
 # ──────────────────────────────────────────────────────────────────
@@ -144,8 +146,144 @@ def knowledge_context_for_advisor(
     return md
 
 
+# ──────────────────────────────────────────────────────────────────
+# v0.5.18 — diagnostic measurement
+# ──────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ContextMetrics:
+    """Quantitative diagnostics for what the wiki contributes to
+    an advisor's prompt.
+
+    These metrics let an operator answer the most important
+    second-order questions about the wiki integration:
+
+    * **Reach** — how many agents have a wiki entry? (``has_agent_entry``)
+    * **Density** — how many facts does each call surface? Aggregated
+      across the agent's entry + cross-refs.
+    * **Cost** — what's the prompt budget impact? (``estimated_tokens``)
+
+    The metrics are intentionally *structural* — they count the
+    facts the wiki contributes, not the LLM's downstream quality
+    (which depends on the model and is measured separately)."""
+
+    aid: str
+    """Agent id this measurement is scoped to."""
+
+    n_entries: int = 0
+    """Total wiki entries that would be included in the advisor
+    prompt for this aid (agent entry + cross-refs)."""
+
+    n_agent_entries: int = 0
+    """Number of AGENT entries in the bundle (0 or 1 in practice)."""
+
+    n_tool_entries: int = 0
+    """Number of TOOL cross-refs in the bundle."""
+
+    n_pattern_entries: int = 0
+    """Number of PATTERN cross-refs in the bundle."""
+
+    n_infobox_fields: int = 0
+    """Total key-value facts across all entries' infoboxes. This
+    is the structured-fact density — the part LLMs parse most
+    reliably."""
+
+    n_cross_refs: int = 0
+    """Total ``related[]`` entry-id URIs across all entries.
+    Higher = richer linked-knowledge graph."""
+
+    n_tags: int = 0
+    """Total semantic tags across all entries."""
+
+    n_observations: int = 0
+    """Sum of ``n_observations`` across all entries — the total
+    raw-event count that backs this wiki context."""
+
+    markdown_chars: int = 0
+    """Character count of the rendered prompt block."""
+
+    @property
+    def estimated_tokens(self) -> int:
+        """Rough token estimate: ``chars / 4``. Good enough for
+        prompt-budget planning; exact tokenisation depends on the
+        model's BPE."""
+        return self.markdown_chars // 4
+
+    @property
+    def has_agent_entry(self) -> bool:
+        return self.n_agent_entries > 0
+
+
+def _entries_to_metrics(
+    aid: str,
+    entries: list[KnowledgeEntry],
+    markdown: str,
+) -> ContextMetrics:
+    """Aggregate a fetched entry bundle into a ``ContextMetrics``."""
+    n_agent = sum(1 for e in entries if e.kind == EntryKind.AGENT)
+    n_tool = sum(1 for e in entries if e.kind == EntryKind.TOOL)
+    n_pat = sum(1 for e in entries if e.kind == EntryKind.PATTERN)
+    n_info = sum(len(e.infobox.fields) for e in entries)
+    n_refs = sum(len(e.related) for e in entries)
+    n_tags = sum(len(e.tags) for e in entries)
+    n_obs = sum(e.n_observations for e in entries)
+    return ContextMetrics(
+        aid=aid,
+        n_entries=len(entries),
+        n_agent_entries=n_agent,
+        n_tool_entries=n_tool,
+        n_pattern_entries=n_pat,
+        n_infobox_fields=n_info,
+        n_cross_refs=n_refs,
+        n_tags=n_tags,
+        n_observations=n_obs,
+        markdown_chars=len(markdown),
+    )
+
+
+def measure_context(
+    aid: str | None,
+    *,
+    root: Path | None = None,
+    max_related: int = 6,
+) -> ContextMetrics | None:
+    """Return diagnostic metrics for the wiki context an advisor
+    would receive for this aid, or ``None`` if no wiki entry
+    exists.
+
+    Useful for:
+
+    * **Operator dashboards** — show "agents with wiki coverage:
+      19 / 20, median token cost: 1,847 / call".
+    * **Demo runs** — quantify the "before/after wiki" delta.
+    * **Sanity checks** — confirm the wiki is non-trivial before
+      enabling ``AEGIS_ADVISOR_USE_KNOWLEDGE=1`` in production.
+
+    Never raises (same hot-path safety as
+    :func:`knowledge_context_for_advisor`)."""
+    if not aid:
+        return None
+    actual_root = root if root is not None else knowledge_dir()
+    try:
+        entries = get_entries_for_agent(
+            aid, root=actual_root, max_related=max_related,
+        )
+    except Exception:  # noqa: BLE001 — diagnostic; never raise
+        return None
+    if not entries:
+        return None
+    try:
+        md = render_advisor_context(entries, intro=_INTRO)
+    except Exception:  # noqa: BLE001
+        md = ""
+    return _entries_to_metrics(aid, entries, md)
+
+
 __all__ = [
+    "ContextMetrics",
     "advisor_knowledge_enabled",
     "clear_advisor_cache",
     "knowledge_context_for_advisor",
+    "measure_context",
 ]

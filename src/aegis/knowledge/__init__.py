@@ -76,9 +76,11 @@ ActionAdvice) to read the wiki via :func:`get_entries_for_agent`
 so it can be reviewed in isolation."""
 
 from aegis.knowledge.advisor import (
+    ContextMetrics,
     advisor_knowledge_enabled,
     clear_advisor_cache,
     knowledge_context_for_advisor,
+    measure_context,
 )
 from aegis.knowledge.builder import (
     CONFIDENCE_FULL_AT,
@@ -120,6 +122,7 @@ from aegis.knowledge.store import (
 
 __all__ = [
     "CONFIDENCE_FULL_AT",
+    "ContextMetrics",
     "EntryKind",
     "IndexEntry",
     "InfoBox",
@@ -137,12 +140,13 @@ __all__ = [
     "get_entries_for_agent",
     "get_entry",
     "index_metadata",
-    "knowledge_context_for_advisor",
     "index_path",
+    "knowledge_context_for_advisor",
     "knowledge_dir",
     "load_entry",
     "load_index",
     "make_entry_id",
+    "measure_context",
     "render_advisor_context",
     "render_entry_markdown",
     "save_entry",

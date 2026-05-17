@@ -4,6 +4,104 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.18] — 2026-05-17  ·  Wiki-grounded advisor measurement + e2e demo
+
+v0.5.15–0.5.17 shipped the full wiki pipeline (raw → wiki → cached
+helper → Advisor protocol → prompt). v0.5.18 closes the audit
+loop with **concrete numbers**: a measurement helper + an end-to-end
+demo that prove the plumbing actually delivers wiki context to the
+advisor prompt, quantifying the impact per agent.
+
+The question this answers: *"is the wiki layer actually doing
+something for my agents, or is the env flag a no-op?"*
+
+### New surface
+
+**`src/aegis/knowledge/advisor.py`**
+* `ContextMetrics` dataclass — structured diagnostics: entry count,
+  per-kind breakdown (agent / tool / pattern), infobox-fact count,
+  cross-references, tags, raw-observation count, markdown chars,
+  estimated tokens (chars / 4).
+* `measure_context(aid, *, root=None, max_related=6)
+  → ContextMetrics | None` — diagnostic surface. Mirrors the safety
+  contract of `knowledge_context_for_advisor`: empty / missing /
+  corrupted → `None`, never raises.
+
+**CLI**
+* `aegis knowledge measure <aid> [--json] [--dir <path>]` — prints
+  the metrics for one agent. The pre-flight check before flipping
+  `AEGIS_ADVISOR_USE_KNOWLEDGE=1` globally.
+
+**Demo**
+* `demo/wiki_grounded_advisor.py` — fully deterministic end-to-end
+  walk:
+  1. Synthesises five agents with distinct fingerprints
+     (`clean-coder`, `high-cost`, `unstable`, `frequent-approvals`,
+     `sparse`).
+  2. Builds the v0.5.15 wiki from the synthetic records.
+  3. Per agent: measures the wiki context, builds the actual
+     production `_build_user_message` prompt with/without wiki,
+     prints the size delta.
+  4. Renders one full before/after example for the operator.
+  5. `--json` for machine-readable output, `--full` to print every
+     agent's prompt.
+
+### What the demo shows (representative numbers)
+
+```
+Per-agent wiki context (what the advisor receives)
+aid                | profile                     | n_entries | infobox | cross_refs | tags | ~tokens
+clean-coder        | 200 calls, 0% BLOCK         | 4         | 38      | 11         | 5    | 993
+high-cost          | 200 calls, 50× cost         | 3         | 29      | 9          | 6    | 821
+unstable           | 200 calls, 12.5% BLOCK      | 3         | 29      | 9          | 6    | 856
+frequent-approvals | 200 calls, 33% REQ_APPROVAL | 3         | 29      | 8          | 5    | 892
+sparse             | 8 calls — below n=50 floor  | 2         | 20      | 5          | 3    | 595
+
+Prompt size impact (with vs without wiki)
+aid                | no_wiki | with_wiki | delta_chars | ~delta_tokens
+clean-coder        | 830     | 4,880     | 4,050       | 1,012
+high-cost          | 830     | 4,191     | 3,361       | 840
+unstable           | 830     | 4,332     | 3,502       | 875
+frequent-approvals | 830     | 4,476     | 3,646       | 911
+sparse             | 830     | 3,286     | 2,456       | 614
+```
+
+Takeaways: every agent that has a wiki entry gets 600-1,000 extra
+tokens of structured background context. The sparse agent (8 calls,
+below the n=50 confidence floor) still gets a smaller-but-non-empty
+context — the advisor can weigh accordingly because `n_observations`
+is part of the entry. Prompt overhead is bounded and the helper is
+mtime-cached, so the hot path stays under hook budgets.
+
+### What the demo deliberately does NOT do
+
+* No LLM call. The model's downstream quality is a separate
+  experiment that needs API access + a held-out eval set. This
+  demo proves the **plumbing** delivers context to the prompt;
+  the model evaluation is the next, separately-tracked experiment.
+* No assertion that wiki context improves advice quality. That
+  claim requires the model run + an independent rater. This PR
+  ships the substrate that makes that experiment trivially
+  reproducible (`uv run python demo/wiki_grounded_advisor.py`).
+
+### Tests
+
+6 new tests in `tests/unit/test_knowledge_measure.py`:
+
+* **Correctness** (1) — aggregates across multi-kind entries
+  produce the right per-kind, per-field, and total counts.
+* **Hot-path safety** (4) — empty aid / missing wiki / unknown
+  aid / non-existent dir all return `None` without raising.
+* **Demo reproducibility** (1) — `demo/wiki_grounded_advisor.py
+  --json` runs to completion and emits a parseable payload with
+  every synthetic aid present and `with_wiki > no_wiki` confirmed.
+
+### Validation
+
+- `uv run ruff check .` → All checks passed
+- `uv run mypy src` → Success: no issues found in 229 source files
+- `uv run pytest -q` → **3428 passed**, 13 skipped (6 new)
+
 ## [0.5.17] — 2026-05-16  ·  Production advisor path plumbed to wiki (aid)
 
 **v0.5.16 wired the wrong module.** That PR added wiki support to
