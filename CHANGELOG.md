@@ -4,6 +4,97 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.17] — 2026-05-16  ·  Production advisor path plumbed to wiki (aid)
+
+**v0.5.16 wired the wrong module.** That PR added wiki support to
+`aegis.judge.action_advice_sllm` (a structured-output composer
+with a `_build_prompt` of its own). But the **production firewall
+hook** uses a different module: `aegis.judge.advisor`, with the
+`Advisor` protocol (`DummyAdvisor` / `HaikuAdvisor`) and its own
+`_build_user_message`. So while v0.5.16 was real Python code, it
+was dormant on the production execution path.
+
+v0.5.17 fixes that by plumbing `aid` + `knowledge_context`
+through the **actual** advisor pipeline. This is the v0.5.13
+lesson applied again: substrate without wiring is dormant.
+
+### Plumbed sites
+
+* **`src/aegis/judge/advisor.py`** — production module:
+  - `Advisor` protocol: added `knowledge_context: str | None = None`
+    kwarg.
+  - `DummyAdvisor.advise()`: accepts the kwarg, silently ignores
+    it (the heuristic is signal-driven, no wiki use).
+  - `HaikuAdvisor.advise()`: accepts and forwards to
+    `_build_user_message`.
+  - `_build_user_message`: when `knowledge_context` is supplied,
+    prepends a `=== KNOWLEDGE CONTEXT (agent background) ===`
+    block as the FIRST section of the prompt — before
+    temporal context, signals, and base verdict.
+  - `compose_advice_sllm` dispatcher: added `aid` + `use_knowledge`
+    kwargs. Selection rules same as v0.5.16:
+      1. Explicit `use_knowledge=True` wins.
+      2. Otherwise `AEGIS_ADVISOR_USE_KNOWLEDGE=1` opts in.
+      3. Default off.
+    When opted in AND `aid` is provided, fetches the wiki context
+    via `aegis.knowledge.knowledge_context_for_advisor` and
+    forwards to the advisor.
+
+* **`tools/aegis_local_hook.py`** — `_compute_action_advice` now
+  passes `aid=getattr(inp.header, "aid", None)` to
+  `compose_advice_sllm`. This is the actual hot-path activation —
+  the line that makes v0.5.16's design real.
+
+* **`tools/aegis_cli.py`** — `aegis assess` gains a new `--aid`
+  flag that scopes the assessment to one agent and plumbs that aid
+  through to `assess_triple_axis`. Without `--aid` the command
+  runs on the full window (preserving v0.5.16 behaviour).
+
+### Tests
+
+8 new tests in `tests/unit/test_advisor_aid_plumbing.py`:
+
+* **Advisor protocol** (1) — `DummyAdvisor` accepts the new kwarg
+  without raising.
+* **`_build_user_message`** (2) — no block without context;
+  block-at-top with context (positioned before PROPOSED CALL).
+* **`compose_advice_sllm` dispatcher** (5) — default off, env
+  opt-in, explicit kwarg overrides env, opt-in without aid falls
+  back, opt-in with unknown aid falls back.
+
+Full suite: **3422 passed**, 13 skipped (8 new). Ruff + mypy clean.
+
+### Migration
+
+Operators who set `AEGIS_ACTION_ADVICE_PROVIDER=haiku` (or
+similar sLLM provider) and want their advisor to ground its
+reasoning in the wiki should:
+
+```bash
+$ aegis knowledge build                # weekly: rebuild wiki
+$ export AEGIS_ADVISOR_USE_KNOWLEDGE=1 # opt-in (single switch)
+```
+
+The hook's `_compute_action_advice` automatically plumbs aid
+through every tool call from now on. No other code changes
+required.
+
+### What this completes
+
+The closed loop established in v0.5.15 + v0.5.16 is now
+**actually firing on the production hot path**:
+
+```
+Raw ContextMemory (audit chain)
+      ↓ aegis knowledge build
+Knowledge wiki (~/.aegis/knowledge/*.json)
+      ↓ knowledge_context_for_advisor(aid)  [cached, hot-path safe]
+Markdown block embedded in Haiku/sLLM prompt  [v0.5.17 plumbing]
+      ↓ compose_advice_sllm
+Wiki-grounded ActionAdvice  ←  this is what makes "is this agent
+                                 unusual or normal" answerable
+```
+
 ## [0.5.16] — 2026-05-16  ·  sLLM advisors consume the knowledge wiki
 
 v0.5.15 shipped the ContextMemory knowledge layer — wiki-shaped

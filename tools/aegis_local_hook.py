@@ -643,6 +643,12 @@ def _compute_action_advice(
         # trace but no burn-in redundancy baseline yet.
         verdict_traces = dict(getattr(verdict, "step_traces", {}) or {})
 
+        # v0.5.17: pass aid so the dispatcher can consult the
+        # ContextMemory knowledge wiki (when
+        # AEGIS_ADVISOR_USE_KNOWLEDGE=1). aid is the session
+        # identifier already loaded above (line 622 used it as
+        # session_id for load_recent_history); the wiki layer
+        # keys entries by the same aid.
         advice = compose_advice_sllm(
             temporal_ctx=ctx,
             anomalies=anomalies,
@@ -657,6 +663,7 @@ def _compute_action_advice(
             cache_signals=cache_signals,
             security_signals=security_signals,
             step_traces=verdict_traces,
+            aid=getattr(inp.header, "aid", None),
         )
         from aegis.judge.action_advice import advice_to_dict
 
