@@ -4,6 +4,41 @@ All notable changes to Aegis ATV. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.21] — 2026-05-17  ·  TF-IDF semantic search over wiki entries
+
+v0.5.15 retrieval was structural (`get_entries_for_agent` follows
+`related[]`) or filter-based (`search_by_kind_or_tag`). Both
+required the caller to know the right `aid` / `kind` / `tag`.
+
+v0.5.21 adds **content-based retrieval** — given a free-text
+query like `"cost-divergence on Bash"`, return entries whose
+text best matches. TF-IDF + cosine similarity, pure Python, no
+ML deps, fully deterministic.
+
+### New surface
+
+* **`src/aegis/knowledge/search.py`** — `build_tfidf_index()`,
+  `search_entries(query, k=10)`, `clear_search_cache()`.
+  Stopword + tokeniser (preserves `:` and `-` so `loop:Bash` and
+  `rule-fired` stay one token), smoothed log IDF, L2-normalised
+  cosine. Mtime-keyed cache amortises index build across calls.
+* **CLI**: `aegis knowledge search <query> [-k 10] [--min-score 0.05] [--json]`.
+
+### Why TF-IDF rather than an LLM embedding
+
+- No model dependency (Aegis hot-path safety contract)
+- Deterministic / reproducible / cheap
+- Sufficient for ~50–200 wiki-entry corpora
+- Composable: a v0.6 PR can add a parallel embedding-cosine
+  retriever as an alternative ranker
+
+### Tests
+
+17 new tests in `tests/unit/test_knowledge_search.py`:
+tokeniser (5), index construction (3), search ranking (7),
+cache invalidation (2). Full suite **3460 passed**, 13 skipped.
+Ruff + mypy clean.
+
 ## [0.5.20] — 2026-05-17  ·  SESSION / INCIDENT / WORKFLOW entry kinds
 
 v0.5.15 shipped three **entity-level** entry kinds (AGENT / TOOL /
