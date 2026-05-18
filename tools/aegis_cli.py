@@ -3377,6 +3377,64 @@ def _decision_glyph(decision: str) -> str:
     }.get(decision, f"   {decision}")
 
 
+# ── Envelope-aware audit-record accessors ───────────────────────────
+# An audit record can land in one of two on-disk shapes:
+#
+# * Local-hook (~/.aegis/audit.jsonl) — flat fields at top level:
+#   {ts_ns, tool, aid, decision, reason, trace_id, latency_ms, explain,
+#    prev_hash, this_hash, ...}
+#
+# * Sidecar (data/audit.jsonl) — signed envelope with nested header:
+#   {algorithm, signature, this_hash, atv_id, decision (top-level
+#    mirror), cost_attestation_hint, payload: {atv_sha3_256, header:
+#    {trace_id, aid, timestamp_ns, tool_name, decision, ...},
+#    prev_hash, signed_at_ns}}
+#
+# These helpers return the same logical field from whichever shape is
+# present, so the rest of cmd_forensic doesn't have to branch.
+
+def _audit_rec_header(rec: dict[str, Any]) -> dict[str, Any]:
+    """Return the sidecar `payload.header` dict (or empty dict for a
+    local-hook record where fields live at the top level)."""
+    payload = rec.get("payload")
+    if not isinstance(payload, dict):
+        return {}
+    header = payload.get("header")
+    return header if isinstance(header, dict) else {}
+
+
+def _audit_rec_aid(rec: dict[str, Any]) -> str | None:
+    aid = rec.get("aid") or _audit_rec_header(rec).get("aid")
+    return aid if isinstance(aid, str) and aid else None
+
+
+def _audit_rec_trace_id(rec: dict[str, Any]) -> str | None:
+    t = rec.get("trace_id") or _audit_rec_header(rec).get("trace_id")
+    return t if isinstance(t, str) and t else None
+
+
+def _audit_rec_tool(rec: dict[str, Any]) -> str | None:
+    """Local-hook records use ``tool``; sidecar uses ``tool_name``."""
+    t = rec.get("tool") or _audit_rec_header(rec).get("tool_name")
+    return t if isinstance(t, str) and t else None
+
+
+def _audit_rec_ts_ns(rec: dict[str, Any]) -> int:
+    """Local-hook uses ``ts_ns``; sidecar uses ``timestamp_ns`` inside
+    the header. Returns 0 if neither is present or parseable."""
+    ts = rec.get("ts_ns")
+    if ts:
+        try:
+            return int(ts)
+        except (TypeError, ValueError):
+            pass
+    val = _audit_rec_header(rec).get("timestamp_ns")
+    try:
+        return int(val) if val else 0
+    except (TypeError, ValueError):
+        return 0
+
+
 def cmd_forensic(args: argparse.Namespace) -> int:
     """`aegis forensic <selector>` — postmortem timeline for one session.
 
@@ -3439,17 +3497,18 @@ def cmd_forensic(args: argparse.Namespace) -> int:
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            ts = int(rec.get("ts_ns", 0) or 0)
+            ts = _audit_rec_ts_ns(rec)
             if cutoff_ns and ts < cutoff_ns:
                 continue
             # A record carries either flat-style fields (local hook,
-            # decision/aid/trace_id at top level) or nested
-            # payload.header (sidecar). Only the local schema is the
-            # forensic target — the sidecar already exposes
-            # /forensic/replay endpoint.
+            # decision/aid/trace_id at top level) or a signed envelope
+            # (sidecar, fields under ``payload.header.*``). Both shapes
+            # mirror ``decision`` at the top level; the helpers below
+            # read aid/trace_id/tool/ts_ns from whichever shape is
+            # present, so a single forensic walk covers both modes.
             if "decision" not in rec:
                 continue
-            last_aid = rec.get("aid") or last_aid
+            last_aid = _audit_rec_aid(rec) or last_aid
             records.append(rec)
 
     if not records:
@@ -3469,16 +3528,18 @@ def cmd_forensic(args: argparse.Namespace) -> int:
         return 2
 
     # ── Pass 2: filter to selector + optional trace ─────────────────
-    matched = [
-        r for r in records
-        if r.get("aid") == selector
-        or (
-            isinstance(r.get("trace_id"), str)
-            and str(r.get("trace_id", "")).startswith(selector)
-        )
-    ]
+    matched = []
+    for r in records:
+        r_trace = _audit_rec_trace_id(r)
+        if _audit_rec_aid(r) == selector or (
+            isinstance(r_trace, str) and r_trace.startswith(selector)
+        ):
+            matched.append(r)
     if trace_filter:
-        matched = [r for r in matched if r.get("trace_id") == trace_filter]
+        matched = [
+            r for r in matched
+            if _audit_rec_trace_id(r) == trace_filter
+        ]
     if limit:
         matched = matched[-limit:]
 
@@ -3496,16 +3557,16 @@ def cmd_forensic(args: argparse.Namespace) -> int:
             "trace_filter": trace_filter,
             "audit_path": str(audit_path),
             "count": len(matched),
-            "first_ts_ns": int(matched[0].get("ts_ns", 0) or 0),
-            "last_ts_ns": int(matched[-1].get("ts_ns", 0) or 0),
+            "first_ts_ns": _audit_rec_ts_ns(matched[0]),
+            "last_ts_ns": _audit_rec_ts_ns(matched[-1]),
             "records": matched,
         }
         print(json.dumps(out, default=str))
         return 0
 
     # Human-readable timeline.
-    first_ts = int(matched[0].get("ts_ns", 0) or 0)
-    last_ts = int(matched[-1].get("ts_ns", 0) or 0)
+    first_ts = _audit_rec_ts_ns(matched[0])
+    last_ts = _audit_rec_ts_ns(matched[-1])
     duration_s = (last_ts - first_ts) / 1_000_000_000 if last_ts > first_ts else 0
 
     print(_green(
@@ -3528,9 +3589,9 @@ def cmd_forensic(args: argparse.Namespace) -> int:
         counts[d] = counts.get(d, 0) + 1
         with contextlib.suppress(TypeError, ValueError):
             total_latency_ms += float(r.get("latency_ms", 0) or 0)
-        ts_str = _format_ts(int(r.get("ts_ns", 0) or 0))
-        trace_short = str(r.get("trace_id", ""))[:8] or "--------"
-        tool = str(r.get("tool", "?"))[:6].ljust(6)
+        ts_str = _format_ts(_audit_rec_ts_ns(r))
+        trace_short = str(_audit_rec_trace_id(r) or "")[:8] or "--------"
+        tool = str(_audit_rec_tool(r) or "?")[:6].ljust(6)
         latency = float(r.get("latency_ms", 0) or 0)
         print(
             f"  {ts_str}  [trace={trace_short}…]  {tool}  "

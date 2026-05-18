@@ -1802,6 +1802,135 @@ def test_forensic_subparser_dispatches_correctly() -> None:
     assert args.limit == 5
 
 
+# ── PR-C: forensic CLI on sidecar (signed-envelope) audit format ────
+#
+# Local-hook records are flat — ``aid``, ``trace_id``, ``ts_ns`` etc.
+# all live at the top level. Sidecar (``data/audit.jsonl``) records
+# wrap the verdict in a signed envelope where those fields live under
+# ``payload.header.*``, and the tool name is spelled ``tool_name``
+# (not ``tool``). The same ``aegis forensic`` command must work on
+# both shapes — see envelope-aware helpers in tools/aegis_cli.py.
+
+
+def _write_sidecar_record(
+    fh, *, ts_ns: int, decision: str, tool_name: str = "Bash",
+    aid: str = "agent-x", trace_id: str = "trS-001",
+    prev_hash: str = "GENESIS",
+) -> None:
+    """Write a record in the sidecar signed-envelope on-disk shape."""
+    rec = {
+        "algorithm": "Ed25519",
+        "signature": "f" * 128,
+        "this_hash": "a" * 64,
+        "atv_id": "00000000-0000-0000-0000-000000000000",
+        "decision": decision,
+        "cost_attestation_hint": False,
+        "payload": {
+            "atv_sha3_256": "0" * 64,
+            "header": {
+                "trace_id": trace_id,
+                "span_id": "s-1",
+                "tenant_id": "demo",
+                "aid": aid,
+                "ats": "ATV-2080-v1",
+                "schema_version": "ATV-2080-v1",
+                "timestamp_ns": ts_ns,
+                "tool_name": tool_name,
+                "decision": decision,
+            },
+            "prev_hash": prev_hash,
+            "signed_at_ns": ts_ns + 1000,
+        },
+    }
+    fh.write(json.dumps(rec) + "\n")
+
+
+def _make_sidecar_audit_fixture(tmp_path: Path) -> Path:
+    """Two-AID sidecar audit chain — mirror of _make_audit_fixture
+    but in the signed-envelope shape."""
+    audit = tmp_path / "sidecar_audit.jsonl"
+    base = 1_700_000_000_000_000_000
+    with audit.open("w") as fh:
+        _write_sidecar_record(
+            fh, ts_ns=base + 0, decision="ALLOW", tool_name="Read",
+            aid="sidecar-A", trace_id="trS-001",
+        )
+        _write_sidecar_record(
+            fh, ts_ns=base + 1_000_000_000, decision="BLOCK",
+            tool_name="Bash", aid="sidecar-A", trace_id="trS-002",
+        )
+        _write_sidecar_record(
+            fh, ts_ns=base + 2_000_000_000, decision="ALLOW",
+            tool_name="Read", aid="sidecar-B", trace_id="trS-003",
+        )
+    return audit
+
+
+def test_forensic_sidecar_envelope_filters_by_aid(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Sidecar envelope records (aid under payload.header) must be
+    filterable by an exact AID selector — regression for the bug
+    where the parser only looked at the top-level `aid` field."""
+    audit = _make_sidecar_audit_fixture(tmp_path)
+    rc = aegis_cli.cmd_forensic(_forensic_args(
+        "sidecar-A", audit=str(audit),
+    ))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "sidecar-A" in out
+    assert "2 record(s)" in out
+    # Session B's trace must NOT bleed in.
+    assert "trS-003" not in out
+
+
+def test_forensic_sidecar_last_resolves_to_most_recent_aid(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`aegis forensic last` against a sidecar log used to print
+    'could not infer LAST aid — log empty' because the AID infer
+    pass only checked the top level. Envelope path must work too."""
+    audit = _make_sidecar_audit_fixture(tmp_path)
+    rc = aegis_cli.cmd_forensic(_forensic_args("last", audit=str(audit)))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "sidecar-B" in out
+
+
+def test_forensic_sidecar_trace_prefix_matches(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """trace_id prefix lookup must traverse `payload.header.trace_id`."""
+    audit = _make_sidecar_audit_fixture(tmp_path)
+    rc = aegis_cli.cmd_forensic(_forensic_args(
+        "trS-00", audit=str(audit),
+    ))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "3 record(s)" in out
+
+
+def test_forensic_sidecar_json_output_preserves_envelope(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """JSON output must still surface envelope records verbatim and
+    extract the timestamps from `payload.header.timestamp_ns`."""
+    audit = _make_sidecar_audit_fixture(tmp_path)
+    rc = aegis_cli.cmd_forensic(_forensic_args(
+        "sidecar-A", audit=str(audit), json=True,
+    ))
+    assert rc == 0
+    out = capsys.readouterr().out
+    obj = json.loads(out)
+    assert obj["count"] == 2
+    assert obj["first_ts_ns"] > 0
+    assert obj["last_ts_ns"] > obj["first_ts_ns"]
+    # Envelope shape preserved in the records list.
+    for rec in obj["records"]:
+        assert rec["payload"]["header"]["aid"] == "sidecar-A"
+        assert rec["decision"] in {"ALLOW", "BLOCK"}
+
+
 # ── PR-F: aegis advise ──────────────────────────────────────────────
 
 
