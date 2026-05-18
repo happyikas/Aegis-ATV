@@ -246,6 +246,21 @@ class TestSecurityExtract:
         assert d["blast_radius"] == "high"
         assert d["verdict_decision"] == "BLOCK"
 
+    def test_aegis_self_modification_flags_match(self) -> None:
+        """Solo-Free coverage closure: shell attempts to stop / kill
+        the plugin firewall must route to the security-reviewer advisor
+        the same way other destructive rules do."""
+        v = _FakeVerdict(
+            decision="BLOCK",
+            reason="rule:aegis_self_modification",
+            step_traces={"aegis.firewall.step320_blast.run": "blast=high"},
+        )
+        d = extract_security_signals(
+            inp=_FakeInp(cost_estimate=_FakeCostEstimate()), verdict=v,
+        )
+        assert d["destructive_path_match"] is True
+        assert d["policy_rule"] == "rule:aegis_self_modification"
+
     def test_sensitive_path_flag(self) -> None:
         v = _FakeVerdict(decision="ALLOW")
         inp = _FakeInp(

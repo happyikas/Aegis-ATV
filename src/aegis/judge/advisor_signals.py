@@ -239,6 +239,12 @@ _DESTRUCTIVE_RULES: frozenset[str] = frozenset({
     # surfaced this gap; cloud-destructive verdicts were falling
     # through to permission-escalator instead of security-reviewer.
     "rule:cloud_destructive",
+    # Solo-Free coverage closure — see step311_donor_rules
+    # ``_check_aegis_self_modification``. Without this entry, the
+    # security-reviewer advisor never fires on attempts to stop /
+    # uninstall the plugin firewall itself (the dummy judge can't
+    # semantically classify "self-modification").
+    "rule:aegis_self_modification",
 })
 
 
