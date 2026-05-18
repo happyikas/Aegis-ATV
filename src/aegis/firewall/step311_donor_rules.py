@@ -13,11 +13,15 @@ Ports the 7 stdlib-only pattern rules from
     payment_overflow    I-11  → BLOCK               (D11)
     cloud_destructive         → BLOCK               (v2.1.2)
     sql_unbounded             → BLOCK               (v2.1.2)
+    aegis_self_modification   → BLOCK               (Solo-Free)
 
 cloud_destructive covers kubectl / terraform / aws / gcloud / az /
 helm / docker destructive operations — the Day-1 #2 expansion from
 the must-install backlog. sql_unbounded catches DELETE / UPDATE
 statements without a WHERE clause that would mutate every row.
+aegis_self_modification blocks shell-level attempts to stop / kill
+the plugin firewall, destroy the audit chain, or toggle autonomy off
+— closing the Solo-Free dummy-judge coverage gap.
 
 Two donor rules are intentionally NOT included here because they need
 runtime context that is not yet ported under Phase 2:
@@ -192,6 +196,47 @@ _SQL_UNBOUNDED_UPDATE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+# Aegis self-modification defense — Solo-Free coverage closure.
+#
+# The dummy sLLM judge cannot semantically detect "agent is trying to
+# disable its own security infrastructure" the way the Haiku judge can
+# (CLAUDE.md §"Plugin Mode 작업 시"). When ``AEGIS_JUDGE_PROVIDER=dummy``
+# is in effect that dynamic line of defense is absent — so block the
+# concrete shell patterns statically:
+#
+# * Service control aimed at any process named ``aegis``:
+#     launchctl stop/disable/unload, systemctl stop/disable/kill,
+#     pkill / killall / kill $(pgrep ...).
+# * Destruction of the audit chain or plugin hook config:
+#     rm / mv / truncate against ``~/.aegis/**`` or
+#     ``~/.claude/settings.json``.
+# * Toggling autonomy off via the shell:
+#     export AEGIS_AUTONOMY_ENABLED=0, unset AEGIS_AUTONOMY_ENABLED.
+#
+# Legitimate ``aegis ...`` CLI flows (install / uninstall / baseline)
+# do not trip — they invoke the binary, not direct rm / launchctl.
+_AEGIS_SELF_MODIFICATION = re.compile(
+    # Service control: launchctl stop|disable|unload ... <aegis>
+    r"\b(?:launchctl|systemctl)\s+(?:--user\s+)?"
+    r"(?:stop|disable|unload|kill)\b[^\n]*\baegis\b"
+    # Process-kill family targeting aegis
+    r"|\b(?:pkill|killall)\b[^\n]*\baegis"
+    r"|\bkill\s+(?:-[A-Z0-9]+\s+)?\$\(\s*pgrep\b[^)]*aegis"
+    # Destruction of the audit chain / autonomy state directory
+    r"|\b(?:rm|unlink|mv)\s+(?:-[a-zA-Z]+\s+)*[^\s|;&]*\.aegis(?:/|\b)"
+    # Destruction or replacement of the plugin hook config
+    r"|\b(?:rm|unlink|mv)\s+(?:-[a-zA-Z]+\s+)*"
+    r"[^\s|;&]*\.claude/settings(?:\.local)?\.json\b"
+    # Truncate / overwrite the plugin hook config (any redirect to it)
+    r"|>\s*[~./]*\.claude/settings(?:\.local)?\.json\b"
+    # Edit the in-tree hook entry point
+    r"|\b(?:rm|mv)\s+[^\s|;&]*tools/aegis_local_hook\.py\b"
+    # Toggle autonomy off via shell env mutation
+    r"|\bexport\s+AEGIS_AUTONOMY_ENABLED\s*=\s*0\b"
+    r"|\bunset\s+AEGIS_AUTONOMY_ENABLED\b",
+    re.IGNORECASE,
+)
+
 _SQL_TOOLS: frozenset[str] = frozenset({
     "sql", "execute_sql", "database_query", "db_query", "query_db",
     "db_mutation", "psql", "mysql",
@@ -278,6 +323,23 @@ def _check_cloud_destructive(tool: str, args_text: str) -> tuple[str, str] | Non
     return None
 
 
+def _check_aegis_self_modification(
+    tool: str, args_text: str,
+) -> tuple[str, str] | None:
+    """Block shell commands that try to stop / kill / unconfigure the
+    plugin firewall itself (Solo-Free dummy-judge coverage closure).
+
+    The Haiku judge already semantically catches "self-modification of
+    security infrastructure" — this rule is the static counterpart for
+    when ``AEGIS_JUDGE_PROVIDER=dummy``.
+    """
+    if tool not in _SHELL_TOOLS:
+        return None
+    if _AEGIS_SELF_MODIFICATION.search(args_text):
+        return ("BLOCK", "rule:aegis_self_modification")
+    return None
+
+
 def _check_sql_unbounded(tool: str, args_text: str) -> tuple[str, str] | None:
     """v2.1.2 — unbounded DELETE / UPDATE on SQL-class tools."""
     if tool not in _SQL_TOOLS and tool not in _SHELL_TOOLS:
@@ -340,6 +402,7 @@ def run(
         _check_mcp_injection,
         _check_git_destructive,
         _check_cloud_destructive,
+        _check_aegis_self_modification,
         _check_sql_unbounded,
     )
     for rule in text_rules:

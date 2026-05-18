@@ -215,6 +215,36 @@ class TestStep310SensitivePaths:
         r = run(ZERO_ATV, make_input(tool_name="read_file", tool_args_json=_read_args("./README.md")), ctx)
         assert r.verdict is None
 
+    def test_claude_settings_json_blocked(self) -> None:
+        """Reading ~/.claude/settings.json (the plugin hook config)
+        must BLOCK — an agent scoping out the firewall to disable it."""
+        ctx = FirewallContext()
+        r = run(ZERO_ATV, make_input(
+            tool_name="read_file",
+            tool_args_json=_read_args("~/.claude/settings.json"),
+        ), ctx)
+        assert r.verdict == "BLOCK"
+
+    def test_claude_settings_local_json_blocked(self) -> None:
+        ctx = FirewallContext()
+        r = run(ZERO_ATV, make_input(
+            tool_name="read_file",
+            tool_args_json=_read_args("~/.claude/settings.local.json"),
+        ), ctx)
+        assert r.verdict == "BLOCK"
+
+    def test_aegis_state_dir_requires_approval(self) -> None:
+        """~/.aegis/** (audit chain, intent log, autonomy state) is
+        not a hard BLOCK because legitimate aegis CLI flows occasionally
+        cat / jq these for diagnostics — but it must REQUIRE_APPROVAL
+        so the user sees what's being touched."""
+        ctx = FirewallContext()
+        r = run(ZERO_ATV, make_input(
+            tool_name="read_file",
+            tool_args_json=_read_args("~/.aegis/audit.jsonl"),
+        ), ctx)
+        assert r.verdict == "REQUIRE_APPROVAL"
+
 
 # ─────────────────────────────────────────────────────────────────────
 # Surface-class split (Rec #4)

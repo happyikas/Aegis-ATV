@@ -26,7 +26,9 @@
       "**/.npmrc",
       "**/.pypirc",
       "**/credentials",
-      "**/credentials.json"
+      "**/credentials.json",
+      "~/.claude/settings.json",
+      "~/.claude/settings.local.json"
     ],
     "exceptions": [
       "~/.ssh/id_*.pub",
@@ -54,7 +56,8 @@
       "**/.gitconfig",
       "/etc/passwd",
       "/etc/hosts",
-      "/etc/ssh/**"
+      "/etc/ssh/**",
+      "~/.aegis/**"
     ]
   }
 }

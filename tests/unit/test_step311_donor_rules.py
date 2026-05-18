@@ -264,6 +264,94 @@ def test_cloud_read_only_passes(command: str) -> None:
     assert verdict is None
 
 
+# ---- aegis_self_modification (Solo-Free coverage closure) ---------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # Service control aimed at the plugin firewall
+        "launchctl stop com.aegis.firewall",
+        "launchctl unload ~/Library/LaunchAgents/com.aegis.plist",
+        "systemctl stop aegis",
+        "systemctl --user stop aegis-hook",
+        "systemctl disable aegis-firewall",
+        "sudo systemctl kill aegis",
+        # Process-kill family — pkill / killall / kill $(pgrep ...)
+        "pkill -f aegis",
+        "pkill -9 aegis_local_hook",
+        "killall aegis",
+        "kill $(pgrep -f aegis)",
+        "kill -9 $(pgrep aegis)",
+        # Destruction of audit chain / autonomy state
+        "rm -rf ~/.aegis/",
+        "rm -rf ~/.aegis",
+        "rm ~/.aegis/audit.jsonl",
+        "rm -f ~/.aegis/intent_log.sqlite",
+        "unlink ~/.aegis/autonomy/trust_table.json",
+        # Destruction or replacement of plugin hook config
+        "rm ~/.claude/settings.json",
+        "rm -f ~/.claude/settings.local.json",
+        "mv ~/.claude/settings.json /tmp/old.json",
+        # Truncate / overwrite the plugin hook config
+        "> ~/.claude/settings.json",
+        ": > ~/.claude/settings.json",
+        "echo '{}' > ~/.claude/settings.json",
+        "cat /dev/null > ~/.claude/settings.json",
+        # Edit the in-tree hook entry point
+        "rm tools/aegis_local_hook.py",
+        "mv tools/aegis_local_hook.py tools/aegis_local_hook.py.bak",
+        # Toggle autonomy off via shell env mutation
+        "export AEGIS_AUTONOMY_ENABLED=0",
+        "unset AEGIS_AUTONOMY_ENABLED",
+    ],
+)
+def test_aegis_self_modification_blocks(command: str) -> None:
+    """All shell-level attempts to disable / remove the firewall, the
+    audit chain, or the plugin hook config must be blocked even under
+    ``AEGIS_JUDGE_PROVIDER=dummy``."""
+    verdict, reason = _run("Bash", {"command": command})
+    assert verdict == "BLOCK", f"unexpected pass: {command!r}"
+    assert "aegis_self_modification" in reason
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # Legitimate Aegis CLI flows — never trip the rule.
+        "aegis install --mode local",
+        "aegis uninstall",
+        "aegis baseline init",
+        "aegis baseline reattest",
+        "aegis autonomy show --verbose",
+        "aegis autonomy learn --since 30d",
+        "aegis report",
+        "aegis status",
+        # Read-only inspection of state files.
+        "cat ~/.aegis/audit.jsonl | tail -3",
+        "jq . ~/.claude/settings.json",
+        "ls -la ~/.aegis/",
+        # Unrelated kill / rm targeting non-aegis processes / paths.
+        "pkill -f nginx",
+        "kill 12345",
+        "rm /tmp/scratch.log",
+        "rm -rf ~/Downloads/old/",
+    ],
+)
+def test_aegis_self_modification_passes_legitimate_flows(command: str) -> None:
+    verdict, _ = _run("Bash", {"command": command})
+    assert verdict is None, f"legitimate flow tripped rule: {command!r}"
+
+
+def test_aegis_self_modification_inactive_for_non_shell_tools() -> None:
+    """Edit / Write of these paths is handled by sensitive_paths in
+    step310 — step311's rule must not double-fire on non-shell tools."""
+    verdict, _ = _run("Edit", {
+        "file_path": "~/.claude/settings.json",
+    })
+    assert verdict is None
+
+
 # ---- sql_unbounded (v2.1.2) ---------------------------------------------
 
 
